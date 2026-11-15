@@ -1,12 +1,13 @@
-// One installable artifact: marshal-sdk with the desktop's pinned runtime packs bundled inside it and the
+// One installable artifact: marshal-sdk with its pinned runtime packs bundled inside it and the
 // extensions it serves, as a single npm tarball. Installing it is one step and needs only the public registry:
 //
-//   node image/pack.mjs [--out .pack] [--packs <desktop checkout>] [--manifest marshal-sdk.json] [--extension <packageRoot>]...
+//   node image/pack.mjs [--out .pack] [--packs <checkout with pins>] [--manifest marshal-sdk.json] [--extension <packageRoot>]...
 //   npm install .pack/marshal-sdk-<version>.tgz         # then: npx marshal-sdk page-run --help
 // Install into a folder, not with -g: a global install of a package with bundled dependencies rebuilds an optional
 // native dependency (fsevents) and fails on macOS.
 //
-// The packs are the exact tarballs the desktop pins (its package.json pnpm.overrides), unpacked into the
+// The packs are the exact tarballs --packs pins in its package.json pnpm.overrides (default: this SDK's own
+// vendor/packs; a desktop checkout works too), unpacked into the
 // package's node_modules and listed in bundleDependencies, so npm installs them as shipped. Their own
 // registry dependencies are declared at the top level (npm does not resolve dependencies of bundled packages),
 // at the packs' own ranges. Extensions are copied file by file (no node_modules, no credential-shaped files)
@@ -18,8 +19,8 @@
 // The extension list: --manifest <marshal-sdk.json>, resolved by the onboarding resolver (docs/onboarding.md: path,
 // archive + sha256 and organization id entries, archives unpacked under --cache) and/or --extension <packageRoot>
 // (repeatable); with neither, Page Studio's built package. Configuration stays in the manifest of the run.
-// A manifest also brings the SDK's default extensions it does not opt out of (the Brain always, through
-// $MARSHAL_SDK_BRAIN_PACKAGE; the org and Zyg tools where they apply); "defaults": {"brain": false} leaves the Brain out.
+// A manifest also brings the SDK's default extensions it does not opt out of (the Brain always, found through
+// $MARSHAL_SDK_BRAIN_PACKAGE and packed into extensions/brain, where the installed SDK finds it; the org and Zyg tools where they apply); "defaults": {"brain": false} leaves the Brain out.
 // The Brain needs Node 24 (FTS5) where it runs.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -27,7 +28,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const args = { out: path.join(root, ".pack"), packs: "/Users/omer/marshal/marshal", extension: [] };
+const args = { out: path.join(root, ".pack"), packs: root, extension: [] };
 for (let index = 2; index < process.argv.length; index += 2) {
   const key = process.argv[index].replace(/^--/, "");
   const value = process.argv[index + 1];
@@ -67,7 +68,7 @@ while (queue.length) {
   const name = queue.shift();
   if (packs[name]) continue;
   const pin = pins[name];
-  if (!pin?.startsWith("file:")) throw new Error(`The desktop at ${args.packs} pins no pack for ${name}.`);
+  if (!pin?.startsWith("file:")) throw new Error(`${args.packs}/package.json pins no pack for ${name}.`);
   const tarball = path.join(args.packs, pin.slice("file:".length));
   const manifest = manifestOf(tarball);
   packs[name] = { version: manifest.version, tarball: path.basename(tarball) };

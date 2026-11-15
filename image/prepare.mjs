@@ -1,8 +1,9 @@
 // Builds the image context for a Linux marshal-sdk host: real dependencies, never the dev node_modules.
 //
-//   node image/prepare.mjs [--out .image] [--packs <desktop checkout>] [--extension <packageRoot>]...
+//   node image/prepare.mjs [--out .image] [--packs <checkout with pins>] [--extension <packageRoot>]...
 //
-// The runtime packs are the exact tarballs the desktop pins (its package.json pnpm.overrides), copied into
+// The runtime packs are the exact tarballs --packs pins in its package.json pnpm.overrides (default: this SDK's
+// own vendor/packs; a desktop checkout works too), copied into
 // vendor/ and wired as file: dependencies plus overrides, as zyg-agents' vendor/runtime does. Only the
 // closure of what marshal-sdk imports is copied. Extensions are copied file by file from their built package
 // (no node_modules, no credential-shaped files) into extensions/<name>.
@@ -12,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const args = { out: path.join(root, ".image"), packs: "/Users/omer/marshal/marshal", extension: [] };
+const args = { out: path.join(root, ".image"), packs: root, extension: [] };
 for (let index = 2; index < process.argv.length; index += 2) {
   const key = process.argv[index].replace(/^--/, "");
   const value = process.argv[index + 1];
@@ -35,7 +36,7 @@ while (queue.length) {
   const name = queue.shift();
   if (overrides[name]) continue;
   const pin = pins[name];
-  if (!pin?.startsWith("file:")) throw new Error(`The desktop at ${args.packs} pins no pack for ${name}.`);
+  if (!pin?.startsWith("file:")) throw new Error(`${args.packs}/package.json pins no pack for ${name}.`);
   const tarball = path.join(args.packs, pin.slice("file:".length));
   fs.copyFileSync(tarball, path.join(args.out, "vendor", path.basename(tarball)));
   overrides[name] = `file:vendor/${path.basename(tarball)}`;
