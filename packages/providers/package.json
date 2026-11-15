@@ -1,0 +1,10 @@
+{
+  "name": "@marshal/providers",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Marshal's model provider layer: Claude, Codex and Cursor clients, accounts and credentials. One source for the Marshal desktop and the Marshal SDK.",
+  "type": "module",
+  "files": [
+    "src"
+  ]
+}
