@@ -9,3 +9,9 @@ export {
 } from "../providers/src/common/tool-names";
 export { GIT_SAFE_ALIAS_SUBCOMMANDS } from "../providers/src/backend/local/git-safe-aliases";
 export { PERMISSION_KIND_TUPLE, type PermissionKind } from "../providers/src/contract/host-types";
+export {
+  getBarePlaywrightToolName,
+  isBrowserCodeExecutionTool,
+  PLAYWRIGHT_CODE_EXECUTION_TOOLS,
+  PLAYWRIGHT_EXPLICIT_WRITE_TOOLS,
+} from "../providers/src/support/platform/security/browser-tools/names";
