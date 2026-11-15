@@ -49,9 +49,16 @@ export interface MarshalHostOptions {
   /** Environment of the model backend. Defaults to this process's. */
   env?: Record<string, string>;
   /** Give sessions a headless browser (Playwright MCP) when the package is installed. Default true. */
-  browser?: boolean;
+  browser?: boolean | MarshalHostBrowser;
   query?: QueryFn;
   log?: (line: string) => void;
+}
+
+export interface MarshalHostBrowser {
+  /** Chrome or Chromium to drive. Defaults to $MARSHAL_SDK_CHROME, else Playwright's Chrome channel. */
+  executablePath?: string;
+  /** Needed in containers without user namespaces. Defaults to $MARSHAL_SDK_CHROME_NO_SANDBOX === "1". */
+  noSandbox?: boolean;
 }
 
 export interface MarshalHost {
@@ -168,7 +175,10 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       context: { sessionId, workspacePath },
     } as never);
   const hostAdapter = adapterFor(context.sessionId);
-  const browserServer = options.browser === false ? undefined : playwrightServer();
+  const browserServer =
+    options.browser === false
+      ? undefined
+      : playwrightServer(typeof options.browser === "object" ? options.browser : {}, log);
   prompt = marshalPrompt(guidance, browserServer !== undefined, log);
 
   serversFor = (session: SessionRecord): Record<string, unknown> => {
@@ -251,12 +261,21 @@ function definedEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined));
 }
 
-function playwrightServer(): Record<string, unknown> | undefined {
+function playwrightServer(browser: MarshalHostBrowser, log: (line: string) => void): Record<string, unknown> | undefined {
   try {
+    // @playwright/mcp's exports map hides cli.js, so resolving "@playwright/mcp/cli.js" always throws.
     const require = createRequire(import.meta.url);
-    const cli = require.resolve("@playwright/mcp/cli.js");
-    return { command: process.execPath, args: [cli, "--headless", "--isolated"] };
-  } catch {
+    const manifestPath = require.resolve("@playwright/mcp/package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { bin?: Record<string, string> };
+    const cli = path.join(path.dirname(manifestPath), manifest.bin?.["playwright-mcp"] ?? "cli.js");
+    const executablePath = browser.executablePath ?? (process.env.MARSHAL_SDK_CHROME || undefined);
+    const noSandbox = browser.noSandbox ?? process.env.MARSHAL_SDK_CHROME_NO_SANDBOX === "1";
+    return {
+      command: process.execPath,
+      args: [cli, "--headless", "--isolated", ...(executablePath ? ["--executable-path", executablePath] : []), ...(noSandbox ? ["--no-sandbox"] : [])],
+    };
+  } catch (error) {
+    log(`no browser for sessions: @playwright/mcp not usable (${error instanceof Error ? error.message : String(error)})`);
     return undefined;
   }
 }

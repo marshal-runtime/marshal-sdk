@@ -4,13 +4,20 @@
 //   node poc/page-studio-run.mjs --run <dir> --extension <packageRoot> [--depth quick|single|deep]
 //        [--claude-config-dir <dir>] [--model <id>] [--effort <level>] [--idea <text>] [--based-on <pageId>]
 //
-// <dir> gets ws/ (the sessions' working folder), state/ (runtime state and sessions), data/ (Page Studio's
-// own folder) and out/ (index.html, shots/, summary.json: the artifacts a sandbox run hands back).
-import { execFileSync } from "node:child_process";
+// Output follows agent-sandbox's claude_page_agent layout (workspace.py, agent_run.py, launch_check.py):
+//   <dir>/page-agent/out/index.html, <dir>/page-agent/out/shots/{mobile,desktop}.png
+//   <dir>/page-agent-logs/run.jsonl      every SDK message of every session, in time order
+//   <dir>/page-agent-logs/summary.json   RunSummary fields, plus the Marshal run and its sessions
+//   <dir>/page-agent-logs/query/         system_prompt.md, task.md, options.json
+// Host-private state (runtime state, the session store) goes to <dir>/state, Page Studio's own folder to
+// <dir>/data, and the sessions' working folder is <dir>/ws.
 import fs from "node:fs";
 import path from "node:path";
 
+import { chromium } from "playwright-core";
+
 import { createMarshalHost } from "../dist/src/index.js";
+import { writeRunLogs } from "./run-contract.mjs";
 
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 2) args.set(process.argv[index].replace(/^--/, ""), process.argv[index + 1]);
@@ -25,7 +32,11 @@ const basedOn = args.get("based-on") ?? "rawdog--new-page-7n8n5";
 const idea =
   args.get("idea") ??
   "A landing page for the Caffeine Under Eye Cream aimed at men in their 30s and 40s who look tired on video calls. Lead with looking awake fast, back it with the ingredients and customer reviews already on record, and keep the buy box and the 90-day guarantee.";
-for (const directory of ["ws", "state", "data", "out/shots"]) fs.mkdirSync(path.join(run, directory), { recursive: true });
+const outDir = path.join(run, "page-agent", "out");
+const logDir = path.join(run, "page-agent-logs");
+for (const directory of [path.join(run, "ws"), path.join(run, "state"), path.join(run, "data"), path.join(outDir, "shots"), path.join(logDir, "query")]) {
+  fs.mkdirSync(directory, { recursive: true });
+}
 process.env.PAGE_STUDIO_DIR = path.join(run, "data");
 
 const env = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== undefined));
@@ -34,6 +45,13 @@ if (args.get("claude-config-dir")) {
   delete env.ANTHROPIC_API_KEY;
 }
 const log = (line) => process.stderr.write(`[${new Date().toISOString().slice(11, 19)}] ${line}\n`);
+
+if (args.get("shots-only")) {
+  // Re-shoot an existing page: --shots-only <index.html>.
+  log(JSON.stringify(await screenshots(path.resolve(args.get("shots-only")), path.join(outDir, "shots"))));
+  process.exit(0);
+}
+
 const started = Date.now();
 const host = await createMarshalHost({
   workspacePath: path.join(run, "ws"),
@@ -47,6 +65,8 @@ log(`host up, run ${host.runId}`);
 
 let failure;
 let pageId;
+let settings = {};
+const shots = [];
 try {
   if (args.get("model") || args.get("effort")) {
     await host.invoke("pagestudio.settings", {
@@ -54,8 +74,14 @@ try {
       ...(args.get("effort") ? { bigEffort: args.get("effort") } : {}),
     });
   }
-  const settings = (await host.invoke("pagestudio.settings", {})).result;
+  settings = (await host.invoke("pagestudio.settings", {})).result;
   log(`page model ${settings.bigModel} at ${settings.bigEffort}, depth ${depth}`);
+  fs.writeFileSync(path.join(logDir, "query", "system_prompt.md"), host.systemPrompt() ?? "");
+  fs.writeFileSync(path.join(logDir, "query", "task.md"), idea);
+  fs.writeFileSync(
+    path.join(logDir, "query", "options.json"),
+    JSON.stringify({ capability: "pagestudio.page.create", depth, basedOn, settings }, null, 2),
+  );
   const created = (await host.invoke("pagestudio.page.create", { title: `Headless ${depth}`, idea, basedOn, depth })).result;
   pageId = created.pageId;
   log(`page ${pageId} created, activity ${created.activity.id}`);
@@ -72,32 +98,9 @@ try {
   }
   const rendered = (await host.invoke("pagestudio.render", { pageId })).result;
   const htmlPath = rendered.path ?? rendered.file;
-  fs.copyFileSync(htmlPath, path.join(run, "out", "index.html"));
+  fs.copyFileSync(htmlPath, path.join(outDir, "index.html"));
   log(`rendered ${htmlPath}`);
-  const chrome = process.env.PAGE_STUDIO_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  for (const [name, width, height] of [
-    ["mobile", 390, 4200],
-    ["desktop", 1280, 3600],
-  ]) {
-    try {
-      execFileSync(
-        chrome,
-        [
-          "--headless=new",
-          "--no-sandbox",
-          "--hide-scrollbars",
-          `--user-data-dir=${path.join(run, "state", "chrome-profile")}`,
-          `--window-size=${width},${height}`,
-          "--virtual-time-budget=8000",
-          `--screenshot=${path.join(run, "out", "shots", `${name}.png`)}`,
-          `file://${path.join(run, "out", "index.html")}`,
-        ],
-        { stdio: "ignore", timeout: 90_000 },
-      );
-    } catch (error) {
-      log(`screenshot ${name} failed: ${error.message.slice(0, 200)}`);
-    }
-  }
+  shots.push(...(await screenshots(path.join(outDir, "index.html"), path.join(outDir, "shots"))));
 } catch (error) {
   failure = error instanceof Error ? error.message : String(error);
   log(`FAILED: ${failure}`);
@@ -105,39 +108,57 @@ try {
 
 const sessions = host.sessions.list({ runId: host.runId });
 const page = pageId ? (await host.invoke("pagestudio.page.get", { pageId }).catch(() => undefined))?.result : undefined;
-const totals = sessions.reduce(
-  (sum, session) => ({
-    inputTokens: sum.inputTokens + session.usage.inputTokens,
-    outputTokens: sum.outputTokens + session.usage.outputTokens,
-    cacheReadTokens: sum.cacheReadTokens + session.usage.cacheReadTokens,
-    cacheWriteTokens: sum.cacheWriteTokens + session.usage.cacheWriteTokens,
-    costUsd: sum.costUsd + session.usage.costUsd,
-    turns: sum.turns + session.usage.turns,
-  }),
-  { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, turns: 0 },
-);
-const summary = {
-  runId: host.runId,
-  depth,
-  idea,
-  basedOn,
-  pageId,
-  sections: page?.sections?.map((section) => section.key) ?? [],
-  wallSeconds: Math.round((Date.now() - started) / 100) / 10,
+const summary = writeRunLogs({
+  logDir,
+  storeRoot: path.join(run, "state", "sessions"),
+  sessions,
+  settings,
+  started,
   error: failure ?? "",
-  totals,
-  sessions: sessions.map((session) => ({
-    id: session.id,
-    title: session.title,
-    state: session.state,
-    model: session.model,
-    effort: session.reasoningEffort,
-    nativeSessionId: session.native.sessionId,
-    messages: session.messageCount,
-    usage: session.usage,
-  })),
-};
-fs.writeFileSync(path.join(run, "out", "summary.json"), JSON.stringify(summary, null, 2));
-log(`${sessions.length} sessions, $${totals.costUsd.toFixed(2)} at list price, ${summary.wallSeconds}s; summary at ${path.join(run, "out", "summary.json")}`);
+  marshal: { runId: host.runId, depth, idea, basedOn, pageId, sections: page?.sections?.map((section) => section.key) ?? [], shots },
+});
+log(`${sessions.length} sessions, $${summary.marshal.usage.costUsd.toFixed(2)} at list price, ${summary.wall_seconds}s; summary at ${path.join(logDir, "summary.json")}`);
 await host.dispose().catch(() => undefined);
 process.exit(failure ? 1 : 0);
+
+/**
+ * Phone and desktop screenshots at a real viewport width. Chrome's own --screenshot flag is no good for the
+ * phone: headless Chrome lays the page out at least 500px wide and then crops the PNG to the window size.
+ */
+async function screenshots(htmlFile, shotsDir) {
+  fs.mkdirSync(shotsDir, { recursive: true });
+  const executablePath = process.env.MARSHAL_SDK_CHROME || process.env.PAGE_STUDIO_CHROME || defaultChrome();
+  const browser = await chromium.launch({
+    ...(executablePath ? { executablePath } : {}),
+    args: process.env.MARSHAL_SDK_CHROME_NO_SANDBOX === "1" ? ["--no-sandbox"] : [],
+  });
+  const taken = [];
+  try {
+    for (const [name, width, height, scale, mobile] of [
+      ["mobile", 390, 844, 2, true],
+      ["desktop", 1280, 800, 1, false],
+    ]) {
+      const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale, isMobile: mobile, hasTouch: mobile });
+      const tab = await context.newPage();
+      await tab.goto(`file://${htmlFile}`, { waitUntil: "load" });
+      await tab.waitForTimeout(1500);
+      const file = path.join(shotsDir, `${name}.png`);
+      await tab.screenshot({ path: file, fullPage: true });
+      const layout = await tab.evaluate(() => ({
+        innerWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        scrollHeight: document.documentElement.scrollHeight,
+      }));
+      taken.push({ name, file, viewportWidth: width, ...layout, overflowsX: layout.scrollWidth > layout.innerWidth });
+      await context.close();
+    }
+  } finally {
+    await browser.close();
+  }
+  return taken;
+}
+
+function defaultChrome() {
+  const mac = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  return process.platform === "darwin" && fs.existsSync(mac) ? mac : undefined;
+}
