@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { createMarshalHost, type MarshalHostOptions } from "./host.js";
+import type { MarshalHostOptions } from "./host.js";
+import { startLinkServer } from "./link/server.js";
 import { FileSessionStore } from "./session-store.js";
 
 const USAGE = `marshal-sdk <command> [options]
@@ -13,6 +14,11 @@ const USAGE = `marshal-sdk <command> [options]
               --task <text | @file> [--name <title>]
   sessions  List or search the sessions a host wrote.
               --state <dir> [--search <words>] [--run <id>] [--transcript <session id>]
+  serve     Serve a host over the link (docs/link.md) so another Marshal can watch and drive it.
+              Live: the host options below, plus [--task <text | @file> [--name <title>]] to start a session.
+              Store-only (a finished run, no runtime): --store <state dir> [--native-root <claude dir>]...
+              --token-file <file> or $MARSHAL_SDK_LINK_TOKEN (required, 16+ chars)
+              [--bind <address>] (default 127.0.0.1) [--port <n>] (default 7781) [--files name=<dir>]...
 
 Host options (exec, agent):
   --workspace <dir>          where sessions work (required)
@@ -106,12 +112,14 @@ async function main(): Promise<void> {
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     return;
   }
+  if (args.command === "serve") return serve(args);
   if (args.command !== "exec" && args.command !== "agent") {
     process.stdout.write(USAGE);
     process.exitCode = args.command ? 2 : 0;
     return;
   }
   const options = hostOptions(args);
+  const { createMarshalHost } = await import("./host.js");
   const host = await createMarshalHost(options);
   try {
     if (args.command === "exec") {
@@ -137,6 +145,73 @@ async function main(): Promise<void> {
   } finally {
     await host.dispose();
   }
+}
+
+function linkToken(args: Arguments): string {
+  const file = one(args, "token-file");
+  const token = (file ? fs.readFileSync(path.resolve(file), "utf8") : (process.env.MARSHAL_SDK_LINK_TOKEN ?? "")).trim();
+  if (!token) throw new Error("serve needs a token: --token-file <file> or MARSHAL_SDK_LINK_TOKEN. It never starts without one.");
+  return token;
+}
+
+function namedFolders(args: Arguments): Record<string, string> {
+  return Object.fromEntries(
+    (args.values.get("files") ?? []).map((pair) => {
+      const at = pair.indexOf("=");
+      if (at <= 0) throw new Error(`--files takes name=<dir>, got ${pair}.`);
+      return [pair.slice(0, at), path.resolve(pair.slice(at + 1))];
+    }),
+  );
+}
+
+/** Runs until SIGINT or SIGTERM. Prints the URL, never the token. */
+async function serve(args: Arguments): Promise<void> {
+  const token = linkToken(args);
+  const port = Number(one(args, "port") ?? 7781);
+  const bind = one(args, "bind") ?? "127.0.0.1";
+  const nativeRoots = (args.values.get("native-root") ?? []).map((dir) => path.resolve(dir));
+  const log = (line: string) => process.stderr.write(`[marshal-sdk] ${line}\n`);
+  let close: () => Promise<void>;
+  const store = one(args, "store");
+  if (store) {
+    const state = path.resolve(store);
+    const sessionsRoot = fs.existsSync(path.join(state, "sessions", "index.json")) ? path.join(state, "sessions") : state;
+    if (!fs.existsSync(path.join(sessionsRoot, "index.json"))) throw new Error(`No session store at ${state} (looked for sessions/index.json).`);
+    const server = await startLinkServer({
+      token,
+      bind,
+      port,
+      sessionsRoot,
+      host: { id: one(args, "host-id") ?? "marshal-sdk", kind: one(args, "host-kind") ?? "local" },
+      files: namedFolders(args),
+      nativeRoots,
+      log,
+    });
+    log(`store-only link serving ${sessionsRoot} on ${server.url}`);
+    close = () => server.close();
+  } else {
+    const options = hostOptions(args);
+    // Loaded only for a live host: store-only serving needs no runtime or model SDK installed.
+    const { createMarshalHost } = await import("./host.js");
+    const host = await createMarshalHost({ ...options, link: { token, bind, port, files: namedFolders(args), nativeRoots } });
+    const task = one(args, "task");
+    if (task) {
+      const agent = host.agents.launch({
+        task: textArgument(task),
+        idempotencyKey: `serve-${host.runId}`,
+        ...(one(args, "name") ? { name: one(args, "name")! } : {}),
+        labels: options.labels,
+      });
+      log(`session ${agent.id} started`);
+    }
+    process.stdout.write(`${JSON.stringify({ runId: host.runId, url: host.link?.url })}\n`);
+    close = () => host.dispose();
+  }
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", resolve);
+    process.once("SIGTERM", resolve);
+  });
+  await close();
 }
 
 main().then(

@@ -122,7 +122,7 @@ export class ClaudeAgentPort {
   }
 
   send(agentId: string, message: string, deliveryMode: "queue" | "interrupt" = "queue"): AgentSummary {
-    const agent = this.agent(agentId);
+    const agent = this.live.get(agentId) ?? this.adopt(agentId);
     if (!agent.running) {
       this.options.store.update(agentId, { state: "running" });
       this.start(agent, message, []);
@@ -302,6 +302,14 @@ export class ClaudeAgentPort {
         costUsd: session.usage.costUsd,
       },
     };
+  }
+
+  /** A stored session this process did not start (an earlier run of the host): resumed by its native id. */
+  private adopt(agentId: string): LiveAgent {
+    this.session(agentId);
+    const agent: LiveAgent = { id: agentId, queue: [], running: false, idle: Promise.resolve() };
+    this.live.set(agentId, agent);
+    return agent;
   }
 
   private agent(agentId: string): LiveAgent {

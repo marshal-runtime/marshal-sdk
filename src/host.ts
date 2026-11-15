@@ -20,6 +20,7 @@ import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
 import { createAgentProvider } from "./agent-provider.js";
 import desktopPlacements from "./desktop-placements.json" with { type: "json" };
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
+import { startLinkServer, type LinkServer } from "./link/server.js";
 import { FileSessionStore, type SessionRecord } from "./session-store.js";
 
 const HARNESS_ID = "marshal-sdk";
@@ -58,6 +59,20 @@ export interface MarshalHostOptions {
   browser?: boolean | MarshalHostBrowser;
   query?: QueryFn;
   log?: (line: string) => void;
+  /** Serve this host over the link (docs/link.md) so another Marshal can watch and drive it. */
+  link?: MarshalHostLinkOptions;
+}
+
+export interface MarshalHostLinkOptions {
+  /** Bearer token every client presents; at least 16 characters. Without it the host does not start. */
+  token: string;
+  /** Default 127.0.0.1. */
+  bind?: string;
+  /** Default 0: a free port (read it from host.link.port). */
+  port?: number;
+  /** Folders clients may list and read besides the workspace, for example { output: "<dir>" }. */
+  files?: Record<string, string>;
+  nativeRoots?: string[];
 }
 
 export interface MarshalHostBrowser {
@@ -76,6 +91,8 @@ export interface MarshalHost {
   search(query: string, limit?: number): Promise<unknown>;
   /** The system prompt a session of this host gets. */
   systemPrompt(): string | undefined;
+  /** The link server, when the host was created with `link`. */
+  readonly link?: { url: string; port: number };
   dispose(): Promise<void>;
 }
 
@@ -164,6 +181,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   kit?.bind((runtime as unknown as { core: never }).core);
 
   const guidance: string[] = [];
+  const installedExtensions: { identity: string; version: string }[] = [];
   try {
     const lifecycle = runtime.serviceContainer.tryGet(RUNTIME_EXTENSION_LIFECYCLE_SERVICE);
     for (const extension of extensions) {
@@ -176,6 +194,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         throw new Error(`Extension ${installed.identity} did not activate: ${JSON.stringify(record?.blockReasons)}`);
       }
       log(`extension ${installed.identity}@${record.version} active`);
+      installedExtensions.push({ identity: installed.identity, version: String(record.version) });
       if (record.agentGuidance) guidance.push(`${installed.identity}: ${JSON.stringify(record.agentGuidance)}`);
     }
   } catch (error) {
@@ -241,36 +260,80 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     return { marshal, ...(browserServer ? { playwright: browserServer } : {}) };
   };
 
+  const invoke = async <T>(capability: string, input: unknown = {}, timeoutMs = EXEC_TIMEOUT_MS): Promise<T> => {
+    const result = (await hostAdapter.callTool(
+      "runtime_exec",
+      { targetType: "operation", target: capability, input, timeoutMs },
+      undefined as never,
+    )) as { structuredContent?: Record<string, any> };
+    const response = result.structuredContent ?? {};
+    if (response.status !== "success") {
+      throw Object.assign(new Error(`${capability} failed: ${JSON.stringify(response.error ?? response).slice(0, 2000)}`), {
+        response,
+      });
+    }
+    return response.result?.output as T;
+  };
+  const search = async (query: string, limit = 10): Promise<unknown> => {
+    const result = (await hostAdapter.callTool("runtime_search", { query, limit }, undefined as never)) as {
+      structuredContent?: unknown;
+    };
+    return result.structuredContent;
+  };
+
+  let link: LinkServer | undefined;
+  let names: Promise<string[]> | undefined;
+  if (options.link) {
+    try {
+      link = await startLinkServer({
+        token: options.link.token,
+        ...(options.link.bind ? { bind: options.link.bind } : {}),
+        port: options.link.port ?? 0,
+        sessionsRoot: sessions.root,
+        host: options.host ?? { id: HARNESS_ID, kind: "local" },
+        files: { workspace: workspacePath, ...options.link.files },
+        ...(options.link.nativeRoots ? { nativeRoots: options.link.nativeRoots } : {}),
+        live: {
+          send: (sessionId, text, deliveryMode) => agents.send(sessionId, text, deliveryMode),
+          cancel: (sessionId) => agents.cancel(sessionId),
+          invoke: (capability, input) => invoke(capability, input),
+          extensions: () => [...installedExtensions],
+          capabilities: () => (names ??= capabilityNames(runtime.kernel as never, runId, context)),
+        },
+        log,
+      });
+      log(`link serving on ${link.url}`);
+    } catch (error) {
+      await agents.dispose().catch(() => undefined);
+      await runtime.dispose().catch(() => undefined);
+      throw error;
+    }
+  }
+
   return {
     runId,
     sessions,
     agents,
     systemPrompt: () => prompt,
-    async invoke<T>(capability: string, input: unknown = {}, timeoutMs = EXEC_TIMEOUT_MS): Promise<T> {
-      const result = (await hostAdapter.callTool(
-        "runtime_exec",
-        { targetType: "operation", target: capability, input, timeoutMs },
-        undefined as never,
-      )) as { structuredContent?: Record<string, any> };
-      const response = result.structuredContent ?? {};
-      if (response.status !== "success") {
-        throw Object.assign(new Error(`${capability} failed: ${JSON.stringify(response.error ?? response).slice(0, 2000)}`), {
-          response,
-        });
-      }
-      return response.result?.output as T;
-    },
-    async search(query: string, limit = 10): Promise<unknown> {
-      const result = (await hostAdapter.callTool("runtime_search", { query, limit }, undefined as never)) as {
-        structuredContent?: unknown;
-      };
-      return result.structuredContent;
-    },
+    invoke,
+    search,
+    ...(link ? { link: { url: link.url, port: link.port } } : {}),
     async dispose(): Promise<void> {
+      await link?.close();
       await agents.dispose();
       await runtime.dispose();
     },
   };
+}
+
+/** Every capability the runtime lists: the kernel's search without a query returns the whole catalog. */
+async function capabilityNames(
+  kernel: { search(request: unknown, context: unknown): Promise<{ matches?: { capability?: { name?: string } }[] }> },
+  runId: string,
+  scope: { sessionId: string; workspacePath: string },
+): Promise<string[]> {
+  const found = await kernel.search({ limit: 500 }, { principal: { id: `${HARNESS_ID}:${runId}`, kind: "agent" }, scope }).catch(() => undefined);
+  return [...new Set((found?.matches ?? []).map((match) => match.capability?.name).filter((name): name is string => !!name))].sort();
 }
 
 function definedEnv(env: NodeJS.ProcessEnv): Record<string, string> {

@@ -1,4 +1,4 @@
-export { createMarshalHost, type MarshalHost, type MarshalHostExtension, type MarshalHostOptions } from "./host.js";
+export { createMarshalHost, type MarshalHost, type MarshalHostExtension, type MarshalHostLinkOptions, type MarshalHostOptions } from "./host.js";
 export {
   ClaudeAgentPort,
   type AgentLaunchRequest,
@@ -25,3 +25,8 @@ export {
   type SessionUsage,
   type TranscriptMessage,
 } from "./session-store.js";
+export { LinkClient, LinkError, type LinkClientOptions, type LinkStream } from "./link/client.js";
+export { FileRoots, type FileContent, type FileEntry } from "./link/files.js";
+export { LINK_PROTOCOL_VERSION, sdkVersion, startLinkServer, type LinkLivePort, type LinkServer, type LinkServerOptions } from "./link/server.js";
+export { StoreReader, type RunSummary } from "./link/store-reader.js";
+export { combineTelemetry, telemetryFromEvents, type Activity, type EventLine, type Telemetry } from "./link/telemetry.js";
