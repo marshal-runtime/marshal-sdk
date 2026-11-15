@@ -7,6 +7,7 @@ import { test } from "node:test";
 import type { CapabilityProvider, InvocationContext } from "@marshal/runtime";
 
 import { createMarshalHost } from "../src/host.js";
+import { brainPackageRoot } from "../src/kit/brain.js";
 import {
   brainConfiguration,
   createMemoryProvider,
@@ -241,6 +242,17 @@ test("prepareKit: memory implies the Brain, writes are denied by default and all
   assert.equal(sessionsOnly.codeIntelligence, false);
   assert.match(sessionsOnly.promptSection!.text, /sessions\.search/);
   assert.doesNotMatch(sessionsOnly.promptSection!.text, /knowledge\.search/);
+});
+
+test("brainPackageRoot: the option, then MARSHAL_SDK_BRAIN_PACKAGE, then the Brain packed inside the installed SDK", () => {
+  const { root } = tempStore();
+  const given = brainPackage(path.join(root, "given"));
+  const fromEnv = brainPackage(path.join(root, "env"));
+  const bundled = brainPackage(path.join(root, "bundled"));
+  assert.equal(brainPackageRoot({ packageRoot: given }, { MARSHAL_SDK_BRAIN_PACKAGE: fromEnv }, () => bundled), path.resolve(given));
+  assert.equal(brainPackageRoot({}, { MARSHAL_SDK_BRAIN_PACKAGE: fromEnv }, () => bundled), path.resolve(fromEnv));
+  assert.equal(brainPackageRoot({}, {}, () => bundled), path.resolve(bundled));
+  assert.throws(() => brainPackageRoot({}, {}, () => undefined), /MARSHAL_SDK_BRAIN_PACKAGE/);
 });
 
 test("kitPermissionBroker defers to the inner broker for everything it does not deny", async () => {

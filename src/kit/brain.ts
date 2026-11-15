@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** The cloud Brain's front door: the proxy that serves knowledge.*, memories and shared sessions. */
 export const BRAIN_CLOUD_URL = "https://zyg-agents-front-559219955260.us-central1.run.app";
@@ -39,11 +40,26 @@ export interface BrainConfigurationInput {
   memoryAnchorPath?: string;
 }
 
-export function brainPackageRoot(options: BrainKitOptions, env: NodeJS.ProcessEnv = process.env): string {
-  const root = options.packageRoot ?? env[BRAIN_PACKAGE_ENV];
+/** Where image/pack.mjs puts the Brain inside the installed SDK (onboarding's DEFAULT_EXTENSIONS "bundled"). */
+export const BUNDLED_BRAIN = "extensions/brain";
+
+/** The installed SDK's bundled Brain, when this SDK was packed with one. */
+export function bundledBrainRoot(): string | undefined {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  while (!fs.existsSync(path.join(dir, "package.json")) && path.dirname(dir) !== dir) dir = path.dirname(dir);
+  const bundled = path.join(dir, BUNDLED_BRAIN);
+  return fs.existsSync(path.join(bundled, "runtime-extension.json")) ? bundled : undefined;
+}
+
+export function brainPackageRoot(
+  options: BrainKitOptions,
+  env: NodeJS.ProcessEnv = process.env,
+  bundled: () => string | undefined = bundledBrainRoot,
+): string {
+  const root = options.packageRoot ?? env[BRAIN_PACKAGE_ENV] ?? bundled();
   if (!root) {
     throw new Error(
-      `The kit's Brain needs a built ${BRAIN_IDENTITY} package: pass kit.brain.packageRoot or set ${BRAIN_PACKAGE_ENV} (see docs/kit.md).`,
+      `The kit's Brain needs a built ${BRAIN_IDENTITY} package: pass kit.brain.packageRoot, set ${BRAIN_PACKAGE_ENV}, or install an SDK packed with the Brain (see docs/kit.md).`,
     );
   }
   const resolved = path.resolve(root);
