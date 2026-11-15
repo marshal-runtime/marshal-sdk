@@ -111,7 +111,8 @@ export function folderHost(roots: readonly string[]): Host {
   const stores = () => findStores(roots);
   const locate = (sessionId: string) => {
     const found = uniqueSessions(stores()).find((entry) => entry.session.id === sessionId);
-    return found ? { ...found, reader: new StoreReader(found.store) } : undefined;
+    // A run folder carries its Claude conversation files in <run>/claude when it came from elsewhere (a cloud run, a pull).
+    return found ? { ...found, reader: new StoreReader(found.store, [path.join(found.store, "..", "..", "claude")]) } : undefined;
   };
   const storeOfRun = (runId: string | undefined) => {
     const runs = summarizeRuns(stores());
