@@ -14,8 +14,8 @@ In `marshal-sdk.json`:
 ```
 
 or in code: `createMarshalHost({ ..., provider: { id: "cursor", apiKeyEnv: "TEAM_CURSOR_KEY" } })`. A provider given
-in code wins over the manifest's. Without `provider`, the host runs Claude on the Claude Agent SDK with `env` exactly
-as given, as before.
+in code wins over the manifest's. Without `provider`, the host runs Claude on the desktop's Claude client with `env`
+exactly as given (a test's own `query` replaces the provider altogether).
 
 | Field | Meaning |
 |---|---|
@@ -23,7 +23,7 @@ as given, as before.
 | `account` | An account from the Marshal desktop's registry (Settings, Accounts), e.g. `omer-max`. It uses the same credential home the desktop uses. |
 | `apiKeyEnv` | Run on an API key read from this environment variable (or the file `<name>_FILE` names). A key never goes in the manifest. `openai` always runs on a key: default `OPENAI_API_KEY`. |
 | `home` | Overrides the credential home: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or the folder holding Cursor's credential store (a container's mounted login). |
-| `engine` | Claude only: `agent-sdk` (default) or `client` (the desktop's Claude client). |
+| `engine` | Claude only: `client` (default, the desktop's Claude client) or `agent-sdk` (every turn on the Claude Agent SDK directly). See "Claude: the client engine". |
 
 Choose an account or a key, not both. The host checks the choice before it starts and stops with the reason when it
 can't work: an unknown provider, an account that is neither in the desktop registry nor on disk, or a key variable
@@ -43,6 +43,48 @@ writing to it. The desktop's default account is not adopted: without `account`, 
 
 Every key is read through `src/credentials.ts` (`readSecret`, `providerKey`, `requireProviderKey`): `NAME`, then the
 file `NAME_FILE` names. Model services (docs/models.md) read their keys the same way.
+
+## Claude: the client engine
+
+By default a Claude turn runs on `createClaudeClientFactory` from `packages/providers`: the client the desktop runs
+its own Claude sessions on (desktop #162), so a session behaves the same in a local harness, in production and in the
+desktop. It goes through `createProviderQuery` like Codex and Cursor (below), and also takes:
+
+- **Forks.** A fork during the parent's turn copies the native session file (`forks.ts`, as before). A fork between
+  turns copies the parent's native state under a new id (`readNativeState` / `writeNativeState`) and resumes it.
+- **Images and files.** A launch's attachments go to the client as files; it inlines images the way the desktop does.
+- **The native tool surface** (`disabledBuiltInTools`, `nativeSubagentAllowlist`) and project rules
+  (`projectContext`): see "Marshal's tool surface and repository rules" below.
+
+A turn that sets something the client has no field for runs on the Claude Agent SDK instead: `outputFormat`
+(structured output), the launch's own `hooks` or `env` (the client's environment is fixed when it is made), `extraArgs`
+(and so `disableSlashCommands`), an in-process MCP server of its own (`type: "sdk"`), `spawnClaudeCodeProcess`, `pathToClaudeCodeExecutable`,
+`maxTurns`, `maxBudgetUsd`, `allowedTools`, `strictMcpConfig`, or a fork at an earlier message (`resumeSessionAt`).
+Both engines run the same Claude CLI on the same config dir, so the session continues across them; the host logs each
+such turn ("turn on the Claude Agent SDK: the Claude client doesn't take …"). `engine: "agent-sdk"` runs every turn
+there, as the SDK did before.
+
+## Marshal's tool surface and repository rules
+
+A session on the host's own prompt (not one whose launch brings its own `systemPrompt`; a fork carries its parent's
+prompt and counts as the host's) gets the desktop's v2 native tool surface (`src/native-tools.ts`, copied from the
+desktop's `electron/prompt/v2/assemble.ts`):
+
+- `DISABLED_NATIVE_TOOLS`: TodoWrite, AskUserQuestion, the Task* and Cron* tools, ScheduleWakeup, plan mode, worktree
+  mode, PushNotification, RemoteTrigger, SendMessage, ListAgents, Workflow, DesignSync. Marshal owns each job.
+- `NATIVE_SUBAGENT_ALLOWLIST`: only `web-fetch`; every other `Agent`/`Task` call is denied in favor of forkSubagents
+  (a PreToolUse hook on the Agent SDK path, the client's own hook on the client path).
+
+`createMarshalHost({ repoRules })` (default true) loads the workspace's rules the way the desktop does
+(`src/repo-rules.ts`, from the desktop's `repository-customizations.ts`): the provider reads its own convention
+(Claude: `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules` through the `project` setting source, along with project
+skills and agents), and the rest (`AGENTS.md` at any depth, `.github/copilot-instructions.md` and
+`.github/instructions`, `.cursor/rules`) goes into the prompt as "Repository Instructions"; path-scoped rules are
+listed, not inlined. `repoRules: false` loads nothing from the checkout (`settingSources: []`, `projectContext: false`).
+The section is read once, when the host starts.
+
+`test/native-tools.test.ts` fails when the desktop's lists change (run with `MARSHAL_DESKTOP_DIR`, or with the desktop
+checked out beside this repo).
 
 ## OpenAI: the Agents SDK
 
@@ -75,9 +117,10 @@ The agent port's `query` is `createProviderQuery` (src/provider-query.ts), a `Qu
 
 Not yet on Codex and Cursor:
 
-- Forking a session: it needs Claude and fails with a clear message.
-- Image attachments: only the prompt text is sent.
+- Forking a session: it needs a client that keeps native state (Claude) and otherwise fails with a clear message.
 - Structured output.
+
+Attachments go to the client as files; whether it reads images is the client's own behaviour.
 
 ## Changing the provider layer
 

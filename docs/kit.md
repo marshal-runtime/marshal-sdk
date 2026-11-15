@@ -441,7 +441,9 @@ sets:
   `spawnClaudeCodeProcess` (start the process on a remote machine or as a sandbox user);
 - `mcpServers`, added to the host's; `hostMcpServers: false` drops the host's own servers.
 
-Without `options` a launch sends exactly what it sent before.
+Without `options` a launch sends exactly what it sent before. On Claude's default `client` engine, a turn with any of
+these except `cwd`, `disallowedTools` and `mcpServers` runs on the Claude Agent SDK, which takes them
+(docs/providers.md, "Claude: the client engine").
 
 **Fork point.** `native: {forkOf, forkAt}` makes the first turn resume the source native session at that message
 (`resume` + `forkSession` + `resumeSessionAt`). Later turns resume the fork.

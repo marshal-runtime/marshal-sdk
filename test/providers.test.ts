@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { ClaudeAgentPort } from "../src/agent-port.js";
+import { ClaudeAgentPort, TURN_EXTRAS } from "../src/agent-port.js";
 import { createMarshalHost } from "../src/host.js";
 import { createProviderQuery, PROVIDER_TOOLS } from "../src/provider-query.js";
-import { resolveProvider } from "../src/provider-selection.js";
+import { agentSdkOnly, DEFAULT_CLAUDE_ENGINE, resolveProvider } from "../src/provider-selection.js";
 import type {
   RuntimeClient,
   RuntimeClientFactory,
@@ -171,12 +171,38 @@ test("cancel aborts the provider session", async () => {
   assert.deepEqual(provider.aborted, ["native-1"]);
 });
 
-test("forking a session on a non-Claude provider fails with a clear message", async () => {
+test("forking a session on a provider without native state fails with a clear message", async () => {
   const provider = fakeProvider();
   const query = createProviderQuery({ factory: provider.factory });
   await assert.rejects(async () => {
     for await (const _ of query({ prompt: "x", options: { forkSession: true, resume: "native-1" } })) void _;
-  }, /Forking a session needs the Claude provider/);
+  }, /Forking a session needs a provider that keeps its native state \(Claude\)/);
+});
+
+test("forking between turns on a client with native state: a copy under a new id, which the turn resumes", async () => {
+  const provider = fakeProvider();
+  const states = new Map<string, { format: string; bytes: Uint8Array; skipHistory?: boolean }>([
+    ["native-parent", { format: "claude-jsonl", bytes: new TextEncoder().encode('{"type":"user"}\n') }],
+  ]);
+  const factory: RuntimeClientFactory = async (cwd) =>
+    Object.assign(await provider.factory(cwd), {
+      readNativeState: async (id: string) => states.get(id) ?? null,
+      writeNativeState: async (id: string, _cwd: string, state: { format: string; bytes: Uint8Array; skipHistory?: boolean }) => {
+        states.set(id, state);
+        return {};
+      },
+    }) as RuntimeClient;
+  const query = createProviderQuery({ factory });
+  const events: Record<string, any>[] = [];
+  for await (const event of query({ prompt: "go on", options: { forkSession: true, resume: "native-parent" } })) events.push(event);
+  const forkedId = events[0]!.session_id as string;
+  assert.notEqual(forkedId, "native-parent");
+  assert.equal(provider.resumed[0]!.id, forkedId);
+  assert.deepEqual(states.get(forkedId)!.bytes, states.get("native-parent")!.bytes);
+  assert.equal(states.get(forkedId)!.skipHistory, true);
+  await assert.rejects(async () => {
+    for await (const _ of query({ prompt: "x", options: { forkSession: true, resume: "native-parent", resumeSessionAt: "m1" } })) void _;
+  }, /needs the Claude Agent SDK engine/);
 });
 
 // Credentials: each provider on a subscription account from the desktop registry, and on an API key.
@@ -207,9 +233,59 @@ test("Claude on a subscription account: that account's config dir, launch-enviro
     { env: { ANTHROPIC_API_KEY: "sk-ant-x", ANTHROPIC_AUTH_TOKEN: "t", PATH: "/bin" }, privateRoot, homeDir: home, desktopDataDirs: dataDirs },
   );
   assert.equal(resolved.credential, "subscription");
-  assert.equal(resolved.query, undefined, "Claude keeps the Agent SDK path by default");
   assert.deepEqual(resolved.env, { PATH: "/bin", CLAUDE_CONFIG_DIR: path.join(home, ".marshal", "marshal-claude-accounts", "omer-max") });
   assert.doesNotMatch(resolved.description, /sk-ant/);
+});
+
+test("Claude's default engine is the desktop's Claude client; agent-sdk is an explicit choice", () => {
+  const { home, dataDirs, privateRoot } = desktopHome({ claude: ["omer-max"] });
+  const claude = capture<Record<string, unknown>>();
+  const base = { env: { PATH: "/bin" }, privateRoot, homeDir: home, desktopDataDirs: dataDirs, factories: { claude: claude.make as never } };
+  const byDefault = resolveProvider({ id: "claude", account: "omer-max" }, base);
+  assert.equal(DEFAULT_CLAUDE_ENGINE, "client");
+  assert.equal(typeof byDefault.query, "function", "turns run on the client");
+  assert.equal(claude.seen.length, 1);
+  assert.equal(claude.seen[0]!.settingSources, undefined, "project rules are the session's choice (projectContext), not the factory's");
+  assert.match(byDefault.description, /\(Claude client\)/);
+  const agentSdk = resolveProvider({ id: "claude", account: "omer-max", engine: "agent-sdk" }, base);
+  assert.equal(agentSdk.query, undefined, "the host's Claude Agent SDK query runs every turn");
+  assert.equal(claude.seen.length, 1, "no client is made");
+  assert.match(agentSdk.description, /\(Claude Agent SDK\)/);
+  assert.throws(() => resolveProvider({ id: "claude", engine: "cli" as never }, base), /Unknown Claude engine/);
+});
+
+test("on the client engine, a turn with options the client has no field for runs on the Agent SDK, and the session goes on", async () => {
+  const { home, dataDirs, privateRoot } = desktopHome({});
+  const claude = capture<Record<string, unknown>>();
+  const agentSdkTurns: Record<string, unknown>[] = [];
+  const agentSdk = (({ options }: { options: Record<string, unknown> }) =>
+    (async function* () {
+      agentSdkTurns.push(options);
+      yield { type: "system", subtype: "init", session_id: (options.resume as string | undefined) ?? "native-sdk" };
+      yield { type: "result", subtype: "success", is_error: false, result: "structured", structured_output: { ok: true }, usage: {} };
+    })()) as never;
+  const lines: string[] = [];
+  const resolved = resolveProvider(
+    { id: "claude" },
+    { env: {}, privateRoot, homeDir: home, desktopDataDirs: dataDirs, factories: { claude: claude.make as never, claudeAgentSdk: agentSdk }, log: (line) => lines.push(line) },
+  );
+  assert.deepEqual(
+    agentSdkOnly({ model: "m", cwd: "/x", disallowedTools: ["TodoWrite"], settingSources: [], env: {}, mcpServers: { marshal: { type: "sdk" }, browser: { command: "npx" } } }),
+    [],
+  );
+  assert.deepEqual(
+    agentSdkOnly({ hooks: {}, mcpServers: { brand: { type: "sdk" } }, [TURN_EXTRAS]: { attachments: [], launchEnv: true } } as never),
+    ["hooks", "env", "in-process MCP servers (brand)"],
+  );
+  const { port } = portOn(resolved.query!);
+  const plain = port.launch({ task: "hi", idempotencyKey: "e1" });
+  assert.equal((await port.wait(plain.id)).result, "echo: hi");
+  assert.equal(agentSdkTurns.length, 0);
+  const shaped = port.launch({ task: "json please", idempotencyKey: "e2", options: { outputFormat: { type: "json_schema", schema: {} } } });
+  assert.equal((await port.wait(shaped.id)).result, "structured");
+  assert.equal(agentSdkTurns.length, 1);
+  assert.match(lines.join("\n"), /Claude client doesn't take outputFormat/);
+  assert.equal(claude.provider.created.length, 1, "only the plain session reached the client");
 });
 
 test("Claude on an API key: the key from the named variable, and nothing else changes", () => {

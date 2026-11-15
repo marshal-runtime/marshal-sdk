@@ -26,6 +26,8 @@ import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decis
 import { createModelServices, createModelsProvider, type ModelServices, type ModelsConfig } from "./models/index.js";
 import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type ExtensionSkill } from "./extension-skills.js";
 import { createForkToolsProvider } from "./fork-provider.js";
+import { DISABLED_NATIVE_TOOLS, NATIVE_SUBAGENT_ALLOWLIST } from "./native-tools.js";
+import { repositoryRulesPrompt } from "./repo-rules.js";
 import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
@@ -86,9 +88,15 @@ export interface MarshalHostOptions {
   env?: Record<string, string>;
   /** Give sessions a headless browser (Playwright MCP) when the package is installed. Default true. */
   browser?: boolean | MarshalHostBrowser;
-  /** The model provider of this host's sessions and its credentials: Claude, Codex or Cursor, subscription or API key (docs/providers.md). Default: Claude on the Claude Agent SDK with `env` as given. */
+  /** The model provider of this host's sessions and its credentials: Claude, Codex or Cursor, subscription or API key (docs/providers.md). Default: Claude on the desktop's Claude client with `env` as given. */
   provider?: ProviderSelection;
+  /** Test hook: every turn runs on this instead of a provider. */
   query?: QueryFn;
+  /**
+   * Load the workspace's repository rules the way the desktop does: the provider reads its own convention (Claude:
+   * CLAUDE.md, .claude/rules), and the rest (AGENTS.md, .github and .cursor rules) goes into the prompt. Default true.
+   */
+  repoRules?: boolean;
   log?: (line: string) => void;
   /** Serve this host over the link (docs/link.md) so another Marshal can watch and drive it. */
   link?: MarshalHostLinkOptions;
@@ -210,12 +218,15 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   let prompt: string | undefined;
   let serversFor: (session: SessionRecord) => Record<string, unknown> = () => ({});
   let automations: HostAutomations | undefined;
-  const provider = options.provider
-    ? resolveProvider(options.provider, { env: options.env ?? definedEnv(process.env), privateRoot, log })
-    : undefined;
+  // A test's own query runs every turn; otherwise Claude is the default provider.
+  const selection = options.provider ?? (options.query ? undefined : ({ id: "claude" } as const));
+  const provider = selection ? resolveProvider(selection, { env: options.env ?? definedEnv(process.env), privateRoot, log }) : undefined;
   if (provider) log(provider.description);
+  const repoRules = options.repoRules !== false;
   const agents = new ClaudeAgentPort({
     query: options.query ?? provider?.query ?? (claudeQuery as unknown as QueryFn),
+    projectSettings: repoRules,
+    nativeTools: { disabled: DISABLED_NATIVE_TOOLS, subagentAllowlist: NATIVE_SUBAGENT_ALLOWLIST },
     store: sessions,
     cwd: workspacePath,
     env: provider?.env ?? options.env ?? definedEnv(process.env),
@@ -369,10 +380,12 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       ? undefined
       : playwrightServer(typeof options.browser === "object" ? options.browser : {}, log);
   const skillsSection = extensionSkillsPrompt(extensionSkills);
+  const rulesSection = repoRules ? repositoryRulesPrompt(workspacePath, options.provider?.id ?? "claude") : "";
   prompt = marshalPrompt(guidance, browserServer !== undefined, log, [
     ...(kit?.promptSection ? [kit.promptSection] : []),
     forksPromptSection(),
     ...(skillsSection ? [skillsSection] : []),
+    ...(rulesSection ? [{ id: "repository-rules", text: rulesSection }] : []),
   ]);
 
   serversFor = (session: SessionRecord): Record<string, unknown> => {

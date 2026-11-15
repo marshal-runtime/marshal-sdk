@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type {
   RuntimeClient,
   RuntimeClientFactory,
@@ -7,7 +9,7 @@ import type {
   RuntimeSessionEvent,
   RuntimeTool,
 } from "./providers.js";
-import type { QueryFn } from "./agent-port.js";
+import { TURN_EXTRAS, type QueryFn, type TurnExtras } from "./agent-port.js";
 
 /**
  * Where a host puts the provider-neutral form of a session's Marshal tools inside the MCP-server record it hands the
@@ -65,19 +67,30 @@ async function* turn(
   options: ProviderQueryOptions,
 ): AsyncGenerator<Record<string, any>> {
   const turnOptions = params.options;
-  if (turnOptions.forkSession) {
-    throw new Error("Forking a session needs the Claude provider; this host runs another provider.");
-  }
+  const extras = (turnOptions as Record<symbol, unknown>)[TURN_EXTRAS] as TurnExtras | undefined;
   const cwd = String(turnOptions.cwd ?? process.cwd());
   const client = await clientFor(cwd);
-  const config = sessionConfig(turnOptions, cwd);
-  const resume = typeof turnOptions.resume === "string" ? turnOptions.resume : undefined;
+  const config = sessionConfig(turnOptions, cwd, extras);
+  let resume = typeof turnOptions.resume === "string" ? turnOptions.resume : undefined;
+  if (turnOptions.forkSession) {
+    // A fork between turns: a copy of the source's native state under a new id, which the turn then resumes.
+    if (!resume || !client.readNativeState || !client.writeNativeState) {
+      throw new Error("Forking a session needs a provider that keeps its native state (Claude); this host runs another provider.");
+    }
+    if (turnOptions.resumeSessionAt !== undefined) throw new Error("Forking at an earlier message needs the Claude Agent SDK engine.");
+    const state = await client.readNativeState(resume, cwd);
+    if (!state) throw new Error(`No native state for session ${resume} to fork.`);
+    const forked = randomUUID();
+    await client.writeNativeState(forked, cwd, { ...state, skipHistory: true });
+    resume = forked;
+  }
   const session: RuntimeClientSession = resume
     ? await client.resumeSession(resume, config)
     : await client.createSession(config);
   yield { type: "system", subtype: "init", session_id: session.sessionId };
 
-  const { text, attachments } = await promptParts(params.prompt);
+  const text = await promptText(params.prompt);
+  const attachments = (extras?.attachments ?? []).map((file) => ({ type: "file" as const, path: file }));
   const outbox: Record<string, any>[] = [];
   let wake: (() => void) | undefined;
   let done = false;
@@ -168,7 +181,7 @@ async function* turn(
   }
 }
 
-function sessionConfig(turnOptions: Record<string, unknown>, cwd: string): RuntimeSessionConfig {
+function sessionConfig(turnOptions: Record<string, unknown>, cwd: string, extras: TurnExtras | undefined): RuntimeSessionConfig {
   const servers = (turnOptions.mcpServers ?? {}) as Record<string | symbol, unknown>;
   const tools = (servers[PROVIDER_TOOLS] as RuntimeTool[] | undefined) ?? [];
   const mcpServers: Record<string, RuntimeMcpServerConfig> = {};
@@ -187,6 +200,15 @@ function sessionConfig(turnOptions: Record<string, unknown>, cwd: string): Runti
     ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
     ...(tools.length ? { tools } : {}),
     ...(typeof systemPrompt === "string" ? { systemMessage: { content: systemPrompt, mode: "replace" as const } } : {}),
+    ...(Array.isArray(turnOptions.disallowedTools) && turnOptions.disallowedTools.length
+      ? { disabledBuiltInTools: turnOptions.disallowedTools.map(String) }
+      : {}),
+    // The client enforces the allowlist in its PreToolUse hook, which runs only when the session has one.
+    ...(extras?.nativeSubagentAllowlist
+      ? { nativeSubagentAllowlist: [...extras.nativeSubagentAllowlist], hooks: { onPreToolUse: () => undefined } }
+      : {}),
+    // The Agent SDK's empty setting sources: nothing from the checkout (rules, skills, agents).
+    ...(Array.isArray(turnOptions.settingSources) && turnOptions.settingSources.length === 0 ? { projectContext: false } : {}),
     // An unattended host has nobody to approve; what a run may do is decided by what is installed on it.
     // Claude denies every tool without a handler; Codex runs in a read-only sandbox unless told otherwise.
     onPermissionRequest: () => ({ kind: "approve-once" }),
@@ -217,9 +239,9 @@ function mcpServerConfig(server: unknown): RuntimeMcpServerConfig | undefined {
   return undefined;
 }
 
-/** The port's prompt: a string, or one user message; only its text reaches non-Claude providers (images are dropped). */
-async function promptParts(prompt: unknown): Promise<{ text: string; attachments: { type: "file"; path: string }[] }> {
-  if (typeof prompt === "string") return { text: prompt, attachments: [] };
+/** The port's prompt text: a string, or the text of one user message (its files come as paths in TURN_EXTRAS). */
+async function promptText(prompt: unknown): Promise<string> {
+  if (typeof prompt === "string") return prompt;
   const texts: string[] = [];
   if (prompt && typeof (prompt as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function") {
     for await (const message of prompt as AsyncIterable<Record<string, any>>) {
@@ -228,5 +250,5 @@ async function promptParts(prompt: unknown): Promise<{ text: string; attachments
       }
     }
   }
-  return { text: texts.join("\n"), attachments: [] };
+  return texts.join("\n");
 }

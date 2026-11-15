@@ -13,6 +13,25 @@ import {
   type SessionTransport,
 } from "./session-messages.js";
 import type { FileSessionStore, SessionFork, SessionRecord, TranscriptMessage } from "./session-store.js";
+import { nativeSubagentHook } from "./native-tools.js";
+
+/**
+ * What a turn carries for provider clients beside the Claude Agent SDK's options (which read only string keys): the
+ * attached files as paths, and the native subagent allowlist the Agent SDK path enforces with a hook.
+ */
+export const TURN_EXTRAS: unique symbol = Symbol.for("marshal-sdk.turn-extras");
+export interface TurnExtras {
+  attachments: string[];
+  nativeSubagentAllowlist?: string[];
+  /** The launch set its own `env` (the `env` option is always set: the host's, or the launch's merged over it). */
+  launchEnv?: boolean;
+}
+
+/** `hooks` with one more PreToolUse callback, after the launch's own. */
+function withPreToolUse(hooks: Readonly<Record<string, unknown>> | undefined, callback: unknown): Record<string, unknown> {
+  const existing = Array.isArray(hooks?.PreToolUse) ? (hooks.PreToolUse as unknown[]) : [];
+  return { ...hooks, PreToolUse: [...existing, { hooks: [callback] }] };
+}
 
 /** How a session's queued work ended: idle with the last turn's answer (none when it was cancelled), or failed. */
 export type SessionOutcome = { state: "idle"; reply?: string } | { state: "failed"; error: string };
@@ -116,6 +135,16 @@ export interface AgentPortOptions {
   mcpServers: (session: SessionRecord) => Record<string, unknown>;
   /** Tool allowlist handed to the backend; undefined leaves its defaults. */
   tools?: readonly string[];
+  /**
+   * Let the backend load the project's own settings and rules (Claude: CLAUDE.md, .claude/rules, project skills and
+   * agents through the `project` setting source). Default false: nothing from the checkout.
+   */
+  projectSettings?: boolean;
+  /**
+   * The native tool surface of a session on the host's own prompt (not one whose launch brings its own): native
+   * tools removed, and the only native subagent types it may launch (native-tools.ts).
+   */
+  nativeTools?: { disabled: readonly string[]; subagentAllowlist: readonly string[] };
   log?: (line: string) => void;
   /** A session finished its queued work (`session.idle`) or stopped on an error (`session.failed`). */
   onSessionEvent?: (type: "session.idle" | "session.failed", payload: Record<string, unknown>) => void;
@@ -476,11 +505,16 @@ export class ClaudeAgentPort {
     store.appendMessage(agent.id, { role: "user", content: message, ...(from ? { from } : {}) });
     const abort = new AbortController();
     agent.abort = abort;
-    const systemPrompt = agent.systemPrompt ?? this.options.systemPrompt(session);
+    const hostPrompt = this.options.systemPrompt(session);
+    const systemPrompt = agent.systemPrompt ?? hostPrompt;
     const launch = agent.launchOptions ?? {};
     agent.structuredOutput = undefined;
     const extraArgs = { ...launch.extraArgs, ...(launch.disableSlashCommands ? { "disable-slash-commands": null } : {}) };
-    const options: Record<string, unknown> = {
+    // A fork carries its parent's prompt, so it counts as the host's prompt when the text is the same.
+    const surface = systemPrompt !== undefined && systemPrompt === hostPrompt ? this.options.nativeTools : undefined;
+    const disallowedTools = [...(surface?.disabled ?? []), ...(launch.disallowedTools ?? [])];
+    const hooks = surface ? withPreToolUse(launch.hooks, nativeSubagentHook(surface.subagentAllowlist)) : launch.hooks;
+    const options: Record<string | symbol, unknown> = {
       model: session.model,
       ...(session.reasoningEffort ? { effort: session.reasoningEffort } : {}),
       cwd: launch.cwd ?? this.options.cwd,
@@ -488,7 +522,7 @@ export class ClaudeAgentPort {
       abortController: abort,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
-      settingSources: [],
+      settingSources: this.options.projectSettings ? ["project"] : [],
       mcpServers: { ...(launch.hostMcpServers === false ? {} : this.options.mcpServers(session)), ...launch.mcpServers },
       systemPrompt: systemPrompt ?? { type: "preset", preset: "claude_code" },
       ...(this.options.tools ? { tools: [...this.options.tools] } : {}),
@@ -501,13 +535,18 @@ export class ClaudeAgentPort {
       ...(launch.maxBudgetUsd !== undefined ? { maxBudgetUsd: launch.maxBudgetUsd } : {}),
       ...(launch.strictMcpConfig !== undefined ? { strictMcpConfig: launch.strictMcpConfig } : {}),
       ...(launch.allowedTools ? { allowedTools: [...launch.allowedTools] } : {}),
-      ...(launch.disallowedTools ? { disallowedTools: [...launch.disallowedTools] } : {}),
+      ...(disallowedTools.length ? { disallowedTools } : {}),
       ...(launch.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: launch.pathToClaudeCodeExecutable } : {}),
       ...(Object.keys(extraArgs).length ? { extraArgs } : {}),
-      ...(launch.hooks ? { hooks: launch.hooks } : {}),
+      ...(hooks ? { hooks } : {}),
       ...(launch.outputFormat !== undefined ? { outputFormat: launch.outputFormat } : {}),
       ...(launch.spawnClaudeCodeProcess ? { spawnClaudeCodeProcess: launch.spawnClaudeCodeProcess } : {}),
       stderr: (data: string) => this.options.log?.(`agent ${agent.id} stderr: ${data.trimEnd().slice(0, 500)}`),
+      [TURN_EXTRAS]: {
+        attachments: [...attachments],
+        ...(surface ? { nativeSubagentAllowlist: [...surface.subagentAllowlist] } : {}),
+        ...(launch.env ? { launchEnv: true } : {}),
+      } satisfies TurnExtras,
     };
     let lastText = "";
     let final: string | undefined;

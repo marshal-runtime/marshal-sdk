@@ -2,7 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { QueryFn } from "./agent-port.js";
+import { query as claudeAgentSdkQuery } from "@anthropic-ai/claude-agent-sdk";
+
+import { TURN_EXTRAS, type QueryFn, type TurnExtras } from "./agent-port.js";
 import { readSecret, requireProviderKey } from "./credentials.js";
 import { createOpenAIAgentsQuery } from "./openai-agents-query.js";
 import type { ModelProvider } from "@openai/agents";
@@ -45,11 +47,16 @@ export interface ProviderSelection {
   /** Overrides the credential home: CLAUDE_CONFIG_DIR, CODEX_HOME, or the folder holding Cursor's credential store. */
   home?: string;
   /**
-   * Claude only. `agent-sdk` (default) runs each turn on the Claude Agent SDK directly, with forks, images and
-   * structured output; `client` runs it on the Marshal desktop's Claude client.
+   * Claude only. `client` (default) runs each turn on the Marshal desktop's Claude client, the code the desktop runs
+   * its own sessions on; a turn that asks for what that client doesn't take (structured output, the launch's own
+   * hooks, env, CLI flags or spawner, turn and budget caps, a fork at an earlier message) runs on the Claude Agent SDK
+   * instead, on the same native session. `agent-sdk` runs every turn on the Claude Agent SDK directly.
    */
-  engine?: "agent-sdk" | "client";
+  engine?: ClaudeEngine;
 }
+
+export type ClaudeEngine = "client" | "agent-sdk";
+export const DEFAULT_CLAUDE_ENGINE: ClaudeEngine = "client";
 
 export type ProviderCredential = "subscription" | "api-key";
 
@@ -81,6 +88,8 @@ export interface ResolveProviderOptions {
     cursor?: (options: CursorClientFactoryOptions) => RuntimeClientFactory;
     /** The OpenAI Agents SDK model provider for a key. */
     openai?: (options: { apiKey: string }) => ModelProvider;
+    /** The Claude Agent SDK's query, for turns the Claude client doesn't take. */
+    claudeAgentSdk?: QueryFn;
   };
   log?: (line: string) => void;
 }
@@ -120,8 +129,10 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
   if (account) checkAccount(selection.id, account, dataDirs, accountHome(selection.id, account, homeDir, dataDirs));
   const apiKey = selection.apiKeyEnv ? readApiKey(options.env, selection.apiKeyEnv) : undefined;
   const credential: ProviderCredential = apiKey !== undefined ? "api-key" : "subscription";
+  const engine = selection.id === "claude" ? (selection.engine ?? DEFAULT_CLAUDE_ENGINE) : undefined;
+  if (engine && engine !== "client" && engine !== "agent-sdk") throw new Error(`Unknown Claude engine "${String(engine)}"; use client or agent-sdk.`);
   const describe = (home: string | undefined) =>
-    `provider ${selection.id}${selection.engine === "client" ? " (client)" : ""}: ${credential === "api-key" ? `API key from ${selection.apiKeyEnv}` : `subscription, account ${account ?? DEFAULT_ACCOUNT}`}${home ? `, home ${home}` : ""}`;
+    `provider ${selection.id}${engine ? ` (${engine === "client" ? "Claude client" : "Claude Agent SDK"})` : ""}: ${credential === "api-key" ? `API key from ${selection.apiKeyEnv}` : `subscription, account ${account ?? DEFAULT_ACCOUNT}`}${home ? `, home ${home}` : ""}`;
   const fresh = (name: string) => {
     const dir = path.join(options.privateRoot, "providers", name);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -152,9 +163,10 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
         env,
         description: describe(home),
       };
-      if (selection.engine !== "client") return resolved;
+      if (engine === "agent-sdk") return resolved;
       // An account keeps the desktop's layout: its own login, transcripts linked under the original home.
       const make = factories.claude ?? createClaudeClientFactory;
+      // Per session, the turn's setting sources decide whether project rules load (projectContext).
       const factory = make({
         env,
         ...(apiKey !== undefined
@@ -164,9 +176,16 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
             : home
               ? { configDir: home }
               : {}),
-        settingSources: [],
       });
-      return { ...resolved, query: providerQuery(factory) };
+      const client = providerQuery(factory);
+      const agentSdk = factories.claudeAgentSdk ?? (claudeAgentSdkQuery as unknown as QueryFn);
+      const query: QueryFn = (params) => {
+        const needs = agentSdkOnly(params.options);
+        if (!needs.length) return client(params);
+        options.log?.(`turn on the Claude Agent SDK: the Claude client doesn't take ${needs.join(", ")}`);
+        return agentSdk(params);
+      };
+      return { ...resolved, query: Object.assign(query, { dispose: () => client.dispose() }) };
     }
     case "codex": {
       const home =
@@ -221,6 +240,34 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
       };
     }
   }
+}
+
+/**
+ * Agent SDK options the Claude client has no field for. A turn that sets one runs on the Claude Agent SDK; both
+ * engines run the same Claude CLI on the same config dir, so the session continues across them.
+ */
+const AGENT_SDK_ONLY_OPTIONS = [
+  "outputFormat",
+  "hooks",
+  "extraArgs",
+  "spawnClaudeCodeProcess",
+  "pathToClaudeCodeExecutable",
+  "maxTurns",
+  "maxBudgetUsd",
+  "allowedTools",
+  "strictMcpConfig",
+  "resumeSessionAt",
+] as const;
+
+export function agentSdkOnly(turnOptions: Record<string, unknown>): string[] {
+  const needs: string[] = AGENT_SDK_ONLY_OPTIONS.filter((name) => turnOptions[name] !== undefined);
+  // The client's environment is fixed when it is made; a launch's own env needs a process of its own.
+  if (((turnOptions as Record<symbol, unknown>)[TURN_EXTRAS] as TurnExtras | undefined)?.launchEnv) needs.push("env");
+  // The host's own in-process server (marshal) reaches the client as PROVIDER_TOOLS; a launch's would be dropped.
+  const servers = (turnOptions.mcpServers ?? {}) as Record<string, { type?: unknown }>;
+  const inProcess = Object.entries(servers).filter(([name, server]) => name !== "marshal" && server?.type === "sdk");
+  if (inProcess.length) needs.push(`in-process MCP servers (${inProcess.map(([name]) => name).join(", ")})`);
+  return needs;
 }
 
 /**
