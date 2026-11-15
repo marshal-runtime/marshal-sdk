@@ -9,6 +9,13 @@ export {
 } from "./agent-port.js";
 export { createAgentProvider } from "./agent-provider.js";
 export {
+  claudeNativePath,
+  publishToOrg,
+  type OrgPublishClient,
+  type OrgPublishOptions,
+  type OrgPublishResult,
+} from "./org-publish.js";
+export {
   FileSessionStore,
   type NativeSessionRef,
   type SessionFilter,
