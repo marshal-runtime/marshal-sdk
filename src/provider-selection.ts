@@ -8,7 +8,8 @@ import { TURN_EXTRAS, type QueryFn, type TurnExtras } from "./agent-port.js";
 import { readSecret, requireProviderKey } from "./credentials.js";
 import { createOpenAIAgentsQuery } from "./openai-agents-query.js";
 import type { ModelProvider } from "@openai/agents";
-import { createProviderQuery, PROVIDER_TOOLS } from "./provider-query.js";
+import { createEngineQuery, type EngineRuntime } from "./engine-query.js";
+import { PROVIDER_TOOLS } from "./provider-query.js";
 import {
   claudeAccountConfigDir,
   codexAccountHome,
@@ -139,8 +140,15 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
     return dir;
   };
   const factories = options.factories ?? {};
-  const providerQuery = (factory: RuntimeClientFactory, prepare?: Parameters<typeof createProviderQuery>[0]["prepare"]) =>
-    createProviderQuery({ factory, ...(prepare ? { prepare } : {}), ...(options.log ? { log: options.log } : {}) });
+  // Every provider client runs under the Marshal session engine, the desktop's own (packages/providers backend/local).
+  const providerQuery = (runtime: EngineRuntime, factory: RuntimeClientFactory, prepare?: Parameters<typeof createEngineQuery>[0]["prepare"]) =>
+    createEngineQuery({
+      runtime,
+      factory,
+      appDataDir: path.join(options.privateRoot, "engine"),
+      ...(prepare ? { prepare } : {}),
+      ...(options.log ? { log: options.log } : {}),
+    });
 
   switch (selection.id) {
     case "claude": {
@@ -177,7 +185,7 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
               ? { configDir: home }
               : {}),
       });
-      const client = providerQuery(factory);
+      const client = providerQuery("claude", factory);
       const agentSdk = factories.claudeAgentSdk ?? (claudeAgentSdkQuery as unknown as QueryFn);
       const query: QueryFn = (params) => {
         const needs = agentSdkOnly(params.options);
@@ -196,7 +204,7 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
       const prepare =
         apiKey === undefined
           ? undefined
-          : async (client: Parameters<NonNullable<Parameters<typeof createProviderQuery>[0]["prepare"]>>[0]) => {
+          : async (client: Parameters<NonNullable<Parameters<typeof createEngineQuery>[0]["prepare"]>>[0]) => {
               if (!client.login) throw new Error("This Codex client cannot sign in with an API key.");
               await client.login({ type: "api-key", apiKey });
             };
@@ -205,7 +213,7 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
         credential,
         ...(account ? { account } : {}),
         env: options.env,
-        query: providerQuery(factory, prepare),
+        query: providerQuery("codex", factory, prepare),
         defaultModel: "",
         description: describe(home),
       };
@@ -234,7 +242,7 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
         credential,
         ...(account ? { account } : {}),
         env: options.env,
-        query: providerQuery(factory),
+        query: providerQuery("cursor", factory),
         defaultModel: "",
         description: describe(home),
       };

@@ -263,6 +263,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const repoRules = options.repoRules !== false;
   const agents = new ClaudeAgentPort({
     query: options.query ?? provider?.query ?? (claudeQuery as unknown as QueryFn),
+    runtimeId: provider?.id ?? "claude",
     projectSettings: repoRules,
     nativeTools: { disabled: DISABLED_NATIVE_TOOLS, subagentAllowlist: NATIVE_SUBAGENT_ALLOWLIST },
     store: sessions,

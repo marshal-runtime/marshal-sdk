@@ -10,7 +10,7 @@ are to this repository's `main` (2026-11-15).
 | Concern | Desktop | SDK | Shared already |
 | --- | --- | --- | --- |
 | Runtime kernel, extensions, capabilities | `electron/marshal-runtime/*` over the `@marshal/runtime` + `agent-runtime-*` packs | `MarshalHost` (`src/host.ts`) over the same packs | Yes: the same tarballs, checked by `check:packs` |
-| Agent execution | `ISessionBackend` per runtime (`electron/backend/{claude,copilot,codex,cursor,gateway}`), driven by `SessionManager` (`electron/sessions.ts`, ~14.7k lines) | `ClaudeAgentPort` (`src/agent-port.ts`), Claude only | No |
+| Agent execution | `ISessionBackend` per runtime (`electron/backend/{claude,copilot,codex,cursor,gateway}`), driven by `SessionManager` (`electron/sessions.ts`) | The same engine: `LocalBackend` from `packages/providers/src/backend/local` (the desktop's `electron/backend/local`, lifted), driven per Marshal session by `ClaudeAgentPort` through `createEngineQuery` (`src/engine-query.ts`), on Claude, Codex or Cursor | Yes: the engine code (2026-11-15); the session lifecycle above it (`SessionManager` vs `ClaudeAgentPort`) not yet |
 | Session storage | `LocalSessionStore` + `sessions-index.json`, partitioned by `runtimeId` | `FileSessionStore` (`src/session-store.ts`): `index.json`, `transcript.jsonl`, `events.jsonl`, native ref | No (the desktop imports SDK conversations through `importClaudeTranscript`) |
 | Marshal tools (`marshal.tool.*`) | `electron/self-tools.ts` (~4.3k lines) | `src/agent-provider.ts`, `forks.ts`, `automations.ts`, `decisions.ts`, `kit/` | Names and shapes, not code |
 | Permissions | `PermissionPolicy` + permission cards (interactive) | `PermissionBroker`, allow-all for the POC (`kit/index.ts`) | The broker interface |
@@ -61,6 +61,20 @@ are to this repository's `main` (2026-11-15).
    `org-publish` path instead of the desktop's own.
 8. **`SessionManager` shrinks to an adapter.** Session lifecycle, queueing and fork bookkeeping move to the host;
    `electron/sessions.ts` keeps the IPC and renderer concerns. Other runtimes join as agent ports when each is worth it.
+
+## Headless hosts on the shared engine (2026-11-15)
+
+`createMarshalHost` runs every provider-client turn (Claude client, Codex, Cursor) on the desktop's session engine:
+`createEngineQuery` keeps one live `LocalBackend` session per Marshal session, the way the desktop keeps one per chat,
+and resumes it by its native id in a later run. The host's Marshal tools, MCP servers and permission handler reach the
+engine per session (`EngineBackend`: the engine's exclusive-session-tools path, `prepareMcpConfig`, the approval
+callback); the engine's process-wide ports get headless implementations (`src/engine-host.ts`) unless an embedder (the
+desktop) configured them first. Session records carry the desktop's `runtimeId` and `backendOrigin`.
+
+Still different from the desktop: the runtime composition (`createAgentRuntime` in `src/host.ts` vs the desktop's
+`MarshalRuntimeHost` in `packages/host`), the session lifecycle above the engine (`ClaudeAgentPort` vs
+`SessionManager`), and turns that need the Claude Agent SDK (structured output, launch hooks, CLI flags, turn caps,
+a fork at an earlier message), which still run on it.
 
 ## What stays hard
 

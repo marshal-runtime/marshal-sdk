@@ -28,6 +28,8 @@ export interface TurnExtras {
   launchEnv?: boolean;
   /** The host's permission handler for this session's tool calls; absent, the provider approves every request. */
   permissionHandler?: RuntimePermissionHandler;
+  /** The Marshal session this turn belongs to (the session engine keeps one live session per Marshal session). */
+  sessionId?: string;
 }
 
 /** The Claude Agent SDK's canUseTool over a host handler: the request mapped the way the desktop's Claude client maps it. */
@@ -135,6 +137,8 @@ export interface AgentTranscript {
 
 export interface AgentPortOptions {
   query: QueryFn;
+  /** The runtime the sessions run on (the provider id: claude, codex, cursor, openai); recorded as the session's runtimeId. Default claude. */
+  runtimeId?: string;
   store: FileSessionStore;
   /** Working directory of every session, and the directory the backend files its native history under. */
   cwd: string;
@@ -267,7 +271,7 @@ export class ClaudeAgentPort {
     const session = this.options.store.create({
       ...(request.sessionId ? { id: request.sessionId } : {}),
       title: request.name ?? request.task.slice(0, 80),
-      runtime: "claude",
+      runtime: this.options.runtimeId ?? "claude",
       model: request.model ?? this.options.settings?.().model ?? this.options.defaultModel,
       reasoningEffort: request.reasoningEffort ?? this.options.settings?.().reasoningEffort ?? this.options.defaultReasoningEffort,
       native: {
@@ -566,6 +570,7 @@ export class ClaudeAgentPort {
       ...(launch.spawnClaudeCodeProcess ? { spawnClaudeCodeProcess: launch.spawnClaudeCodeProcess } : {}),
       stderr: (data: string) => this.options.log?.(`agent ${agent.id} stderr: ${data.trimEnd().slice(0, 500)}`),
       [TURN_EXTRAS]: {
+        sessionId: agent.id,
         attachments: [...attachments],
         ...(surface ? { nativeSubagentAllowlist: [...surface.subagentAllowlist] } : {}),
         ...(launch.env ? { launchEnv: true } : {}),

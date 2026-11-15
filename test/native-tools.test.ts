@@ -48,7 +48,9 @@ test("Agent SDK path: a session on the host's prompt loses the desktop's native 
     assert.ok(options.disallowedTools.includes(name), name);
   }
   assert.deepEqual(options.settingSources, ["project"]);
-  assert.deepEqual(options[TURN_EXTRAS], { attachments: [], nativeSubagentAllowlist: ["web-fetch"] });
+  const { sessionId, ...extras } = options[TURN_EXTRAS];
+  assert.equal(typeof sessionId, "string", "the turn carries its Marshal session for the session engine");
+  assert.deepEqual(extras, { attachments: [], nativeSubagentAllowlist: ["web-fetch"] });
   const hook = options.hooks.PreToolUse[0].hooks[0];
   const denied = await hook({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: { subagent_type: "general-purpose" } });
   assert.equal(denied.hookSpecificOutput.permissionDecision, "deny");

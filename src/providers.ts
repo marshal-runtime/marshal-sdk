@@ -28,3 +28,11 @@ export type {
   ISessionBackend,
   SessionHandle,
 } from "../packages/providers/src/backend/types";
+export { createLocalRuntimeCapabilities } from "../packages/providers/src/backend/local/capabilities";
+export { getRuntimeMetadata } from "../packages/providers/src/common/runtime-config";
+export {
+  CURSOR_ACCOUNT_IDENTITY_PREFIX,
+  CURSOR_DEFAULT_MODEL_ID,
+  CURSOR_PREFERRED_MODEL_IDS,
+  CURSOR_SESSION_CONFIG_TRACE_FILENAME,
+} from "../packages/providers/src/backend/cursor/constants";
