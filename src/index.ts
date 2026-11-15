@@ -73,15 +73,6 @@ export {
   type OrgBridgeTurn,
 } from "./org-bridge.js";
 export {
-  FileSessionStore,
-  type NativeSessionRef,
-  type SessionFilter,
-  type SessionRecord,
-  type SessionSearchHit,
-  type SessionState,
-  type SessionUsage,
-  type TranscriptMessage,
-export {
   ConversationRoomRoute,
   conversationRoomId,
   parseAnswer,
@@ -91,6 +82,15 @@ export {
   type ConversationRoomRouteOptions,
 } from "./rooms-route.js";
 export { linkPersonRoute, readDecisions } from "./link/decisions.js";
+export {
+  FileSessionStore,
+  type NativeSessionRef,
+  type SessionFilter,
+  type SessionRecord,
+  type SessionSearchHit,
+  type SessionState,
+  type SessionUsage,
+  type TranscriptMessage,
 } from "./session-store.js";
 export { LinkClient, LinkError, type LinkClientOptions, type LinkStream } from "./link/client.js";
 export { FileRoots, type FileContent, type FileEntry } from "./link/files.js";
