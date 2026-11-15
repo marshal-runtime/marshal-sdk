@@ -48,11 +48,11 @@ A session that asks a person (`marshal.tool.askUser`, docs/kit.md) can be answer
 
 The answer reaches the session through `DecisionDesk.answer`, as a message from that person. A host created with both `org` and a `ConversationRoomRoute` in `routes` wires the route into the bridge.
 
-The route writes through the runtime's rooms API (`RoomsApi.open(roomId)`; runtime `packages/agent-runtime-org/src/rooms`, on runtime main since #53–#55, not in the pinned packs). It needs only `query`, `set` and `subscribe` of a room, so `openRoom` is the host's to supply. On a host with the rooms service bound, that is `rooms.open(roomId)`. Without rooms, a session that is not shared gets a delivery that says so, and the question still goes out on the other routes (`link`, file).
+The route writes through the runtime's rooms API (`RoomsApi.open(roomId)`, pack marshal-host-87 and later). It needs only `query`, `set` and `subscribe` of a room, so `openRoom` is the host's to supply. On a host with the rooms service bound, that is `rooms.open(roomId)`. Without rooms, a session that is not shared gets a delivery that says so, and the question still goes out on the other routes (`link`, file).
 
 What's open:
 
-- The SDK host has no rooms client yet: no socket client, no replica. It gets one when the SDK pins a runtime with rooms.
+- The SDK host's rooms client is `src/org/rooms` (lifted from the desktop); `@marshal/org` opens session rooms with it (docs/org.md).
 - Questions asked before a host restart are not re-posted to the room. They are still open on the link and through `marshal.decisions.answer`.
 
 ## Production
@@ -61,22 +61,12 @@ What's open:
 
 ## The identity it needs
 
-Today the bridge must hold **the owner's own token**, for two reasons in the org contract:
+The bridge holds **the token of the person the run is for** (R18, settled): the same org token they use in Marshal, never a service identity. On their own machine that is their sign-in. In the cloud, the requester's token is handed to the run (`MARSHAL_ORG_TOKEN_FILE` or `MARSHAL_ORG_TOKEN`; see docs/org.md, "Credentials"). The org contract needs exactly that:
 
 - `putSession` is accepted only from the session's owner. A service publishing a session for someone else gets 403 (test "the organization takes a session only from its owner" in `test/org-publish.test.ts`).
-- Only the owner's own desktop runs other people's instructions in a live session. The claim covers every author only when the caller is the owner and `host` is the session's live host (in-memory server `claimMessages`, `everyone`). With any other caller, the claim returns the owner's messages only.
+- Only the owner's own host runs other people's instructions in a live session. The claim covers every author only when the caller is the owner and `host` is the session's live host (in-memory server `claimMessages`, `everyone`).
 
-A fleet of hosts (agent-sandbox, zyg-agents) cannot hold each person's token. What it needs from the org server is **a service principal for a workspace** that the organization lets act for the requester:
-
-| Need | Why |
-| --- | --- |
-| Publish a session whose `owner` is the requester, with the service as author (`putSession`, `putTranscript`) | so the session is the person's and shows in their Marshal, not the service's |
-| Hold the lease and turn live on for those sessions (`acquireLease`, `setSessionLive`) | the host is the executor |
-| `listLivePending`, `claimMessages` covering every author, `completeMessages` for those sessions | to run what the owner and the people they granted post |
-| Upload the envelope and leave checkpoints (`putEnvelope`, `releaseLease` with checkpoint) | so a teammate can fork and continue the session |
-| Nothing else: no reading other sessions, no grants (the owner grants), no `force` | least privilege |
-
-Until the server has that, a host runs the bridge with a token of the person it works for: a sign-in on that person's own machine, or a token they hand to their own sandbox. zyg-agents avoids the problem today by writing org sessions straight into its database (`src/shared/org-sessions/cloud-publish.ts`), not through HTTP.
+As an extension, the bridge runs inside `@marshal/org` (docs/org.md), which reads the token and passes the client in.
 
 ## Tests
 

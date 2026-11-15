@@ -9,8 +9,8 @@
     "marshal-sdk": "dist/src/cli.js"
   },
   "scripts": {
-    "build": "node build.mjs",
-    "test": "node build.mjs && node --test \"dist/test/*.test.js\"",
+    "build": "node build.mjs && node extensions/org/build.mjs",
+    "test": "node build.mjs && node extensions/org/build.mjs && node --test \"dist/test/*.test.js\"",
     "image": "node image/prepare.mjs",
     "pack": "node image/pack.mjs",
     "vendor:packs": "node scripts/vendor-packs.mjs",

@@ -5,6 +5,8 @@ import path from "node:path";
 import type { MarshalHostOptions } from "./host.js";
 import { ONBOARDING_USAGE, onboardingCommand, withManifest } from "./onboarding-cli.js";
 import { startLinkServer } from "./link/server.js";
+import { useExtensionResolver } from "./onboarding.js";
+import { personOrgResolver } from "./org-connect.js";
 import { FileSessionStore } from "./session-store.js";
 
 const USAGE = `marshal-sdk <command> [options]
@@ -105,6 +107,8 @@ function hostOptions(args: Arguments): MarshalHostOptions {
 }
 
 async function main(): Promise<void> {
+  // A manifest that names an org reaches it as the person who started the run (their token: MARSHAL_ORG_TOKEN_FILE).
+  useExtensionResolver(personOrgResolver());
   if (process.argv[2] === "page-run") {
     const { pageRunCommand } = await import("./page-run.js");
     process.exitCode = await pageRunCommand(process.argv.slice(3));

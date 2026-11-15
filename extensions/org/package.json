@@ -1,0 +1,9 @@
+{
+  "name": "@marshal/org",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Marshal runtime extension: the organization layer of a host (org sessions, live instructions, rooms).",
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}

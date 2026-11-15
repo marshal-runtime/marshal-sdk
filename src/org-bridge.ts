@@ -19,7 +19,7 @@ import type { OrgClient, OrgSessionMessage, UserPrincipal } from "@marshal/agent
 
 import { localSessionIdOf, publishToOrg, type OrgPublishOptions, type OrgPublishResult } from "./org-publish.js";
 import type { DeliveryResult, SessionEnvelope } from "./session-messages.js";
-import type { FileSessionStore } from "./session-store.js";
+import type { FileSessionStore, SessionRecord } from "./session-store.js";
 
 export type OrgBridgeClient = Pick<
   OrgClient,
@@ -37,9 +37,18 @@ export type OrgBridgeClient = Pick<
   | "completeMessages"
 >;
 
+/**
+ * Where the bridge reads sessions: the host's FileSessionStore, or anything with the same reads. `refresh` runs before
+ * each read pass (src/org-host-sessions.ts reads through capabilities), `nativeState` supplies checkpoints.
+ */
+export type OrgBridgeStore = Pick<FileSessionStore, "root" | "list" | "messages"> & {
+  refresh?(): Promise<void>;
+  nativeState?: (record: SessionRecord) => Uint8Array | undefined;
+};
+
 export interface OrgBridgeOptions extends Omit<OrgPublishOptions, "client" | "store" | "sessionIds" | "holdLease" | "inboxMessageId"> {
   client: OrgBridgeClient;
-  store: FileSessionStore;
+  store: OrgBridgeStore;
   /** Runs a message in a session; the host's agent port (`host.agents`). */
   agents: { deliver(envelope: SessionEnvelope): Promise<DeliveryResult> };
   /**
@@ -154,6 +163,7 @@ export function createOrgBridge(options: OrgBridgeOptions): OrgBridge {
         client,
         store,
         holdLease,
+        ...(options.nativeState || !store.nativeState ? {} : { nativeState: store.nativeState }),
         inboxMessageId: (sessionId, index) => inbox[sessionId]?.[index],
         ...(sessionIds ? { sessionIds } : {}),
       }),
@@ -167,6 +177,7 @@ export function createOrgBridge(options: OrgBridgeOptions): OrgBridge {
 
   async function sync(): Promise<OrgPublishResult[]> {
     lastSync = Date.now();
+    await store.refresh?.();
     const busy = new Set(running.keys());
     const ids = store.list(options.runId ? { runId: options.runId } : {}).map((record) => record.id).filter((id) => !busy.has(id));
     const results = await publish(ids);
@@ -250,6 +261,7 @@ export function createOrgBridge(options: OrgBridgeOptions): OrgBridge {
   async function runMessage(entry: OrgBridgeSession, message: OrgSessionMessage): Promise<{ text: string; error?: string }> {
     const taken = await options.answers?.takeInboxAnswer(entry.sessionId, { author: message.author, text: message.text });
     if (taken?.accepted) return { text: "Answer recorded; the session has it." };
+    await store.refresh?.();
     const before = store.messages(entry.sessionId).length;
     const name = options.nameOf?.(message.author) ?? message.author.replace(/^user:/, "");
     const result = await options.agents.deliver({
@@ -262,6 +274,7 @@ export function createOrgBridge(options: OrgBridgeOptions): OrgBridge {
       waitForResponse: true,
       timeoutMs: options.turnTimeoutMs ?? 30 * 60_000,
     });
+    await store.refresh?.();
     remember(entry.sessionId, before, message);
     if (!result.accepted) return { text: "", error: result.error ?? "The host refused the message." };
     if (result.status === "timeout") return { text: "The turn is still running on the host; its answer will be in the transcript." };
@@ -275,7 +288,9 @@ export function createOrgBridge(options: OrgBridgeOptions): OrgBridge {
     for (let index = before; index < local.length; index += 1) {
       const candidate = local[index]!;
       if (candidate.role !== "user" || taken.has(index)) continue;
-      if (candidate.from?.kind !== "person" || candidate.from.personId !== message.author || !candidate.content.endsWith(message.text)) continue;
+      // A store that keeps the sender (FileSessionStore) must name this person; one reached through capabilities has only the text.
+      if (candidate.from && (candidate.from.kind !== "person" || candidate.from.personId !== message.author)) continue;
+      if (!candidate.content.endsWith(message.text)) continue;
       inbox[sessionId] = { ...(inbox[sessionId] ?? {}), [index]: message.id };
       writeInbox(inboxFile, inbox);
       return;

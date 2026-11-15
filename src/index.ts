@@ -80,6 +80,7 @@ export {
   type OrgBridgeClient,
   type OrgBridgeOptions,
   type OrgBridgeSession,
+  type OrgBridgeStore,
   type OrgBridgeTurn,
 } from "./org-bridge.js";
 export {
@@ -95,6 +96,40 @@ export { linkPersonRoute, readDecisions } from "./link/decisions.js";
 export { DEFAULT_KEY_ENV, providerKey, readSecret, requireProviderKey, type CredentialEnv, type KeyProvider, type ResolvedKey } from "./credentials.js";
 export { createProviderQuery, PROVIDER_TOOLS, type ProviderQueryOptions } from "./provider-query.js";
 export { PROVIDER_IDS, resolveProvider, type ProviderCredential, type ProviderId, type ProviderSelection, type ResolvedProvider } from "./provider-selection.js";
+export { LINK_CALL_CAPABILITY, createLinkCallProvider } from "./link/call-provider.js";
+export {
+  ORG_ALLOW_PRODUCTION_ENV,
+  ORG_TOKEN_ENV,
+  ORG_TOKEN_FILE_ENV,
+  ORG_URL_ENV,
+  OrgConnectError,
+  connectOrg,
+  personAccessToken,
+  personOrgResolver,
+  type ConnectOrgOptions,
+  type OrgConnection,
+  type OrgCredentialSource,
+  type PersonOrgResolverOptions,
+} from "./org-connect.js";
+export {
+  HOST_ROOM_FULL_KIND,
+  HOST_ROOM_KIND,
+  HOST_ROOM_PROTOCOL,
+  HOST_ROOM_ROUTES,
+  HOST_ROOM_SCHEMA,
+  HOST_ROOM_SCHEMA_VERSION,
+  HostRoomEndpoint,
+  hostRoomId,
+  httpLinkRelay,
+  parseHostRoomRequest,
+  type HostRoomLike,
+  type HostRoomOptions,
+  type HostRoomRequest,
+  type HostRoomResult,
+  type HostRoomsLike,
+  type LinkRelay,
+} from "./org-host-room.js";
+export { HostSessions, type CapabilityCall, type HostSessionsOptions } from "./org-host-sessions.js";
 export {
   FileSessionStore,
   type NativeSessionRef,
