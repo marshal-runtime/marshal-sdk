@@ -812,6 +812,18 @@ export interface MarshalRuntimeHostOptions {
   readonly firstPartyExtensions?: readonly ResolvedFirstPartyExtension[];
   readonly serviceContainer: RuntimeServiceContainer;
   readonly compositionRegistry?: RuntimeCompositionRegistry;
+  /**
+   * The runtime's own principal (with claims, e.g. a Brain caller) and harness id. Defaults: the desktop's
+   * "marshal-runtime-host" agent and "marshal-desktop". A headless SDK host names itself.
+   */
+  readonly principal?: {
+    readonly id: string;
+    readonly kind: "agent";
+    readonly claims?: Readonly<Record<string, unknown>>;
+  };
+  readonly harnessId?: string;
+  /** Runtime built-in options over the desktop's (an SDK host turns on scheduling with its scheduler, and artifacts). */
+  readonly builtins?: Readonly<Record<string, unknown>>;
   readonly ownedServiceBindings?: Promise<readonly RuntimeServiceBindingHandle[]>;
   readonly diagnostics?: MarshalRuntimeDiagnostics;
 }
@@ -877,6 +889,11 @@ export class MarshalRuntimeHost {
       this.starting = this.startOnce();
     }
     return this.starting;
+  }
+
+  /** The started runtime (kernel, core, resources, lifecycle) for an embedder's own adapters; null before start(). */
+  getRuntimeBindings(): AgentRuntimeBindings | null {
+    return this.bindings;
   }
 
   getExtensionDiscovery(): MarshalRuntimeExtensionDiscovery | undefined {
@@ -1312,6 +1329,7 @@ export class MarshalRuntimeHost {
   async installLocalExtension(
     packageRoot: string,
     signal?: AbortSignal,
+    options?: { readonly configuration?: Readonly<Record<string, unknown>> },
   ): Promise<RuntimeExtensionRecord> {
     return this.runExtensionOperation(signal, async (manager) => {
       if (!this.extensionMaterializer) {
@@ -1329,7 +1347,10 @@ export class MarshalRuntimeHost {
         const previousRoots = new Map(
           manager.list().map((entry) => [entry.identity, entry.request.packageRoot]),
         );
-        const record = await manager.install(materialized, { signal });
+        const record = await manager.install(materialized, {
+          signal,
+          ...(options?.configuration ? { configuration: options.configuration } : {}),
+        } as Parameters<typeof manager.install>[1]);
         await removeSupersededLocalCopy(
           previousRoots.get(record.identity),
           manager.get(record.identity)?.request.packageRoot ?? destinationRoot,
@@ -1534,8 +1555,8 @@ export class MarshalRuntimeHost {
         ...(this.options.trustedTypeScript
           ? { importPolicy: TRUSTED_TYPESCRIPT_IMPORT_POLICY }
           : {}),
-        identity: { harnessId: "marshal-desktop" },
-        principal: { id: "marshal-runtime-host", kind: "agent" },
+        identity: { harnessId: this.options.harnessId ?? "marshal-desktop" },
+        principal: this.options.principal ?? { id: "marshal-runtime-host", kind: "agent" },
         permissionBroker: {
           decide: async (check) => {
             assertCapabilityInput(check.capability, check.request.input);
@@ -1566,6 +1587,7 @@ export class MarshalRuntimeHost {
             inlineMaxSourceCharacters: 2 * 1024 * 1024,
             moduleMaxBrokerInvocations: 64,
             moduleMaxConcurrentBrokerInvocations: 8,
+            ...this.options.builtins,
           }),
           createMarshalHostProviderSource(
             serviceContainer,
@@ -1692,8 +1714,8 @@ export class MarshalRuntimeHost {
         loader: extensionLoader,
         stateStore: extensionStateStore,
         activationContext: {
-          principal: { id: "marshal-runtime-host", kind: "agent" },
-          identity: { harnessId: "marshal-desktop" },
+          principal: this.options.principal ?? { id: "marshal-runtime-host", kind: "agent" },
+          identity: { harnessId: this.options.harnessId ?? "marshal-desktop" },
           scope: { sessionId: "marshal-runtime-host" },
           metadata: { marshalWorkspaceName: this.options.hostWorkspacePath },
         },
