@@ -1,22 +1,12 @@
 import { execFile } from "node:child_process";
-import fs from "node:fs";
+
+import { readSecret } from "../credentials.js";
 
 export type ModelEnv = Readonly<Record<string, string | undefined>>;
 
-/**
- * The one place model services read a key. `NAME` wins, then the file named by `NAME_FILE` (how a sandbox or a
- * secret mount hands one over). Kept to a single function so the provider layer's account resolver can replace it.
- */
+/** The one place model services read a key: the SDK's shared resolver (`NAME`, then the file `NAME_FILE` names). */
 export function modelCredential(name: string, env: ModelEnv = process.env): string | undefined {
-  const direct = env[name]?.trim();
-  if (direct) return direct;
-  const file = env[`${name}_FILE`]?.trim();
-  if (!file) return undefined;
-  try {
-    return fs.readFileSync(file, "utf8").trim() || undefined;
-  } catch {
-    return undefined;
-  }
+  return readSecret(name, env);
 }
 
 export type AccessTokenProvider = () => Promise<string>;

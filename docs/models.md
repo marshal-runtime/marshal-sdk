@@ -75,7 +75,7 @@ Google calls (Vertex embeddings, Google speech) need a token. `googleAccessToken
 2. `google-auth-library`, when it is installed.
 3. `gcloud auth application-default print-access-token`.
 
-`modelCredential` is the one place to switch to the SDK's shared credential resolver once that exists.
+`modelCredential` reads through the SDK's shared resolver (`readSecret` in `src/credentials.ts`, docs/providers.md), so model keys and agent-provider keys follow one rule.
 
 ## Where the code came from
 
