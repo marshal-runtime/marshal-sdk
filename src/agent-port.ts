@@ -14,6 +14,7 @@ import {
 } from "./session-messages.js";
 import type { FileSessionStore, SessionFork, SessionRecord, TranscriptMessage } from "./session-store.js";
 import { nativeSubagentHook } from "./native-tools.js";
+import { toClaudePermissionResult, toRuntimePermissionRequest, type RuntimePermissionHandler } from "./providers.js";
 
 /**
  * What a turn carries for provider clients beside the Claude Agent SDK's options (which read only string keys): the
@@ -25,6 +26,19 @@ export interface TurnExtras {
   nativeSubagentAllowlist?: string[];
   /** The launch set its own `env` (the `env` option is always set: the host's, or the launch's merged over it). */
   launchEnv?: boolean;
+  /** The host's permission handler for this session's tool calls; absent, the provider approves every request. */
+  permissionHandler?: RuntimePermissionHandler;
+}
+
+/** The Claude Agent SDK's canUseTool over a host handler: the request mapped the way the desktop's Claude client maps it. */
+function claudeCanUseTool(handler: RuntimePermissionHandler, sessionId: string) {
+  return async (toolName: string, input: Record<string, unknown>, options: Record<string, any>) => {
+    try {
+      return toClaudePermissionResult(await handler(toRuntimePermissionRequest(toolName, input, options as never), { sessionId }));
+    } catch (error) {
+      return { behavior: "deny" as const, message: `The permission check failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  };
 }
 
 /** `hooks` with one more PreToolUse callback, after the launch's own. */
@@ -145,6 +159,13 @@ export interface AgentPortOptions {
    * tools removed, and the only native subagent types it may launch (native-tools.ts).
    */
   nativeTools?: { disabled: readonly string[]; subagentAllowlist: readonly string[] };
+  /**
+   * Decides each tool call a session's backend asks about, in the desktop's request shape (kind, toolName, arguments).
+   * Given, turns stop running with bypassPermissions; absent, every tool call is approved (an unattended host).
+   */
+  permissionHandler?: RuntimePermissionHandler;
+  /** Live defaults read at each launch (a settings store the host changes); they win over defaultModel/defaultReasoningEffort. */
+  settings?: () => { model?: string; reasoningEffort?: string };
   log?: (line: string) => void;
   /** A session finished its queued work (`session.idle`) or stopped on an error (`session.failed`). */
   onSessionEvent?: (type: "session.idle" | "session.failed", payload: Record<string, unknown>) => void;
@@ -247,8 +268,8 @@ export class ClaudeAgentPort {
       ...(request.sessionId ? { id: request.sessionId } : {}),
       title: request.name ?? request.task.slice(0, 80),
       runtime: "claude",
-      model: request.model ?? this.options.defaultModel,
-      reasoningEffort: request.reasoningEffort ?? this.options.defaultReasoningEffort,
+      model: request.model ?? this.options.settings?.().model ?? this.options.defaultModel,
+      reasoningEffort: request.reasoningEffort ?? this.options.settings?.().reasoningEffort ?? this.options.defaultReasoningEffort,
       native: {
         kind: "claude",
         cwd: this.options.cwd,
@@ -514,14 +535,16 @@ export class ClaudeAgentPort {
     const surface = systemPrompt !== undefined && systemPrompt === hostPrompt ? this.options.nativeTools : undefined;
     const disallowedTools = [...(surface?.disabled ?? []), ...(launch.disallowedTools ?? [])];
     const hooks = surface ? withPreToolUse(launch.hooks, nativeSubagentHook(surface.subagentAllowlist)) : launch.hooks;
+    const permissionHandler = this.options.permissionHandler;
     const options: Record<string | symbol, unknown> = {
       model: session.model,
       ...(session.reasoningEffort ? { effort: session.reasoningEffort } : {}),
       cwd: launch.cwd ?? this.options.cwd,
       env: launch.env ? mergeEnv(this.options.env, launch.env) : this.options.env,
       abortController: abort,
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
+      ...(permissionHandler
+        ? { permissionMode: "default", canUseTool: claudeCanUseTool(permissionHandler, agent.id) }
+        : { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true }),
       settingSources: this.options.projectSettings ? ["project"] : [],
       mcpServers: { ...(launch.hostMcpServers === false ? {} : this.options.mcpServers(session)), ...launch.mcpServers },
       systemPrompt: systemPrompt ?? { type: "preset", preset: "claude_code" },
@@ -546,6 +569,8 @@ export class ClaudeAgentPort {
         attachments: [...attachments],
         ...(surface ? { nativeSubagentAllowlist: [...surface.subagentAllowlist] } : {}),
         ...(launch.env ? { launchEnv: true } : {}),
+        // The provider's own session id is not the Marshal one; the handler always gets the Marshal session.
+        ...(permissionHandler ? { permissionHandler: (request) => permissionHandler(request, { sessionId: agent.id }) } : {}),
       } satisfies TurnExtras,
     };
     let lastText = "";

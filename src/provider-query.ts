@@ -211,7 +211,7 @@ function sessionConfig(turnOptions: Record<string, unknown>, cwd: string, extras
     ...(Array.isArray(turnOptions.settingSources) && turnOptions.settingSources.length === 0 ? { projectContext: false } : {}),
     // An unattended host has nobody to approve; what a run may do is decided by what is installed on it.
     // Claude denies every tool without a handler; Codex runs in a read-only sandbox unless told otherwise.
-    onPermissionRequest: () => ({ kind: "approve-once" }),
+    onPermissionRequest: extras?.permissionHandler ?? (() => ({ kind: "approve-once" })),
     sandbox: { mode: "danger-full-access" },
   };
 }
