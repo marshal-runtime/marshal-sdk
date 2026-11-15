@@ -27,6 +27,16 @@ const CHECK_WAIT_MS = 240_000;
 const DEFAULT_TICK_MS = 5_000;
 const CONDITION_INTERVALS = [5, 15, 30, 60];
 const PRINCIPAL = { id: "marshal-sdk:automations", kind: "agent" } as const;
+const MAX_REASON_CHARS = 1_000;
+/** The capability a condition-check session calls with its verdict. */
+export const REPORT_CONDITION = "marshal.automation.reportCondition";
+/** First line of every condition-check prompt. */
+export const CONDITION_CHECK_HEADING = "You are checking whether a condition is met.";
+
+export interface ConditionVerdict {
+  met: boolean;
+  reason: string;
+}
 
 export type AutomationTiming =
   | { kind: "once"; at: string }
@@ -70,6 +80,8 @@ export interface Automation {
   scheduleId?: string;
   checkSessionId?: string;
   lastCheckAt?: string;
+  /** The last condition check's verdict. */
+  lastCheck?: ConditionVerdict;
   lastError?: string;
   runs: AutomationRun[];
 }
@@ -123,6 +135,9 @@ export class HostAutomations {
   private running = false;
   private timer: NodeJS.Timeout | undefined;
   private inFlight: Promise<void> | undefined;
+  /** Check sessions waiting for a verdict, by session id, and the verdicts they gave. */
+  private readonly pendingChecks = new Map<string, string>();
+  private readonly verdicts = new Map<string, ConditionVerdict>();
 
   constructor(private readonly options: HostAutomationsOptions) {
     fs.mkdirSync(options.root, { recursive: true });
@@ -303,24 +318,40 @@ export class HostAutomations {
     await this.run(automation, "schedule", { fireId: fire.fireId });
   }
 
-  /** The desktop's condition check: a check session answers CONDITION_MET or CONDITION_NOT_MET. */
+  /**
+   * A check session's verdict, given through `marshal.automation.reportCondition`. Only the session currently checking
+   * an automation can report, and only its latest report counts.
+   */
+  reportCondition(sessionId: string | undefined, verdict: ConditionVerdict): { automationId: string } {
+    const automationId = sessionId ? this.pendingChecks.get(sessionId) : undefined;
+    if (!sessionId || !automationId) throw invalid("Only an automation's condition-check session can report its condition.");
+    if (typeof verdict.met !== "boolean") throw invalid("met must be true or false.");
+    this.verdicts.set(sessionId, { met: verdict.met, reason: String(verdict.reason ?? "").slice(0, MAX_REASON_CHARS) });
+    return { automationId };
+  }
+
+  /** The desktop's condition check, with the verdict as a tool call ({met, reason}) instead of a keyword in the reply. */
   private async onCheckFire(fire: RuntimeScheduleFire): Promise<void> {
     const automation = this.definitions.get(automationIdOf(fire));
     if (!automation || automation.state !== "active" || !automation.enabled || automation.trigger.type !== "condition") return;
     const port = this.options.port;
     const prompt = [
-      "You are checking whether a condition is met.",
+      CONDITION_CHECK_HEADING,
       "",
       `## Condition\n${automation.trigger.condition}`,
       "",
-      "Check this condition using available tools. If the condition is NOW satisfied, output: CONDITION_MET",
-      "If NOT satisfied, output: CONDITION_NOT_MET",
+      "Check this condition using available tools, then give your verdict by calling the capability",
+      `${REPORT_CONDITION} with {"met": true} if the condition is NOW satisfied or {"met": false} if not,`,
+      'and a one-line "reason". Call it exactly once per check; a reply without that call counts as no answer.',
       "",
       "Check now and report.",
     ].join("\n");
     let checkId = automation.checkSessionId && this.options.sessions.get(automation.checkSessionId) ? automation.checkSessionId : undefined;
-    if (checkId) port.send(checkId, prompt);
-    else {
+    if (checkId) {
+      this.pendingChecks.set(checkId, automation.id);
+      this.verdicts.delete(checkId);
+      port.send(checkId, prompt);
+    } else {
       checkId = port.launch({
         task: prompt,
         idempotencyKey: `automation-check:${automation.id}:${fire.fireId}`,
@@ -328,18 +359,31 @@ export class HostAutomations {
         ...(automation.model ? { model: automation.model } : {}),
         labels: { automation: automation.id, role: "condition-check" },
       }).id;
+      // Registered before the first await: the session's tool calls reach the capability only after one.
+      this.pendingChecks.set(checkId, automation.id);
+      this.verdicts.delete(checkId);
     }
-    const waited = await port.wait(checkId, CHECK_WAIT_MS);
-    const checked = { ...this.require(automation.id), checkSessionId: checkId, lastCheckAt: this.now().toISOString() };
-    if (waited.state !== "completed" || waited.agent.state === "failed") {
-      this.definitions.set(automation.id, { ...checked, lastError: `Condition check produced no answer (${waited.state}).` });
+    let waited: Awaited<ReturnType<ClaudeAgentPort["wait"]>>;
+    let verdict: ConditionVerdict | undefined;
+    try {
+      waited = await port.wait(checkId, CHECK_WAIT_MS);
+    } finally {
+      verdict = this.verdicts.get(checkId);
+      this.pendingChecks.delete(checkId);
+      this.verdicts.delete(checkId);
+    }
+    const checked: Automation = { ...this.require(automation.id), checkSessionId: checkId, lastCheckAt: this.now().toISOString() };
+    if (waited.state !== "completed" || waited.agent.state === "failed" || !verdict) {
+      const why = verdict ? `${waited.state}` : `no ${REPORT_CONDITION} call`;
+      this.definitions.set(automation.id, { ...checked, lastError: `Condition check produced no answer (${why}).` });
       this.save();
       return;
     }
     delete checked.lastError;
+    checked.lastCheck = verdict;
     this.definitions.set(automation.id, checked);
     this.save();
-    if ((waited.result ?? "").includes("CONDITION_MET")) await this.run(checked, "condition", { fireId: fire.fireId });
+    if (verdict.met) await this.run(checked, "condition", { fireId: fire.fireId });
   }
 
   private async run(
@@ -558,6 +602,12 @@ const SUMMARY = {
     lastRunAt: { type: "string" },
     lastSessionId: { type: "string" },
     lastCheckAt: { type: "string" },
+    lastCheck: {
+      type: "object",
+      additionalProperties: false,
+      required: ["met", "reason"],
+      properties: { met: { type: "boolean" }, reason: { type: "string" } },
+    },
     lastError: { type: "string" },
     runs: { type: "array", items: looseObject },
   },
@@ -634,6 +684,19 @@ const OPERATIONS: Record<string, { title: string; description: string; risk: "lo
     input: { type: "object", required: ["id"], properties: { id: { type: "string", minLength: 1 } } },
     output: result({ sessionId: { type: "string" } }),
   },
+  [REPORT_CONDITION]: {
+    title: "Report a condition check",
+    description:
+      "Only for a condition-check session started by a condition automation: give the verdict on the condition it was asked to check. met true runs the automation; met false waits for the next check.",
+    risk: "low",
+    input: {
+      type: "object",
+      additionalProperties: false,
+      required: ["met", "reason"],
+      properties: { met: { type: "boolean" }, reason: { type: "string", maxLength: MAX_REASON_CHARS } },
+    },
+    output: result({ automationId: { type: "string" } }),
+  },
   "marshal.events.emit": {
     title: "Emit an event",
     description: "Tell this host an event happened; every event automation for that type (and matching payload) runs.",
@@ -698,6 +761,7 @@ export function createAutomationsProvider(automations: HostAutomations): Capabil
       ...(schedule?.nextRunAt && automation.state === "active" ? { nextRunAt: schedule.nextRunAt } : {}),
       ...(last ? { lastRunAt: last.at, lastSessionId: last.sessionId } : {}),
       ...(automation.lastCheckAt ? { lastCheckAt: automation.lastCheckAt } : {}),
+      ...(automation.lastCheck ? { lastCheck: automation.lastCheck } : {}),
       ...(automation.lastError ? { lastError: automation.lastError } : {}),
       runs: automation.runs,
     };
@@ -739,6 +803,8 @@ export function createAutomationsProvider(automations: HostAutomations): Capabil
             return { output: { success: true } };
           case "marshal.tool.runAutomationNow":
             return { output: { success: true, sessionId: await automations.runNow(String(input.id)) } };
+          case REPORT_CONDITION:
+            return { output: { success: true, ...automations.reportCondition(caller, { met: input.met, reason: input.reason }) } };
           case "marshal.events.emit":
             return {
               output: {

@@ -353,8 +353,11 @@ on (`scheduling: true`) and passes its scheduler. Its task kinds are:
   - **`schedule`**: `schedule` is a five-field cron expression (in `timezone`, default the host's) or "every N
     minutes|hours|days"; `runAt` or `runInMinutes` make a one-off. The desktop's phrases such as "every weekday at
     9am" are not parsed here; they are cron here ("0 9 * * 1-5").
-  - **`condition`**: the desktop's check. Every `conditionCheckInterval` minutes (5, 15, 30 or 60), one check session
-    gets the desktop's prompt. On `CONDITION_MET` the automation runs once, completes and its checks stop.
+  - **`condition`**: every `conditionCheckInterval` minutes (5, 15, 30 or 60), one check session checks the condition
+    and gives its verdict by calling `marshal.automation.reportCondition {met, reason}` (only that session can call
+    it). On `met: true` the automation runs once, completes and its checks stop; a check that ends without the call
+    records `lastError` and waits for the next interval. The verdict is a tool call, not a keyword in the reply: the
+    desktop's `CONDITION_MET` / `CONDITION_NOT_MET` text match fires on both.
   - **`event`**: runs on every event of type `event` whose payload has the `eventMatch` values. The payload goes into
     the prompt, marked as data.
 - `marshal.tool.listAutomations`, `getAutomation`, `updateAutomation` (a new trigger replaces the old schedule;

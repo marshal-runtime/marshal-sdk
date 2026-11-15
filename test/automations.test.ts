@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import type { QueryFn } from "../src/agent-port.js";
-import { parseSchedule } from "../src/automations.js";
+import { CONDITION_CHECK_HEADING, parseSchedule, REPORT_CONDITION } from "../src/automations.js";
 import { createMarshalHost, type MarshalHost } from "../src/host.js";
 
 const START = Date.parse("2026-11-16T08:00:00.000Z");
@@ -17,19 +17,38 @@ function clock() {
   return { now: () => new Date(now), advance: (ms: number) => (now += ms), at: () => new Date(now) };
 }
 
-/** Echoes the prompt; a condition check answers from `conditions` in order. */
-function backend(conditions: string[] = []): { query: QueryFn; prompts: string[] } {
+/**
+ * A condition check's turn in the fake: `verdict` is the reportCondition call it makes (none when omitted) and `reply`
+ * its final text.
+ */
+interface CheckTurn {
+  verdict?: { met: boolean; reason: string };
+  reply: string;
+}
+
+/** Echoes the prompt; a condition check calls reportCondition through the session's own Marshal tools, from `checks` in order. */
+function backend(checks: CheckTurn[] = []): { query: QueryFn; prompts: string[]; reports: unknown[] } {
   const prompts: string[] = [];
+  const reports: unknown[] = [];
   let count = 0;
   const query: QueryFn = ({ prompt, options }) =>
     (async function* () {
       const text = String(prompt);
       prompts.push(text);
       yield { type: "system", subtype: "init", session_id: (options.resume as string | undefined) ?? `native-${++count}` };
-      const answer = text.startsWith("You are checking whether a condition is met.") ? (conditions.shift() ?? "CONDITION_NOT_MET") : `done: ${text.slice(0, 40)}`;
+      let answer = `done: ${text.slice(0, 40)}`;
+      if (text.startsWith(CONDITION_CHECK_HEADING)) {
+        const check = checks.shift() ?? { reply: "I could not tell." };
+        if (check.verdict) {
+          const tools = (options.mcpServers as any).marshal.instance._registeredTools;
+          const result = await tools.runtime_exec.handler({ targetType: "operation", target: REPORT_CONDITION, input: check.verdict }, {});
+          reports.push(JSON.parse(result.content[0].text));
+        }
+        answer = check.reply;
+      }
       yield { type: "result", subtype: "success", is_error: false, result: answer, usage: {} };
     })();
-  return { query, prompts };
+  return { query, prompts, reports };
 }
 
 function dirs() {
@@ -121,9 +140,64 @@ test("state survives a host restart: the missed slot runs once at the first tick
   }
 });
 
+test("condition: the verdict is the reportCondition call, never a keyword in the reply; NOT met and no call don't fire, met fires", async () => {
+  const time = clock();
+  const { query, prompts, reports } = backend([
+    { verdict: { met: false, reason: "2 of 5 checks still running" }, reply: "CONDITION_NOT_MET" },
+    { reply: "CONDITION_MET" },
+    { verdict: { met: true, reason: "all 5 checks passed" }, reply: "Reported." },
+  ]);
+  const h = await host(dirs(), time, query);
+  try {
+    const created = await h.invoke<any>("marshal.tool.createAutomation", {
+      name: "When CI is green",
+      prompt: "report the result",
+      triggerType: "condition",
+      condition: "PR #812 checks all pass",
+      conditionCheckInterval: 5,
+    });
+    const id = created.automation.id;
+    assert.match((await h.invoke<any>(REPORT_CONDITION, { met: true, reason: "not a check session" })).error, /condition-check session/);
+
+    time.advance(5 * MINUTE + 1);
+    await h.automations.tick();
+    const notMet = h.automations.get(id)!;
+    assert.equal(notMet.runs.length, 0, "CONDITION_NOT_MET in the reply and met:false: no run");
+    assert.deepEqual(notMet.lastCheck, { met: false, reason: "2 of 5 checks still running" });
+    assert.equal(notMet.lastError, undefined);
+    assert.match(prompts[0]!, new RegExp(REPORT_CONDITION.replaceAll(".", "\\.")));
+
+    time.advance(5 * MINUTE);
+    await h.automations.tick();
+    const silent = h.automations.get(id)!;
+    assert.equal(silent.runs.length, 0, "CONDITION_MET as text without the call: no run");
+    assert.match(silent.lastError!, /no marshal\.automation\.reportCondition call/);
+
+    time.advance(5 * MINUTE);
+    await h.automations.tick();
+    const met = h.automations.get(id)!;
+    assert.equal(met.state, "completed");
+    assert.equal(met.runs.length, 1);
+    assert.equal(met.runs[0]!.trigger, "condition");
+    assert.deepEqual(met.lastCheck, { met: true, reason: "all 5 checks passed" });
+    assert.equal(met.lastError, undefined);
+    assert.equal(reports.length, 2);
+    assert.ok(reports.every((report: any) => report.status === "success" && report.result.output.success === true));
+    const listed = await h.invoke<any>("marshal.tool.getAutomation", { id });
+    assert.deepEqual(listed.automation.lastCheck, met.lastCheck);
+    await settle();
+    assert.equal(prompts.filter((prompt) => prompt === "report the result").length, 1);
+  } finally {
+    await h.dispose();
+  }
+});
+
 test("condition: a check session judges it each interval; when met the automation runs once and its checks stop", async () => {
   const time = clock();
-  const { query, prompts } = backend(["CONDITION_NOT_MET", "Yes. CONDITION_MET"]);
+  const { query, prompts } = backend([
+    { verdict: { met: false, reason: "pending" }, reply: "Not yet." },
+    { verdict: { met: true, reason: "green" }, reply: "Yes." },
+  ]);
   const h = await host(dirs(), time, query);
   try {
     const created = await h.invoke<any>("marshal.tool.createAutomation", {
