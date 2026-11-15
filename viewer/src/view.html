@@ -498,8 +498,12 @@
     }
   }
 
+  // A session read through a kit host's sessions.read: a copy of someone's shared session that nothing runs here.
+  function sharedVia(session) { return session && session.labels && session.labels.sharedVia; }
+
   function liveLine(session) {
     const h = host();
+    if (sharedVia(session)) return el("div", { class: "live" }, el("span", { class: "dot online" }), "shared to the team · read through " + sharedVia(session));
     const running = session.state === "running";
     const activity = state.detail && state.detail.activity;
     let text;
@@ -527,6 +531,9 @@
   }
 
   function continueRow(session) {
+    if (sharedVia(session)) {
+      return el("div", { class: "actions" }, el("div", { class: "notice" }, "A read-only copy. To continue it, open its run under a cloud host or a linked host that keeps it."));
+    }
     const canContinue = !!(session.native && session.native.sessionId) && session.state !== "running";
     const notice = el("div", { class: "notice", role: "status", "aria-live": "polite" },
       !(session.native && session.native.sessionId) ? "No conversation file yet." : session.state === "running" ? "Continue once it is idle." : "Opens a local copy that picks up where it stopped.");
@@ -578,6 +585,9 @@
     const box = $("composer");
     const session = currentSession();
     if (!session || state.tab !== "transcript") return box.replaceChildren();
+    if (sharedVia(session)) {
+      return box.replaceChildren(el("div", { class: "composer" }, el("div", { class: "notice" }, "Read-only: this is a shared copy, and nothing runs it here to answer.")));
+    }
     if (!isLive()) {
       const why = host().kind === "folder" ? "Read-only: nothing runs this folder. Serve it with marshal-sdk serve and link the host to talk to it."
         : host().status !== "online" ? "The host is offline." : "This host serves a finished run; there is nobody to answer.";

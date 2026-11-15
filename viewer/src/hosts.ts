@@ -376,10 +376,10 @@ export function linkedHost(config: LinkedHostConfig): Host {
       runtime: "claude",
       native: { kind: "none", cwd: "" },
       runId: "shared",
-      labels: {},
       messageCount: messages.length,
       usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, turns: 0 },
       ...given,
+      labels: { ...(given.labels ?? {}), sharedVia: config.name ?? config.id },
       id: sessionId,
       host: { id: config.id, kind: `shared (${String(out.from ?? "index")})` },
     } as SessionRecord;
