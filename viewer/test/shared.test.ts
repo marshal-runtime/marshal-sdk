@@ -57,6 +57,7 @@ test("search adds sessions shared to the org's index through a linked kit host, 
     assert.deepEqual(transcript.messages.map((message: any) => [message.index, message.role, message.content]), [[0, "user", "Write the hero"], [1, "assistant", "Awake on camera."]]);
     assert.equal(transcript.session.id, "shared-1");
     assert.equal(transcript.session.host.kind, "shared (cloud-state)");
+    assert.equal(transcript.session.labels.sharedVia, "Kit");
 
     const watched = await invoke(viewer, "sdksessions.watch", { hostId: "kit", sessionId: "shared-1", since: 2, eventCursor: 0, waitMs: 0 });
     assert.equal(watched.found, false);
