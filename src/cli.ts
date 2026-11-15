@@ -109,6 +109,11 @@ function hostOptions(args: Arguments): MarshalHostOptions {
 async function main(): Promise<void> {
   // A manifest that names an org reaches it as the person who started the run (their token: MARSHAL_ORG_TOKEN_FILE).
   useExtensionResolver(personOrgResolver());
+  if (process.argv[2] === "page-edit") {
+    const { pageEditCommand } = await import("./page-run.js");
+    process.exitCode = await pageEditCommand(process.argv.slice(3));
+    return;
+  }
   if (process.argv[2] === "page-run") {
     const { pageRunCommand } = await import("./page-run.js");
     process.exitCode = await pageRunCommand(process.argv.slice(3));

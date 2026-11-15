@@ -29,6 +29,10 @@ export interface PageRunOptions {
   depth?: PageDepth;
   model?: string;
   effort?: string;
+  /** Page Studio's fast model for small edits (its quickModel). Pinned so local and sandbox runs use the same one. */
+  quickModel?: string;
+  /** Kit parts on the host (Brain, memory, sessions), as createMarshalHost's kit. Default: none. */
+  kit?: readonly KitPartName[];
   /** The page request. Default: page/operator-request.md, then the positioning brief from page/brief.json. */
   idea?: string;
   /** Critic rounds for depth single (1 to 4; Page Studio's default is 2). */
@@ -105,6 +109,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     env,
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { reasoningEffort: options.effort } : {}),
+    ...(options.kit?.length ? { kit: [...options.kit] } : {}),
     ...(options.fake ? { query: fakeQuery, browser: false } : {}),
     log,
   });
@@ -120,9 +125,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   let shots: unknown[] = [];
   const warnings: string[] = [];
   try {
-    if (options.model || options.effort) {
-      await call("pagestudio.settings", { ...(options.model ? { bigModel: options.model } : {}), ...(options.effort ? { bigEffort: options.effort } : {}) });
-    }
+    if (options.model || options.effort || options.quickModel) await call("pagestudio.settings", pinnedSettings(options));
     settings = (await call("pagestudio.settings", {})) ?? {};
     log(`page model ${settings.bigModel} at ${settings.bigEffort}, depth ${depth}${options.fake ? ", fake backend" : ""}`);
     const board = await call("pagestudio.brand.add", {
@@ -201,6 +204,162 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
       shots,
     },
   });
+  if (pageId) writePageRunRecord(state, { pageId, boardId, runId: host.runId, depth, settings, at: new Date().toISOString() });
+  await host.dispose().catch(() => undefined);
+  return summary;
+}
+
+type KitPartName = "brain" | "memory" | "sessions";
+
+function pinnedSettings(options: { model?: string; effort?: string; quickModel?: string }): Record<string, string> {
+  return {
+    ...(options.model ? { bigModel: options.model } : {}),
+    ...(options.effort ? { bigEffort: options.effort } : {}),
+    ...(options.quickModel ? { quickModel: options.quickModel } : {}),
+  };
+}
+
+/** The page a run made, kept in its state folder so a later edit turn (page-edit) finds the page to change. */
+export interface PageRunRecord {
+  pageId: string;
+  boardId?: string;
+  runId: string;
+  depth: string;
+  settings: Record<string, unknown>;
+  at: string;
+  edits?: { at: string; request: string; runId: string; error?: string }[];
+}
+
+const PAGE_RUN_RECORD = "page-run.json";
+
+export function readPageRunRecord(state: string): PageRunRecord | undefined {
+  try {
+    const record = JSON.parse(fs.readFileSync(path.join(path.resolve(state), PAGE_RUN_RECORD), "utf8")) as PageRunRecord;
+    return typeof record?.pageId === "string" ? record : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writePageRunRecord(state: string, record: PageRunRecord): void {
+  fs.writeFileSync(path.join(path.resolve(state), PAGE_RUN_RECORD), JSON.stringify(record, null, 2));
+}
+
+export interface PageEditOptions {
+  /** The finished run's state folder (as page-run left it, or downloaded from the run's agent/marshal-state/). */
+  state: string;
+  out: string;
+  logs: string;
+  /** The change in plain words; Page Studio's ask routes it (decisions: look change, quick model or page editor). */
+  request: string;
+  /** The page to change. Default: the page the run made (page-run.json in the state folder). */
+  pageId?: string;
+  workspace?: string;
+  extension?: string;
+  model?: string;
+  effort?: string;
+  quickModel?: string;
+  kit?: readonly KitPartName[];
+  fake?: boolean;
+  env?: Record<string, string>;
+  host?: { id: string; kind: string };
+  log?: (line: string) => void;
+}
+
+/**
+ * One edit turn on a finished page: reopens the run's host state (its session store and Page Studio's data), asks
+ * Page Studio for the change, then writes the page and the run contract again. The state folder is updated in place,
+ * so uploading it again keeps the edit, its sessions and the page's history.
+ */
+export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJson> {
+  const log = options.log ?? (() => undefined);
+  const out = path.resolve(options.out);
+  const logs = path.resolve(options.logs);
+  const state = path.resolve(options.state);
+  const studioDir = path.join(state, "page-studio");
+  const record = readPageRunRecord(state);
+  const pageId = options.pageId ?? record?.pageId;
+  for (const directory of [path.join(out, "shots"), path.join(logs, "query"), path.join(state, "host"), studioDir]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  const extension = path.resolve(options.extension ?? process.env.MARSHAL_SDK_PAGE_STUDIO ?? path.join(PACKAGE_ROOT, "extensions", "page-studio"));
+  const env: Record<string, string> = {
+    ...(options.env ??
+      Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined))),
+  };
+  process.env.PAGE_STUDIO_DIR = env.PAGE_STUDIO_DIR = studioDir;
+  const chrome = await resolveChrome();
+  if (chrome) {
+    process.env.MARSHAL_SDK_CHROME = env.MARSHAL_SDK_CHROME = chrome;
+    process.env.PAGE_STUDIO_CHROME = env.PAGE_STUDIO_CHROME = noSandboxWrapper(chrome, state);
+  }
+  const started = Date.now();
+  const { createMarshalHost } = await import("./host.js");
+  const host = await createMarshalHost({
+    workspacePath: path.resolve(options.workspace ?? path.dirname(out)),
+    stateRoot: path.join(state, "host"),
+    extensions: [{ packageRoot: extension }],
+    host: options.host ?? { id: "marshal-sdk", kind: "local" },
+    labels: { job: "page-edit" },
+    env,
+    ...(options.model ? { model: options.model } : {}),
+    ...(options.effort ? { reasoningEffort: options.effort } : {}),
+    ...(options.kit?.length ? { kit: [...options.kit] } : {}),
+    ...(options.fake ? { query: fakeQuery, browser: false } : {}),
+    log,
+  });
+  const call = async (capability: string, args: Record<string, unknown>): Promise<any> =>
+    ((await host.invoke(capability, args)) as { result?: unknown })?.result;
+  let failure = "";
+  let settings: Record<string, any> = {};
+  let finished: FinishedPage | undefined;
+  let reply = "";
+  let route: unknown;
+  let shots: unknown[] = [];
+  try {
+    if (!pageId) throw new Error(`No page to edit: ${state} has no ${PAGE_RUN_RECORD} and no --page-id was given.`);
+    if (options.model || options.effort || options.quickModel) await call("pagestudio.settings", pinnedSettings(options));
+    // The dry path has no OpenAI key: route by the fast model instead of the Decisions API.
+    if (options.fake) await call("pagestudio.settings", { useDecisions: false });
+    settings = (await call("pagestudio.settings", {})) ?? {};
+    fs.writeFileSync(path.join(logs, "query", "task.md"), options.request);
+    fs.writeFileSync(path.join(logs, "query", "options.json"), JSON.stringify({ capability: "pagestudio.ask", pageId, settings, fake: Boolean(options.fake) }, null, 2));
+    const asked = await call("pagestudio.ask", { pageId, text: options.request });
+    const activityId = asked?.activity?.id ?? asked?.id;
+    if (!activityId) throw new Error(`pagestudio.ask returned no activity: ${JSON.stringify(asked).slice(0, 300)}`);
+    for (;;) {
+      const activity = await call("pagestudio.activity", { id: activityId, wait: true, timeoutMs: 60_000 });
+      if (activity?.error) throw new Error(`Page Studio stopped: ${activity.error}`);
+      if (activity?.doneAt) {
+        reply = String(activity.reply ?? "");
+        route = activity.route ?? activity.tier ?? activity.routedBy;
+        break;
+      }
+    }
+    const rendered = await call("pagestudio.render", { pageId });
+    finished = finishPage(fs.readFileSync(rendered.path ?? rendered.file, "utf8"), { libraryRoot: path.join(studioDir, "library"), outDir: out });
+    fs.writeFileSync(path.join(out, "index.html"), finished.html);
+    log(`edit applied (${String(route ?? "routed")}): ${reply.slice(0, 160)}`);
+    shots = await screenshots(path.join(out, "index.html"), path.join(out, "shots"), chrome);
+  } catch (error) {
+    failure = error instanceof Error ? error.message : String(error);
+    log(`FAILED: ${failure}`);
+  }
+  const sessions = host.sessions.list({ runId: host.runId });
+  const summary = writeRunLogs({
+    logDir: logs,
+    storeRoot: path.join(state, "host", "sessions"),
+    sessions,
+    model: settings.bigModel,
+    effort: settings.bigEffort,
+    started,
+    error: failure,
+    requiredSkills: [],
+    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, request: options.request, route, reply, sections: finished?.sections ?? [], shots },
+  });
+  if (record) {
+    writePageRunRecord(state, { ...record, edits: [...(record.edits ?? []), { at: new Date().toISOString(), request: options.request, runId: host.runId, ...(failure ? { error: failure } : {}) }] });
+  }
   await host.dispose().catch(() => undefined);
   return summary;
 }
@@ -471,6 +630,8 @@ export function fakeAnswer(prompt: string): string {
     return JSON.stringify({ score: 8, verdict: "pass", summary: "Dry run: no model looked at this page.", findings: [] });
   }
   if (head.startsWith("You look at a brand's pictures")) return JSON.stringify({ pictures: [] });
+  if (head.startsWith("You are the fast hands of ZyG Page Studio")) return JSON.stringify({ tier: "edit", ops: [], reply: "Dry run: no model changed the page." });
+  if (head.startsWith("You are the page editor of ZyG Page Studio")) return JSON.stringify({ ops: [], reply: "Dry run: no model changed the page." });
   if (head.startsWith("You design and write one long")) {
     if (prompt.includes("You are FIXING the page")) return "";
     const picture = new RegExp(`https://${escapeRegExp(LIBRARY_HOST)}/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\\.(?:png|jpe?g|webp|avif|gif)`).exec(prompt)?.[0];
@@ -508,7 +669,8 @@ const USAGE = `marshal-sdk page-run: one Page Studio page from an agent-sandbox 
   --state <dir>      host-private folder outside the work folder                                    (required)
   --extension <dir>  Page Studio's built package (default: $MARSHAL_SDK_PAGE_STUDIO, else the bundled one)
   --depth <quick|single|deep>  (default single)   --rounds <1-4>   --idea <text | @file>
-  --model <id>  --effort <low|medium|high|xhigh|max>   --required-skill <name> (repeatable)
+  --model <id>  --effort <low|medium|high|xhigh|max>   --quick-model <id>   --required-skill <name> (repeatable)
+  --kit <brain,memory,sessions>  kit parts on the host (default: $MARSHAL_SDK_KIT, else none)
   --workspace <dir>  the sessions' working folder (default: the folder holding --input)
   --claude-config-dir <dir>  run the backend on that Claude account and drop ANTHROPIC_API_KEY
   --offline          do not read the product from the public store
@@ -563,6 +725,8 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
     ...(one("model") ? { model: one("model")! } : {}),
     ...(one("effort") ? { effort: one("effort")! } : {}),
     ...(one("rounds") ? { rounds: Number(one("rounds")) } : {}),
+    ...(one("quick-model") ? { quickModel: one("quick-model")! } : {}),
+    ...(kitArgument(one("kit")) ? { kit: kitArgument(one("kit"))! } : {}),
     ...(idea ? { idea: idea.startsWith("@") ? fs.readFileSync(idea.slice(1), "utf8") : idea } : {}),
     requiredSkills: values.get("required-skill") ?? [],
     offline: flags.has("offline"),
@@ -580,5 +744,77 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
       cost_usd: marshal.usage?.costUsd ?? 0,
     })}\n`,
   );
+  return summary.error ? 1 : 0;
+}
+
+function kitArgument(value: string | undefined): KitPartName[] | undefined {
+  const raw = value ?? process.env.MARSHAL_SDK_KIT ?? "";
+  const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  for (const part of parts) if (!["brain", "memory", "sessions"].includes(part)) throw new Error(`--kit takes brain, memory and sessions, got ${part}.`);
+  return parts.length ? (parts as KitPartName[]) : undefined;
+}
+
+const EDIT_USAGE = `marshal-sdk page-edit: one edit turn on a page a page-run made, from that run's state folder.
+
+  --state <dir>      the run's state folder (page-run --state, or its agent/marshal-state/ downloaded)  (required)
+  --out <dir>        where the edited index.html and shots/ go                                        (required)
+  --logs <dir>       where run.jsonl, summary.json and query/ for this turn go                        (required)
+  --request <text | @file>  the change in plain words                                                  (required)
+  --page-id <id>     default: the page the run made
+  --model <id>  --effort <level>  --quick-model <id>  --kit <brain,memory,sessions>  --fake
+  --claude-config-dir <dir>  --host-id <id>  --host-kind <kind>
+
+Exit code 0 when the edited page was written, 1 otherwise (summary.json carries the error).
+`;
+
+/** The page-edit command. */
+export async function pageEditCommand(argv: readonly string[]): Promise<number> {
+  const values = new Map<string, string>();
+  const flags = new Set<string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]!;
+    if (token === "--help" || token === "-h") {
+      process.stdout.write(EDIT_USAGE);
+      return 0;
+    }
+    if (!token.startsWith("--")) throw new Error(`Unexpected argument ${token}.\n\n${EDIT_USAGE}`);
+    const next = argv[index + 1];
+    if (next === undefined || next.startsWith("--")) flags.add(token.slice(2));
+    else {
+      values.set(token.slice(2), next);
+      index += 1;
+    }
+  }
+  const required = (name: string): string => {
+    const value = values.get(name);
+    if (!value) throw new Error(`--${name} is required.\n\n${EDIT_USAGE}`);
+    return value;
+  };
+  const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  const configDir = values.get("claude-config-dir");
+  if (configDir) {
+    env.CLAUDE_CONFIG_DIR = path.resolve(configDir);
+    delete env.ANTHROPIC_API_KEY;
+  }
+  const request = required("request");
+  const kit = kitArgument(values.get("kit"));
+  const summary = await runPageEdit({
+    state: required("state"),
+    out: required("out"),
+    logs: required("logs"),
+    request: request.startsWith("@") ? fs.readFileSync(request.slice(1), "utf8") : request,
+    env,
+    ...(values.get("page-id") ? { pageId: values.get("page-id")! } : {}),
+    ...(values.get("extension") ? { extension: values.get("extension")! } : {}),
+    ...(values.get("model") ? { model: values.get("model")! } : {}),
+    ...(values.get("effort") ? { effort: values.get("effort")! } : {}),
+    ...(values.get("quick-model") ? { quickModel: values.get("quick-model")! } : {}),
+    ...(kit ? { kit } : {}),
+    fake: flags.has("fake"),
+    host: { id: values.get("host-id") ?? "marshal-sdk", kind: values.get("host-kind") ?? "local" },
+    log: (line) => process.stderr.write(`[marshal-sdk page-edit ${new Date().toISOString().slice(11, 19)}] ${line}\n`),
+  });
+  const marshal = summary.marshal as { sections?: string[] };
+  process.stdout.write(`${JSON.stringify({ summary: path.join(path.resolve(required("logs")), "summary.json"), error: summary.error, sections: marshal.sections?.length ?? 0, wall_seconds: summary.wall_seconds })}\n`);
   return summary.error ? 1 : 0;
 }
