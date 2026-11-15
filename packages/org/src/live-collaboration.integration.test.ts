@@ -42,11 +42,11 @@ import { OrgSharedSessions, type SharedSessionHost } from "./org-shared-sessions
 // A desktop can read its sessions from the real store, encrypted on disk, to count what a pass reads.
 const disk = vi.hoisted(() => ({ directory: "" }));
 vi.mock("../../../electron/app-paths", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../app-paths")>()),
+  ...(await importOriginal<typeof import("../../../electron/app-paths")>()),
   getAppDataDir: () => disk.directory,
 }));
 vi.mock("../../../electron/safe-storage-file", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../safe-storage-file")>();
+  const original = await importOriginal<typeof import("../../../electron/safe-storage-file")>();
   const files = await import("node:fs");
   const encode = (text: string) => Buffer.from(text, "utf8").reverse();
   const decode = (bytes: Buffer) => Buffer.from(bytes).reverse().toString("utf8");
