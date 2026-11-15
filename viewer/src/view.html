@@ -397,7 +397,7 @@
       return box.replaceChildren(...state.hits.map((hit) =>
         el("button", { class: "item", type: "button", "aria-current": hit.sessionId === state.sessionId, onclick: () => openHit(hit) },
           el("div", { class: "title" }, hit.title, badge(hit.state)),
-          el("div", { class: "meta" }, hit.hostId + " · run " + shortId(hit.runId) + " · " + hit.snippet))));
+          el("div", { class: "meta" }, (hit.shared ? "☁ shared · " : "") + hit.hostId + " · run " + shortId(hit.runId) + " · " + hit.snippet))));
     }
     if (!state.sessions.length) return box.replaceChildren(el("div", { class: "empty" }, state.runId ? "No sessions." : "Pick a run."));
     const ids = new Set(state.sessions.map((session) => session.id));

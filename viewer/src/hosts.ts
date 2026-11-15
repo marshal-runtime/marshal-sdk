@@ -78,6 +78,19 @@ export interface Host {
   answer(questionId: string, input: { choice?: number; text?: string; by: { name?: string; personId?: string } }): Promise<Row>;
   /** The envelope marshal.sessions.importNative takes, or why there is none. */
   native(sessionId: string): Promise<{ ok: true; state: Row; title: string; bytes: number } | { ok: false; reason: string; message: string }>;
+  /** Sessions people shared to the org's session index, found through a linked kit host serving sessions.search with scope "cloud"; [] when the host has none. */
+  shared?(query: string, limit: number): Promise<SharedHit[]>;
+}
+
+export interface SharedHit {
+  sessionId: string;
+  title: string;
+  owner?: string;
+  workspace?: string;
+  updated?: string;
+  snippet: string;
+  /** Set on a session an agent-sandbox run published: where that run's Marshal state is in GCS. */
+  origin?: { runId?: string; stateLocation?: string };
 }
 
 const bound = (message: TranscriptMessage, index: number) =>
@@ -321,10 +334,55 @@ export function linkProblem(error: unknown): { reason: string; message: string }
   return { reason: "failed", message: error instanceof Error ? error.message : String(error) };
 }
 
+/** The kit host wraps text people and models wrote in <untrusted_session>…</untrusted_session>; the tab shows the text inside. */
+function unwrapUntrusted(value: unknown): string {
+  const text = String(value ?? "").trim();
+  const open = "<untrusted_session>";
+  const close = "</untrusted_session>";
+  return text.startsWith(open) && text.endsWith(close) ? text.slice(open.length, -close.length).trim() : text;
+}
+
+/** POST /invoke answers {capability, output}, and a kit capability's output is {result}. */
+function unwrapInvoke(raw: unknown): Row {
+  const output = ((raw as Row)?.output ?? raw) as Row;
+  return ((output?.result ?? output) as Row) ?? {};
+}
+
 /** A marshal-sdk host serving the link. */
 export function linkedHost(config: LinkedHostConfig): Host {
   const client = new LinkClient({ url: config.url, token: config.token });
   const quick = new LinkClient({ url: config.url, token: config.token, timeoutMs: INFO_TIMEOUT_MS });
+  // Sessions this host doesn't keep but read for us through sessions.read (its stores, then GCS): a snapshot, nothing to watch.
+  const sharedOnly = new Set<string>();
+  const readShared = async (sessionId: string, tail?: number): Promise<TranscriptPage> => {
+    const none = { found: false, total: 0, cursor: 0, messages: [] };
+    let out: Row;
+    try {
+      out = unwrapInvoke(await client.invoke("sessions.read", { sessionId, ...(tail ? { tail } : {}) }, 120_000));
+    } catch {
+      return none;
+    }
+    if (!out.found || !Array.isArray(out.messages)) return none;
+    sharedOnly.add(sessionId);
+    const messages = (out.messages as Row[]).map((message, index) => ({ id: String(message.id ?? index), role: message.role, content: unwrapUntrusted(message.content), timestamp: String(message.timestamp ?? ""), index })) as TranscriptPage["messages"];
+    const given = (out.session ?? {}) as Partial<SessionRecord>;
+    const session = {
+      title: "Shared session",
+      state: "idle",
+      createdAt: messages[0]?.timestamp ?? "",
+      updatedAt: messages.at(-1)?.timestamp ?? "",
+      runtime: "claude",
+      native: { kind: "none", cwd: "" },
+      runId: "shared",
+      labels: {},
+      messageCount: messages.length,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, turns: 0 },
+      ...given,
+      id: sessionId,
+      host: { id: config.id, kind: `shared (${String(out.from ?? "index")})` },
+    } as SessionRecord;
+    return { found: true, session, total: messages.length, cursor: messages.length, messages };
+  };
   return {
     summary: { id: config.id, name: config.name ?? config.id, kind: "link", url: safeUrl(config.url), token: `••••${config.token.slice(-4)}` },
     async info() {
@@ -352,11 +410,31 @@ export function linkedHost(config: LinkedHostConfig): Host {
       try {
         return { found: true, ...(await client.transcript(sessionId, options)) };
       } catch (error) {
-        if (error instanceof LinkError && error.status === 404) return { found: false, total: 0, cursor: 0, messages: [] };
+        if (error instanceof LinkError && error.status === 404) return readShared(sessionId, options.tail);
         throw error;
       }
     },
+    async shared(query, limit) {
+      try {
+        const results = unwrapInvoke(await client.invoke("sessions.search", { query, scope: "cloud", limit: Math.min(30, limit) }, 60_000)).results;
+        return (Array.isArray(results) ? (results as Row[]) : [])
+          .filter((hit) => hit && typeof hit.id === "string")
+          .map((hit) => ({
+            sessionId: hit.id,
+            title: unwrapUntrusted(hit.title) || "Shared session",
+            ...(typeof hit.owner === "string" ? { owner: hit.owner } : {}),
+            ...(typeof hit.workspace === "string" ? { workspace: hit.workspace } : {}),
+            ...(typeof hit.updatedAt === "string" ? { updated: hit.updatedAt } : {}),
+            snippet: unwrapUntrusted(hit.snippet),
+            ...(hit.runId || hit.stateLocation ? { origin: { ...(hit.runId ? { runId: String(hit.runId) } : {}), ...(hit.stateLocation ? { stateLocation: String(hit.stateLocation) } : {}) } } : {}),
+          }));
+      } catch {
+        // A host without the sessions kit (or the Brain unreachable from it) has no shared sessions to add.
+        return [];
+      }
+    },
     async watch(sessionId, options) {
+      if (sharedOnly.has(sessionId)) return { found: false, total: 0, cursor: 0, messages: [], activity: [], eventCursor: options.eventCursor };
       const transcript = await client.transcript(sessionId, {
         since: options.since,
         waitMs: Math.min(MAX_WAIT_MS, options.waitMs),

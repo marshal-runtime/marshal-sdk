@@ -92,6 +92,38 @@ export function createExtension(context: Context) {
     if (!host) throw new Error(`No host "${id}". Hosts: ${[LOCAL_HOST_ID, ...linked.keys()].join(", ")}. ${HOW_TO_ADD}`);
     return host;
   };
+  // Sessions people shared to the org's index, from every linked host serving sessions.search with scope "cloud". A hit from an agent-sandbox
+  // run this Mac already lists as a cloud run opens there (its GCS state: pages, push, continue); others open on the
+  // linked host, which reads them through sessions.read.
+  const sharedHits = async (query: string, limit: number, have: Row[]): Promise<Row[]> => {
+    const seen = new Set(have.map((hit) => hit.sessionId));
+    const out: Row[] = [];
+    for (const host of linked.values()) {
+      for (const hit of host.shared ? await host.shared(query, limit) : []) {
+        if (seen.has(hit.sessionId)) continue;
+        seen.add(hit.sessionId);
+        const outputRoot = hit.origin?.stateLocation?.replace(/\/+$/, "").replace(/\/agent\/marshal-state$/, "");
+        let inCloud: { hostId: string; runId: string } | undefined;
+        for (const [id, cloudHostEntry] of outputRoot ? cloud() : []) {
+          const run = (await cloudHostEntry.cloudRuns(false).catch(() => [])).find((entry) => entry.outputRoot === outputRoot);
+          if (run) inCloud = { hostId: id, runId: hit.origin?.runId ?? run.run?.runId ?? "" };
+        }
+        out.push({
+          hostId: inCloud?.hostId ?? host.summary.id,
+          sessionId: hit.sessionId,
+          runId: inCloud?.runId ?? hit.origin?.runId ?? "shared",
+          title: hit.title,
+          state: "idle",
+          snippet: [hit.owner ? `shared by ${hit.owner}` : "shared", hit.snippet].filter(Boolean).join(" · "),
+          score: 2,
+          shared: true,
+          ...(hit.owner ? { owner: hit.owner } : {}),
+          ...(outputRoot ? { outputRoot } : {}),
+        });
+      }
+    }
+    return out;
+  };
   // What the last sdksessions.open asked to show; the view reads it when its own open state is missing.
   let focus: { hostId: string; runId: string | null; sessionId: string | null; tab: string | null; filesRoot?: string; filesPath?: string } = {
     hostId: LOCAL_HOST_ID,
@@ -606,6 +638,7 @@ export function createExtension(context: Context) {
             // An offline host has no hits; sdksessions.hosts says why.
           }
         }
+        if (!(typeof input.hostId === "string" && input.hostId)) hits.push(...(await sharedHits(String(input.query), limit, hits)));
         return { query: String(input.query), hits: hits.sort((left, right) => right.score - left.score).slice(0, limit) };
       },
     },
