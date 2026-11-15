@@ -51,13 +51,16 @@ the kit turns it on). The configuration is the cloud-only surface (`brainConfigu
 - A `brainRoutes` entry with `memory: true` is written only when memory writes are on.
 - `cloudTimeoutMs`: 60000 by default (`kit.brain.timeoutMs`, 1000 to 120000).
 
-**Cold starts.** The front scales to zero, and a cold start can take more than 20 s. When it does, the Brain
-extension's own warm-up logs `[brain] cloud warm-up { status: 'failed', code: 'cloud_brain_timeout' }`.
+**The warm-up line.** The Brain extension's warm-up calls the front's `schema` tool and gives up after 20 s. When
+the front hasn't computed `schema` recently, that call takes about 25 s on the server (front logs, 2026-11-15 23:41 UTC,
+one warm instance: two `schema` calls took 24.6 s, and every call after them took 0.5-1.8 s). The extension then logs
+`[brain] cloud warm-up { status: 'failed', code: 'cloud_brain_timeout' }`.
 
 That line only reports the warm-up probe. The Brain stays installed, and later calls still go through, because
 each call has its own `cloudTimeoutMs` and retries.
 
-The host checks readiness itself (`knowledge.schema`, three tries) and logs the outcome:
+The host checks readiness itself and logs the outcome. It uses a one-hit `knowledge.search` with three tries, not
+`schema`, because the Brain runs two calls at a time and a slow `schema` would hold one of those slots:
 
 - `kit: Brain ready in N ms`
 - `kit: Brain not answering after 3 tries …`

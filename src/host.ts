@@ -753,15 +753,16 @@ function directProviderTools(directTools: readonly DirectTool[], context: Parame
 
 
 /**
- * The Brain's own warm-up gives up after 20 s and only logs; its front scales to zero, so on a cold start that
- * line says "cloud_brain_timeout" while later calls still work. This says plainly whether the Brain answers.
+ * The Brain's own warm-up calls the front's `schema` tool, which can take ~25 s when the front has not computed it
+ * recently, gives up after 20 s and only logs "cloud_brain_timeout" while later calls work. This says plainly
+ * whether the Brain answers, with a one-hit search: `schema` would hold one of the Brain's two call slots for that long.
  */
 async function brainReady(invoke: (capability: string, input: unknown) => Promise<unknown>, log: (line: string) => void, attempts = 3): Promise<void> {
   const started = Date.now();
   let last = "";
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      await invoke("knowledge.schema", {});
+      await invoke("knowledge.search", { query: "Marshal SDK host readiness check", limit: 1 });
       log(`kit: Brain ready in ${Date.now() - started} ms (attempt ${attempt})`);
       return;
     } catch (error) {
