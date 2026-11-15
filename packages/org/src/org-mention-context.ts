@@ -1,5 +1,5 @@
-import type { OrgMentionNote } from "./contract/org-types";
 import { wrapUntrusted } from "../host-deps";
+import type { OrgMentionNote } from "./contract/org-types";
 
 /** A note not taken by a prompt within this long belongs to a message that never went out. */
 const NOTE_TTL_MS = 10 * 60_000;

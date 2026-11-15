@@ -3,9 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { OrgProjectCloneOutcome, OrgProjectRepo, OrgProjectsCloneRequest, OrgProjectsCloneResult, OrgProjectsEvent, OrgProjectsGhStatus, OrgProjectsListResult } from "./contract/org-types";
 import { createLogger } from "../host-deps";
 import { validateWorkspaceName } from "../host-deps";
+import type {
+  OrgProjectCloneOutcome,
+  OrgProjectRepo,
+  OrgProjectsCloneRequest,
+  OrgProjectsCloneResult,
+  OrgProjectsEvent,
+  OrgProjectsGhStatus,
+  OrgProjectsListResult,
+} from "./contract/org-types";
 
 const log = createLogger("OrgProjects");
 

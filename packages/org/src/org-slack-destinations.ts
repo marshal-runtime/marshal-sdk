@@ -1,7 +1,11 @@
 import { OrgApiError } from "@marshal/agent-runtime-org";
 
-import type { OrgSlackDestination, OrgSlackDestinationsRequest, OrgSlackDestinationsResult } from "./contract/org-types";
 import { createLogger } from "../host-deps";
+import type {
+  OrgSlackDestination,
+  OrgSlackDestinationsRequest,
+  OrgSlackDestinationsResult,
+} from "./contract/org-types";
 import { classifyOrgFailure } from "./org-errors";
 import type { OrgFlags } from "./org-service";
 

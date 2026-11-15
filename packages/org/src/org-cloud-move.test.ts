@@ -14,7 +14,10 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { OrgReturnedMessage, SessionMessage } from "../../../common/marshal-ipc-contract";
-import { readClaudeNativeState, writeClaudeNativeState } from "../../../electron/backend/claude/native-state";
+import {
+  readClaudeNativeState,
+  writeClaudeNativeState,
+} from "../../../electron/backend/claude/native-state";
 import type { ShareableSession } from "./cloud-session-sanitizer";
 import {
   OrgCloudMove,

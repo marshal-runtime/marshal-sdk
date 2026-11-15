@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { TEST_ONBOARDING_MANIFEST } from "../../../../common/org-onboarding-test-manifest";
 import { parseOrgOnboardingManifest } from "./org-onboarding";
 import { parseOrgAgentDefaults } from "./org-onboarding-agent-defaults";
-import { TEST_ONBOARDING_MANIFEST } from "../../../../common/org-onboarding-test-manifest";
 
 describe("agentDefaults and tiers", () => {
   it("keeps valid model defaults and drops invalid ones", () => {

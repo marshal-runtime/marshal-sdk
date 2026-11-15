@@ -3,16 +3,23 @@ import os from "node:os";
 
 import type { OrgClient, OrgTranscriptMessage, UserPrincipal } from "@marshal/agent-runtime-org";
 
-import type { OrgGetSharedLinkResult, OrgJoinSharedSessionResult, OrgListSharedLinksResult, OrgSharedLink, OrgSharedLiveView, OrgSharedRole } from "./contract/org-types";
 import type { SessionMessage } from "../host-deps";
 import { createLogger } from "../host-deps";
-import { orgPrincipalLabel } from "./common/org-principal";
 import {
   isLocalOnlyMessage,
   orgMessageIdFor,
   orgTitleFor,
   toOrgTranscriptMessage,
 } from "./cloud-session-sanitizer";
+import { orgPrincipalLabel } from "./common/org-principal";
+import type {
+  OrgGetSharedLinkResult,
+  OrgJoinSharedSessionResult,
+  OrgListSharedLinksResult,
+  OrgSharedLink,
+  OrgSharedLiveView,
+  OrgSharedRole,
+} from "./contract/org-types";
 import { classifyOrgFailure } from "./org-errors";
 import type { OrgFlags } from "./org-service";
 import { paginateTranscript } from "./org-session-sharing";

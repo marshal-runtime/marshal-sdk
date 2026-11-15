@@ -5,8 +5,8 @@ import { gzipSync } from "node:zlib";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { OrgOnboardingManifest } from "./common/org-onboarding";
 import { testDouble } from "../../../electron/testing/harness";
+import type { OrgOnboardingManifest } from "./common/org-onboarding";
 import { OrgOnboarding, interpretConnected, type OrgOnboardingDeps } from "./org-onboarding";
 import { sha256Hex } from "./org-onboarding-archive";
 

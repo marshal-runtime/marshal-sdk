@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { parseOrgOnboardingManifest } from "./org-onboarding";
 import { TEST_ONBOARDING_MANIFEST } from "../../../../common/org-onboarding-test-manifest";
+import { parseOrgOnboardingManifest } from "./org-onboarding";
 import { parseOrgOnboardingTools } from "./org-onboarding-tools";
 
 describe("parseOrgOnboardingTools", () => {

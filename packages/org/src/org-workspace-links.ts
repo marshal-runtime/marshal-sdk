@@ -2,8 +2,8 @@ import { execFile } from "node:child_process";
 
 import type { OrgClient } from "@marshal/agent-runtime-org";
 
-import type { OrgWorkspaceMapping } from "./contract/org-types";
 import { createLogger } from "../host-deps";
+import type { OrgWorkspaceMapping } from "./contract/org-types";
 import type { OrgFlags } from "./org-service";
 import { parseRemoteRepo } from "./org-wip-bundle";
 

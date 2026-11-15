@@ -1,7 +1,7 @@
 import type { OrgClient, OrgTranscriptMessage } from "@marshal/agent-runtime-org";
 
-import type { OrgHeldTranscriptResult } from "./contract/org-types";
 import { createLogger } from "../host-deps";
+import type { OrgHeldTranscriptResult } from "./contract/org-types";
 import type { OrgCloudMoveStore } from "./org-cloud-move-store";
 import { classifyOrgFailure } from "./org-errors";
 import type { OrgFlags } from "./org-service";
