@@ -274,12 +274,15 @@
     const box = $("hosts");
     if (!state.hosts.length) return box.replaceChildren(el("div", { class: "empty" }, "No hosts."));
     box.replaceChildren(...state.hosts.map((entry) => {
-      const status = entry.kind === "folder" ? "local" : entry.status;
-      const mode = entry.kind === "folder" ? "folder" : entry.status === "online" ? entry.mode : "offline";
+      const cloud = entry.mode === "cloud";
+      const status = cloud ? "online" : entry.kind === "folder" ? "local" : entry.status;
+      const mode = cloud ? "cloud" : entry.kind === "folder" ? "folder" : entry.status === "online" ? entry.mode : "offline";
       const runs = Array.isArray(entry.runs) ? entry.runs.length : entry.runs;
       return el("button", { class: "item", type: "button", "aria-current": entry.id === state.hostId, onclick: () => openHost(entry.id) },
         el("div", { class: "title" }, el("span", { class: "dot " + (status === "online" ? "online" : status === "offline" ? "offline" : "") }), entry.name || entry.id, badge(mode, mode === "store" ? "store-only" : mode)),
-        el("div", { class: "meta" }, entry.kind === "folder"
+        el("div", { class: "meta" }, cloud
+          ? (runs || 0) + " runs (" + (entry.marshalRuns || 0) + " with sessions) · " + String(entry.uri || "").replace(/^gs:\/\//, "")
+          : entry.kind === "folder"
           ? (entry.stores ? entry.stores.length : 0) + " stores · " + (runs || 0) + " runs"
           : entry.status === "online"
             ? (entry.remote ? entry.remote.id + " (" + entry.remote.kind + ")" : "") + " · sdk " + entry.sdkVersion + " · " + (runs || 0) + " runs · " + (entry.capabilities || []).length + " capabilities"
@@ -295,6 +298,7 @@
     const box = $("runs");
     $("runs-heading").textContent = "Runs · " + (host().name || state.hostId);
     if (host().kind === "link" && host().status !== "online") return box.replaceChildren(el("div", { class: "empty" }, "This host is offline: " + (host().message || "unreachable") + "."));
+    if (host().mode === "cloud") return renderCloudRuns(box);
     if (!state.runs.length) return box.replaceChildren(el("div", { class: "empty" }, "No runs on this host."));
     box.replaceChildren(...state.runs.map((run) =>
       el("button", { class: "item", type: "button", "aria-current": run.runId === state.runId, onclick: () => openRun(run.runId) },
@@ -306,6 +310,49 @@
           ...(run.models || []).map((model) => el("span", { class: "chip" }, model)),
           run.running ? badge("running", run.running + " running") : null,
           run.failed ? badge("failed", run.failed + " failed") : null))));
+  }
+
+  function openLink(url) {
+    request("ui/open-link", { url }).catch(() => window.open(url, "_blank", "noopener"));
+  }
+
+  // A cloud host lists every run under its bucket prefix: runs with Marshal state (sessions, pages) open like any run;
+  // runs from their older pipeline have only a preview, which can be brought into Page Studio to compare.
+  function renderCloudRuns(box) {
+    const list = state.cloudRuns || [];
+    if (!list.length) return box.replaceChildren(el("div", { class: "empty" }, "No runs under " + (host().uri || "this prefix") + "."));
+    box.replaceChildren(...list.map((run) => {
+      const notice = el("div", { class: "notice", role: "status", "aria-live": "polite" });
+      const preview = el("button", { class: "ghost", type: "button", onclick: (event) => { event.stopPropagation(); openLink(run.previewUrl); } }, "Preview");
+      const bring = el("button", { class: run.marshal ? "ghost" : "primary", type: "button", onclick: async (event) => {
+        event.stopPropagation();
+        bring.disabled = true;
+        notice.className = "notice";
+        notice.textContent = "Bringing the page and its pictures into Page Studio…";
+        try {
+          const out = await call("sdksessions.importCloudPage", { outputRoot: run.outputRoot, open: true });
+          notice.className = "notice " + (out && out.ok ? "ok" : "warn");
+          notice.textContent = out && out.ok ? out.message + " " + (out.pictures || 0) + " pictures." : (out && out.message) || "Couldn't bring it in.";
+        } catch (error) {
+          notice.className = "notice warn";
+          notice.textContent = error.message || String(error);
+        } finally {
+          bring.disabled = false;
+        }
+      } }, "Bring into Page Studio");
+      const meta = [run.brand, when(run.startedAt), run.marshal ? run.sessions + " sessions" : null, run.costUsd ? money(run.costUsd) : null].filter(Boolean).join(" · ");
+      const body = [
+        el("div", { class: "title" }, run.title || shortId(run.runId), badge(run.status === "running" ? "running" : run.status === "failed" ? "failed" : "idle", run.status || "done"), run.status === "running" ? el("span", { class: "dot pulse" }) : null),
+        el("div", { class: "meta" }, meta || String(run.outputRoot).replace(/^gs:\/\//, "")),
+        el("div", { class: "chips" },
+          el("span", { class: "chip" }, run.marshal ? "☁ agent-sandbox · Marshal SDK" : "☁ their pipeline"),
+          run.syncError ? badge("failed", "sync failed") : null),
+        el("div", { class: "actions" }, preview, run.marshal ? null : bring, notice),
+      ];
+      return run.marshal
+        ? el("div", { class: "item", role: "button", tabindex: "0", "aria-current": run.runId === state.runId, onclick: () => openRun(run.runId), onkeydown: (event) => { if (event.key === "Enter") openRun(run.runId); } }, ...body)
+        : el("div", { class: "item" }, ...body);
+    }));
   }
 
   async function loadHosts() {
@@ -324,6 +371,7 @@
     try {
       const out = await call("sdksessions.runs", { hostId });
       state.runs = out.runs || [];
+      if (host().mode === "cloud") state.cloudRuns = ((await call("sdksessions.cloudRuns", { hostId })) || {}).runs || [];
       renderRuns();
       if (!keep) { renderSessions(); renderDetail(); }
     } catch (error) {
@@ -694,12 +742,29 @@
       }
     } }, "Open in Page Studio");
     const pictures = page.pictures || { library: 0, missing: 0 };
+    const cloudRun = host().mode === "cloud" ? (state.cloudRuns || []).find((run) => run.runId === state.runId) : null;
+    const push = cloudRun ? el("button", { class: "ghost", type: "button", onclick: async () => {
+      push.disabled = true;
+      notice.className = "notice";
+      notice.textContent = "Pushing your Page Studio version back to the cloud run…";
+      try {
+        const out = await call("sdksessions.pushToCloud", { pageId: page.id, outputRoot: cloudRun.outputRoot, cloudPageId: page.id });
+        notice.className = "notice " + (out && out.ok ? "ok" : "warn");
+        notice.textContent = out && out.ok ? "Pushed v" + out.version + ": their page generator now shows it (" + out.sections.length + " sections, " + out.pictures + " pictures). The old preview is kept in agent/edits." : (out && out.message) || "Couldn't push.";
+        if (out && out.ok) setTimeout(() => loadSessions().catch(() => {}), 300);
+      } catch (error) {
+        notice.className = "notice warn";
+        notice.textContent = error.message || String(error);
+      } finally {
+        push.disabled = false;
+      }
+    } }, "Push my edits to the cloud run") : null;
     return el("div", { class: "page-card" },
       el("div", { class: "title" }, page.title, page.brand && page.brand.name ? el("span", { class: "chip" }, page.brand.name) : null),
       el("div", { class: "meta" }, page.sections + " sections · " + pictures.library + " library pictures" + (pictures.missing ? " (" + pictures.missing + " not on the host)" : "") + " · v" + page.version + " · " + when(page.updatedAt) + (page.notesOpen ? " · " + page.notesOpen + " open notes" : "")),
       page.labels && page.labels.length ? el("div", { class: "chips" }, ...page.labels.map((label) => el("span", { class: "chip" }, label))) : null,
       el("div", { class: "meta" }, page.id + (page.from ? " · " + page.from : "")),
-      el("div", { class: "actions" }, button, notice));
+      el("div", { class: "actions" }, button, push, cloudRun ? el("button", { class: "ghost", type: "button", onclick: () => openLink(cloudRun.previewUrl) }, "Cloud preview") : null, notice));
   }
 
   function renderPages() {
@@ -708,7 +773,9 @@
     const h = host();
     $("detail-head").replaceChildren(el("div", { class: "detail" },
       el("div", { class: "title" }, "Pages from run " + shortId(state.runId)),
-      el("div", { class: "live" }, h.kind === "link" ? "On " + (h.name || h.id) + "; Open in Page Studio pulls the page and its pictures over the link first." : "In this run's Page Studio folder on this Mac."),
+      el("div", { class: "live" }, h.mode === "cloud"
+        ? "In the cloud run's state (" + String(h.uri || "").replace(/^gs:\/\//, "") + "). Open it in Page Studio, edit and comment there, then push your version back: the run's preview and page record are replaced, the previous preview is kept."
+        : h.kind === "link" ? "On " + (h.name || h.id) + "; Open in Page Studio pulls the page and its pictures over the link first." : "In this run's Page Studio folder on this Mac."),
       el("div", { class: "notice" }, "Each opens in your Page Studio as an ordinary page (sections, pictures, notes) that people keep editing; the run's copy stays as it is.")));
     const pages = state.pages.runId === state.runId ? state.pages.list : [];
     $("detail-body").replaceChildren(...(pages.length ? pages.map(pageCard) : [el("div", { class: "empty" }, "This run made no pages.")]));

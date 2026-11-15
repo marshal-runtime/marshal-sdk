@@ -7,6 +7,7 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 
 import { VIEW_HTML } from "./generated/view";
+import { cloudHost, configuredClouds, listEdits, previewHtml, pushToCloud, readLinks, readRunJson, writeLink } from "./cloud";
 import { configuredLinks, folderHost, linkedHost, linkProblem, LOCAL_HOST_ID, type Host } from "./hosts";
 import { expandHome } from "./store";
 
@@ -78,10 +79,15 @@ export function createExtension(context: Context) {
   };
   const links = configuredLinks(context.configuration);
   const linked = new Map(links.hosts.map((config) => [config.id, linkedHost(config)]));
-  const allHosts = (input: Row): Host[] => [folderHost(configuredRoots(input)), ...linked.values()];
+  const clouds = configuredClouds(context.configuration);
+  let cloudHosts: Map<string, ReturnType<typeof cloudHost>> | undefined;
+  const cloud = () => (cloudHosts ??= new Map(clouds.clouds.map((config) => [config.id, cloudHost(config, pullRoot())])));
+  const allHosts = (input: Row): Host[] => [folderHost(configuredRoots(input)), ...cloud().values(), ...linked.values()];
   const hostFor = (input: Row): Host => {
     const id = typeof input.hostId === "string" && input.hostId ? input.hostId : LOCAL_HOST_ID;
     if (id === LOCAL_HOST_ID) return folderHost(configuredRoots(input));
+    const inCloud = cloud().get(id);
+    if (inCloud) return inCloud;
     const host = linked.get(id);
     if (!host) throw new Error(`No host "${id}". Hosts: ${[LOCAL_HOST_ID, ...linked.keys()].join(", ")}. ${HOW_TO_ADD}`);
     return host;
@@ -375,6 +381,15 @@ export function createExtension(context: Context) {
           };
         }
         const pageId = String(imported.value.pageId ?? folder.pageId);
+        const fromCloud = cloud().get(host.summary.id);
+        let cloudLink: Row | undefined;
+        if (fromCloud) {
+          const outputRoot = typeof input.runId === "string" ? await fromCloud.rootOfRun(input.runId) : undefined;
+          if (outputRoot) {
+            cloudLink = { hostId: host.summary.id, outputRoot, cloudPageId: String(input.pageId), ...(typeof input.runId === "string" ? { runId: input.runId } : {}), linkedAt: new Date().toISOString() };
+            writeLink(pullRoot(), pageId, cloudLink as any);
+          }
+        }
         let opened = false;
         if (input.open !== false) opened = (await pageStudio("pagestudio.open", { pageId }, invocation)).ok;
         return {
@@ -387,8 +402,123 @@ export function createExtension(context: Context) {
           from: folder.origin,
           ...(folder.pulled ? { pulled: folder.pulled } : {}),
           opened,
-          message: `In Page Studio as ${pageId}${opened ? "; the Page Studio tab is open on it" : ""}.`,
+          ...(cloudLink ? { cloud: cloudLink } : {}),
+          message: `In Page Studio as ${pageId}${opened ? "; the Page Studio tab is open on it" : ""}${cloudLink ? "; sdksessions.pushToCloud sends your edits back to the cloud run" : ""}.`,
         };
+      },
+    },
+    {
+      name: "sdksessions.cloudRuns",
+      title: "List cloud page generations",
+      description:
+        "Page generations that ran in the cloud (agent-sandbox runs kept in GCS), next to this Mac's runs: output root, title, brand, status, whether it ran on the Marshal SDK (sessions and Page Studio pages you can open, watch and continue) or on the older pipeline (its page only), the preview link their page generator UI shows, and how many edits people pushed back. refresh:true lists the bucket again now.",
+      input: obj({ hostId, refresh: bool }),
+      read: true,
+      handler: async (input) => {
+        const wanted = typeof input.hostId === "string" && input.hostId ? [input.hostId] : [...cloud().keys()];
+        const runs: Row[] = [];
+        const problems: Row[] = [...clouds.problems.map((message) => ({ message }))];
+        for (const id of wanted) {
+          const host = cloud().get(id);
+          if (!host) {
+            problems.push({ hostId: id, message: `No cloud host "${id}".` });
+            continue;
+          }
+          try {
+            const local = await host.runs();
+            for (const run of await host.cloudRuns(input.refresh === true)) {
+              const sdkRun = local.find((row) => row.cloud?.outputRoot === run.outputRoot);
+              runs.push({
+                hostId: id,
+                outputRoot: run.outputRoot,
+                marshal: run.marshal,
+                runId: sdkRun?.runId ?? run.run?.runId ?? run.outputRoot.split("/").pop(),
+                title: run.run?.title ?? sdkRun?.firstTitle ?? run.outputRoot.split("/").pop(),
+                brand: run.run?.brand,
+                status: run.run?.status ?? (run.marshal ? "unknown" : "done"),
+                startedAt: run.run?.startedAt ?? sdkRun?.startedAt,
+                finishedAt: run.run?.finishedAt,
+                sessions: sdkRun?.sessions ?? 0,
+                costUsd: sdkRun?.costUsd,
+                previewUrl: run.previewUrl,
+                previewUri: run.previewUri,
+                ...(run.run?.syncError ? { syncError: run.run.syncError } : {}),
+              });
+            }
+          } catch (error) {
+            problems.push({ hostId: id, message: String((error as Error).message ?? error).slice(0, 300) });
+          }
+        }
+        runs.sort((left, right) => String(right.startedAt ?? "").localeCompare(String(left.startedAt ?? "")));
+        return {
+          runs,
+          problems,
+          hosts: [...cloud().values()].map((host) => host.summary),
+          ...(cloud().size ? {} : { howToAdd: 'runtimeConfigureExtension {identity: "@omer/marshal-sdk-sessions", configuration: {cloud: [{id: "sandbox", name, uri: "gs://bucket/prefix"}]}} (keep hosts and roots already there).' }),
+        };
+      },
+    },
+    {
+      name: "sdksessions.cloudEdits",
+      title: "Edits pushed to a cloud run",
+      description: "Who pushed which edit of a cloud run's page back from their Marshal (agent/edits/ in the run's output root): when, page version, sections, notes, the preview it replaced.",
+      input: obj({ outputRoot: str }, ["outputRoot"]),
+      read: true,
+      handler: async (input) => ({ outputRoot: String(input.outputRoot), run: await readRunJson(String(input.outputRoot)), edits: await listEdits(String(input.outputRoot)) }),
+    },
+    {
+      name: "sdksessions.pushToCloud",
+      title: "Push a page edit back to its cloud run",
+      description:
+        "Sends a page you edited in this Marshal's Page Studio back to the cloud run it came from: the page where their page generator UI shows it (preview/index.html, pictures in images/), the page record (with its notes) in the run's Marshal state, and an edit record (who, when, version). The previous preview is kept under agent/edits/. pageId is the page here; a page opened from a cloud run with sdksessions.openInPageStudio knows its run, otherwise pass outputRoot and cloudPageId.",
+      input: obj({ pageId: str, outputRoot: str, cloudPageId: str, summary: str }, ["pageId"]),
+      read: false,
+      handler: async (input, invocation) => {
+        const pageId = String(input.pageId);
+        const link = readLinks(pullRoot())[pageId];
+        const outputRoot = typeof input.outputRoot === "string" && input.outputRoot ? input.outputRoot : link?.outputRoot;
+        const cloudPageId = typeof input.cloudPageId === "string" && input.cloudPageId ? input.cloudPageId : link?.cloudPageId ?? pageId;
+        if (!outputRoot) return { ok: false, reason: "no-cloud-run", message: "This page didn't come from a cloud run. Pass outputRoot (gs://...) and cloudPageId to push it to one." };
+        const rendered = await pageStudio("pagestudio.render", { pageId }, invocation);
+        if (!rendered.ok) return rendered;
+        const file = String(rendered.value.file ?? rendered.value.path ?? "");
+        const doc = await pageStudio("pagestudio.page.get", { pageId }, invocation);
+        if (!doc.ok) return doc;
+        const me = person();
+        const pushed = await pushToCloud({
+          outputRoot,
+          cloudPageId,
+          renderedHtml: fs.readFileSync(file, "utf8"),
+          pageDoc: doc.value,
+          studioDir: path.dirname(path.dirname(file)),
+          by: { ...(me.name ? { name: me.name } : {}), ...(typeof context.configuration?.person?.email === "string" ? { email: context.configuration.person.email } : {}) },
+          ...(typeof input.summary === "string" ? { summary: input.summary } : {}),
+          workDir: path.join(expandHome(pullRoot()), ".push"),
+        });
+        if (link) writeLink(pullRoot(), pageId, { ...link, linkedAt: link.linkedAt });
+        for (const host of cloud().values()) void host.cloudRuns(true).catch(() => undefined);
+        return { ...pushed, outputRoot, pageId, cloudPageId, message: `Pushed version ${pushed.version} of the page to ${outputRoot}; their page generator shows it at preview/index.html.` };
+      },
+    },
+    {
+      name: "sdksessions.importCloudPage",
+      title: "Bring a cloud run's page into Page Studio",
+      description:
+        "Any cloud run's finished page, including runs of the older pipeline that have no Marshal sessions, comes into this Marshal's Page Studio as an editable page (its preview HTML with the pictures inlined), to compare side by side in the harness or keep working on locally. The page remembers its run, so sdksessions.pushToCloud can send edits back.",
+      input: obj({ outputRoot: str, title: str, open: bool }, ["outputRoot"]),
+      read: false,
+      handler: async (input, invocation) => {
+        const outputRoot = String(input.outputRoot).replace(/\/+$/, "");
+        const preview = await previewHtml(outputRoot, path.join(expandHome(pullRoot()), ".preview"));
+        const run = await readRunJson(outputRoot);
+        const title = typeof input.title === "string" && input.title ? input.title : `${run?.title ?? outputRoot.split("/").pop()} (cloud)`;
+        const created = await pageStudio("pagestudio.page.create", { title, html: preview.html }, invocation);
+        if (!created.ok) return created;
+        const pageId = String(created.value.pageId ?? created.value.id ?? "");
+        if (pageId) writeLink(pullRoot(), pageId, { hostId: "cloud", outputRoot, cloudPageId: pageId, linkedAt: new Date().toISOString() });
+        let opened = false;
+        if (pageId && input.open !== false) opened = (await pageStudio("pagestudio.open", { pageId }, invocation)).ok;
+        return { ok: true, pageId, title, pictures: preview.pictures, missing: preview.missing, outputRoot, opened, message: `In Page Studio as ${pageId}.` };
       },
     },
     {
@@ -617,6 +747,10 @@ export const CAPABILITY_NAMES = [
   "sdksessions.openInPageStudio",
   "sdksessions.questions",
   "sdksessions.answer",
+  "sdksessions.cloudRuns",
+  "sdksessions.cloudEdits",
+  "sdksessions.pushToCloud",
+  "sdksessions.importCloudPage",
 ];
 
 function unavailable() {

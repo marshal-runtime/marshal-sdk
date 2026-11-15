@@ -91,7 +91,8 @@ export function findStores(roots: readonly string[]): string[] {
       return;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name === "node_modules" || entry.name.startsWith(".git")) continue;
+      // .cloud-<id> folders are cloud-run caches, listed by their cloud host only.
+      if (!entry.isDirectory() || entry.name === "node_modules" || entry.name.startsWith(".git") || entry.name.startsWith(".cloud-")) continue;
       walk(path.join(dir, entry.name), depth + 1);
     }
   };
