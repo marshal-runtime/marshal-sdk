@@ -68,13 +68,24 @@ are to this repository's `main` (2026-11-15).
 `createEngineQuery` keeps one live `LocalBackend` session per Marshal session, the way the desktop keeps one per chat,
 and resumes it by its native id in a later run. The host's Marshal tools, MCP servers and permission handler reach the
 engine per session (`EngineBackend`: the engine's exclusive-session-tools path, `prepareMcpConfig`, the approval
-callback); the engine's process-wide ports get headless implementations (`src/engine-host.ts`) unless an embedder (the
+callback); the engine's process-wide ports get headless implementations (`src/headless-engine.ts`) unless an embedder (the
 desktop) configured them first. Session records carry the desktop's `runtimeId` and `backendOrigin`.
 
-Still different from the desktop: the runtime composition (`createAgentRuntime` in `src/host.ts` vs the desktop's
-`MarshalRuntimeHost` in `packages/host`), the session lifecycle above the engine (`ClaudeAgentPort` vs
-`SessionManager`), and turns that need the Claude Agent SDK (structured output, launch hooks, CLI flags, turn caps,
-a fork at an earlier message), which still run on it.
+## One runtime host (2026-11-15)
+
+`createMarshalHost` composes its runtime on the desktop's own `MarshalRuntimeHost` (`packages/host`, the desktop's
+`electron/marshal-runtime` byte for byte), through `src/shared-runtime.ts`: the same kernel, extension manager,
+built-in capabilities, UI options and lifecycle as the desktop. The SDK plugs its parts in through the host's options:
+its capability providers as `additionalProviderSources`, its permission brokers as the `applicationAuthority` (they
+see the whole check and decide finally), its durable scheduler and built-in overrides through `builtins`, and its
+principal and harness id. Built-ins now follow the desktop's defaults (TypeScript, React UI options, output limits)
+under the SDK's own overrides.
+
+Still different from the desktop: the session lifecycle above the engine (`ClaudeAgentPort` vs `SessionManager`);
+turns that need the Claude Agent SDK (structured output, launch hooks, CLI flags, turn caps, a fork at an earlier
+message), which still run on it; a model backend's permission request is normalised twice (engine, then
+`canUseTool`); the engine's trace logs go to stdout; and `permissions.approval`, `resolveGrants` and `patterns` are
+not taken by the shared host (it logs that; brokers and `canUseTool` decide).
 
 ## What stays hard
 
