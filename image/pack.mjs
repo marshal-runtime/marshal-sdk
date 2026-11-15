@@ -2,7 +2,9 @@
 // extensions it serves, as a single npm tarball. Installing it is one step and needs only the public registry:
 //
 //   node image/pack.mjs [--out .pack] [--packs <desktop checkout>] [--manifest marshal-sdk.json] [--extension <packageRoot>]...
-//   npm install -g .pack/marshal-sdk-<version>.tgz      # then: marshal-sdk page-run --help
+//   npm install .pack/marshal-sdk-<version>.tgz         # then: npx marshal-sdk page-run --help
+// Install into a folder, not with -g: a global install of a package with bundled dependencies rebuilds an optional
+// native dependency (fsevents) and fails on macOS.
 //
 // The packs are the exact tarballs the desktop pins (its package.json pnpm.overrides), unpacked into the
 // package's node_modules and listed in bundleDependencies, so npm installs them as shipped. Their own
@@ -10,13 +12,12 @@
 // at the packs' own ranges. Extensions are copied file by file (no node_modules, no credential-shaped files)
 // into extensions/<short name>; page-run finds Page Studio at extensions/page-studio.
 // Chromium is not inside: install it after the package with its own Playwright,
-//   node "$(npm root -g)/@marshal/sdk/node_modules/playwright-core/cli.js" install --with-deps chromium
+//   node <install dir>/node_modules/playwright-core/cli.js install --with-deps chromium
 // or point MARSHAL_SDK_CHROME at one.
 //
-// The extension list: --manifest <marshal-sdk.json> (the onboarding manifest, src/onboarding.ts: its `path` entries,
-// relative to the manifest) and/or --extension <packageRoot> (repeatable); with neither, Page Studio's built package.
-// TODO(extension onboarding): resolve `archive` and registry `id` entries through src/onboarding.ts once it is
-// committed, so the tarball carries exactly what the manifest names.
+// The extension list: --manifest <marshal-sdk.json>, resolved by the onboarding resolver (docs/onboarding.md: path,
+// archive + sha256, and registry id entries, archives unpacked under --cache) and/or --extension <packageRoot>
+// (repeatable); with neither, Page Studio's built package. Configuration stays in the manifest of the run.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -31,15 +32,11 @@ for (let index = 2; index < process.argv.length; index += 2) {
   if (key === "extension") args.extension.push(path.resolve(value));
   else args[key] = path.resolve(value);
 }
+execFileSync(process.execPath, [path.join(root, "build.mjs")], { cwd: root, stdio: "inherit" });
 if (args.manifest) {
-  const manifest = JSON.parse(fs.readFileSync(args.manifest, "utf8"));
-  if (manifest?.version !== 1 || !Array.isArray(manifest.extensions)) throw new Error(`${args.manifest}: expected {"version": 1, "extensions": [...]}.`);
-  for (const [index, entry] of manifest.extensions.entries()) {
-    if (typeof entry?.path !== "string") {
-      throw new Error(`${args.manifest}: extensions[${index}] is not a package folder (path); pack takes only path entries for now.`);
-    }
-    args.extension.push(path.resolve(path.dirname(args.manifest), entry.path));
-  }
+  const { resolveManifest } = await import(path.join(root, "dist", "src", "onboarding.js"));
+  const resolved = await resolveManifest(args.manifest, args.cache ? { cacheDir: args.cache } : {});
+  for (const extension of resolved.extensions) args.extension.push(extension.packageRoot);
 }
 if (!args.extension.length) args.extension.push("/Users/omer/marshal-tracking/page-studio/out/package");
 
@@ -104,7 +101,6 @@ const copyTree = (from, to) => {
   }
 };
 
-execFileSync(process.execPath, [path.join(root, "build.mjs")], { cwd: root, stdio: "inherit" });
 fs.mkdirSync(path.join(staging, "dist", "src"), { recursive: true });
 copyTree(path.join(root, "dist", "src"), path.join(staging, "dist", "src"));
 
