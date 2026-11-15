@@ -138,6 +138,44 @@ test("a run elsewhere in the bucket is listed through its pointer under the pref
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("agent-sandbox's runner layout (host/sessions, page-studio/, page-run.json, sandbox-page.html) lists, opens and takes a push", async () => {
+  const { gcs, pullRoot, dir } = setup();
+  const root = path.join(gcs, "dev-bucket", "runs", "sandbox-902");
+  const state = path.join(root, "agent", "marshal-state");
+  const store = new FileSessionStore(path.join(state, "host", "sessions"), { runId: "run-902", host: { id: "agent-sandbox", kind: "e2b" } });
+  const session = store.create({ title: "Page Studio · build", runtime: "claude", native: { kind: "claude", cwd: "/home/user/work", configDir: "/home/user/state/claude", sessionId: "11111111-2222-3333-4444-555555555555" } });
+  store.update(session.id, { state: "idle" });
+  const nativeFile = path.join(state, "claude", "projects", "-home-user-work", "11111111-2222-3333-4444-555555555555.jsonl");
+  fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
+  fs.writeFileSync(nativeFile, "{}\n");
+  fs.writeFileSync(path.join(state, "page-run.json"), JSON.stringify({ runId: "run-902", pageId: "saffpro--sandbox", depth: "single", edits: [] }));
+  fs.writeFileSync(path.join(state, "sandbox-page.html"), "<html><body><h1>old</h1></body></html>");
+  fs.mkdirSync(path.join(state, "page-studio", "pages"), { recursive: true });
+  fs.writeFileSync(path.join(state, "page-studio", "pages", "saffpro--sandbox.json"), JSON.stringify({
+    id: "saffpro--sandbox", title: "SaffPro", brand: { id: "233", name: "SaffPro" }, product: null, source: "made in Page Studio", version: 2, updatedAt: new Date().toISOString(), updatedBy: "agent", notes: [],
+    sections: [{ key: "hero", label: "Hero", kind: "html", src: "<section><h1>old</h1></section>" }],
+  }));
+  const host = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot);
+  const found = (await host.cloudRuns(true)).find((run) => run.outputRoot === "gs://dev-bucket/runs/sandbox-902");
+  assert.equal(found?.marshal, true);
+  assert.equal(found?.run?.runId, "run-902");
+  const [only] = await host.sessions("run-902");
+  assert.equal((await host.native(only!.id)).ok, true);
+  assert.deepEqual((await host.pages("run-902")).pages.map((page) => page.id), ["saffpro--sandbox"]);
+
+  const studioDir = path.join(dir, "studio");
+  fs.mkdirSync(path.join(studioDir, "library"), { recursive: true });
+  await pushToCloud({
+    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work"),
+    renderedHtml: '<html><body><section data-key="hero"><h1>new</h1></section></body></html>',
+    pageDoc: { id: "local", title: "SaffPro", brand: { id: "233", name: "SaffPro" }, product: null, source: "imported", version: 3, updatedAt: new Date().toISOString(), updatedBy: "Omer", notes: [], sections: [] },
+  });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(state, "page-studio", "pages", "saffpro--sandbox.json"), "utf8")).version, 3);
+  assert.equal(fs.existsSync(path.join(state, "data")), false);
+  assert.match(fs.readFileSync(path.join(state, "sandbox-page.html"), "utf8"), /new/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("pushToCloud replaces the preview, keeps the old one, writes the page record and an edit record, and the cloud shows the new version", async () => {
   const { pullRoot, runRoot, dir } = setup();
   const studioDir = path.join(dir, "studio");

@@ -125,8 +125,9 @@ export function folderHost(roots: readonly string[]): Host {
     const folders: { dir: string; label: string; runs: typeof runs }[] = [];
     for (const run of runs) {
       for (const source of run.sources) {
-        const dir = path.join(source.folder, "data");
-        if (!fs.existsSync(path.join(dir, "pages"))) continue;
+        // page-run folders keep Page Studio's data in data/; agent-sandbox's runner in page-studio/.
+        const dir = ["data", "page-studio"].map((name) => path.join(source.folder, name)).find((candidate) => fs.existsSync(path.join(candidate, "pages")));
+        if (!dir) continue;
         const folder = folders.find((entry) => entry.dir === dir);
         if (folder) folder.runs.push(run);
         else folders.push({ dir, label: source.label, runs: [run] });

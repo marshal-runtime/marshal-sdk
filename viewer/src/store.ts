@@ -142,9 +142,9 @@ export function uniqueSessions(stores: readonly string[]): { store: string; sess
   return [...best.values()].map(({ store, session }) => ({ store, session }));
 }
 
-/** The run folder around a store (`<run>/state/sessions`), or the store itself. */
+/** The run folder around a store (`<run>/state/sessions`, or `<run>/host/sessions` as agent-sandbox's runner keeps it), or the store itself. */
 export function runFolderOf(store: string): string {
-  return path.basename(store) === "sessions" && path.basename(path.dirname(store)) === "state" ? path.dirname(path.dirname(store)) : store;
+  return path.basename(store) === "sessions" && ["state", "host"].includes(path.basename(path.dirname(store))) ? path.dirname(path.dirname(store)) : store;
 }
 
 /** A store's run folder as people read it: relative to the root it was found under (".runs/quick1"), else with ~. */

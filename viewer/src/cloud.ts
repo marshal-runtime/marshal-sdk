@@ -103,7 +103,11 @@ async function listRoots(config: CloudHostConfig): Promise<{ root: string; marsh
       throw error;
     }
   };
-  for (const line of await ls(`${config.uri}/**/${STATE}/run.json`)) found.set(line.slice(0, -`/${STATE}/run.json`.length), true);
+  // run.json (page-run folders) or page-run.json (agent-sandbox's runner) marks a run with Marshal state.
+  for (const line of await ls(`${config.uri}/**/${STATE}/*.json`)) {
+    const name = line.slice(line.lastIndexOf("/") + 1);
+    if (name === "run.json" || name === "page-run.json") found.set(line.slice(0, -`/${STATE}/${name}`.length), true);
+  }
   for (const line of await ls(`${config.uri}/**/preview/index.html`)) {
     const root = line.slice(0, -"/preview/index.html".length);
     if (!found.has(root)) found.set(root, false);
@@ -157,6 +161,15 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string): Host & {
             entry.run = { syncError: String((error as Error).message).slice(0, 300) };
           }
           fs.writeFileSync(path.join(cacheDir, ".cloud.json"), JSON.stringify({ hostId: config.id, outputRoot: root, syncedAt: new Date().toISOString() }));
+          const pageRunFile = path.join(cacheDir, "page-run.json");
+          if (!fs.existsSync(path.join(cacheDir, "run.json")) && fs.existsSync(pageRunFile)) {
+            try {
+              const pageRun = JSON.parse(fs.readFileSync(pageRunFile, "utf8")) as Row;
+              entry.run = { ...(entry.run ?? {}), runId: pageRun.runId, pageId: pageRun.pageId, depth: pageRun.depth, edits: Array.isArray(pageRun.edits) ? pageRun.edits.length : 0 };
+            } catch {
+              /* a partial upload; the next sync reads it */
+            }
+          }
           const runFile = path.join(cacheDir, "run.json");
           if (fs.existsSync(runFile)) {
             try {
@@ -236,8 +249,10 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string): Host & {
       if (!runId || !root) return local().pages(runId);
       const listedPages = await folderHost([path.join(cacheRoot, safe(root))]).pages(undefined);
       // Pages untouched since before the run (the brand base it started from) aren't the run's.
-      const startedAt = String(listed.find((entry) => entry.outputRoot === root)?.run?.startedAt ?? "");
-      const pages = listedPages.pages.filter((page) => !startedAt || String(page.updatedAt) >= startedAt);
+      const run = listed.find((entry) => entry.outputRoot === root)?.run;
+      const startedAt = String(run?.startedAt ?? "");
+      // Without a start time (agent-sandbox's page-run.json), the run's own page is the one it names.
+      const pages = listedPages.pages.filter((page) => (startedAt ? String(page.updatedAt) >= startedAt : !run?.pageId || page.id === run.pageId));
       return { ...listedPages, pages: pages.map((page) => ({ ...page, runId })) };
     },
     async pageFolder(pageId, runId) {
@@ -355,17 +370,26 @@ export async function pushToCloud(input: PushInput): Promise<PushResult> {
   }
   await gcloud(["storage", "cp", "--content-type=text/html; charset=utf-8", "--cache-control=no-cache", path.join(out, "index.html"), previewUri], { timeoutMs: 60_000 });
 
+  // agent-sandbox's runner keeps PAGE_STUDIO_DIR as page-studio/ and the finished page as sandbox-page.html (the
+  // baseline its next edit turn diffs against); page-run folders keep it as data/.
+  const sandboxLayout = Boolean(await readJson(`${root}/${STATE}/page-run.json`));
+  const studio = `${root}/${STATE}/${sandboxLayout ? "page-studio" : "data"}`;
   const doc: Row = { ...input.pageDoc, id: input.cloudPageId };
   const docFile = path.join(out, `${input.cloudPageId}.json`);
   fs.writeFileSync(docFile, JSON.stringify(doc, null, 2));
-  await gcloud(["storage", "cp", docFile, `${root}/${STATE}/data/pages/${input.cloudPageId}.json`], { timeoutMs: 60_000 });
+  await gcloud(["storage", "cp", docFile, `${studio}/pages/${input.cloudPageId}.json`], { timeoutMs: 60_000 });
+  if (sandboxLayout) {
+    const baseline = path.join(out, "sandbox-page.html");
+    fs.writeFileSync(baseline, finished.html);
+    await gcloud(["storage", "cp", baseline, `${root}/${STATE}/sandbox-page.html`], { timeoutMs: 60_000 });
+  }
   // The run's own Page Studio library gets the pictures the edited page shows, so the page record opens there too.
   const libraryRoot = path.join(input.studioDir, "library");
   const brands = new Set<string>();
   for (const match of input.renderedHtml.matchAll(/(?:\/library\/|https:\/\/pagestudio\.library\/)([A-Za-z0-9._-]+)\/(?:pictures\/)?/g)) brands.add(match[1]!);
   for (const brand of brands) {
     const pictures = finished.assets.map((name) => path.join(libraryRoot, brand, "pictures", name)).filter((file) => fs.existsSync(file));
-    if (pictures.length) await gcloud(["storage", "cp", ...pictures, `${root}/${STATE}/data/library/${brand}/pictures/`], { timeoutMs: 300_000 }).catch(() => undefined);
+    if (pictures.length) await gcloud(["storage", "cp", ...pictures, `${studio}/library/${brand}/pictures/`], { timeoutMs: 300_000 }).catch(() => undefined);
   }
 
   const record = {
