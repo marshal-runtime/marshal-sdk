@@ -34,6 +34,12 @@ export interface OrgPublishOptions {
   /** Only sessions of this run. Default: every session in the store. */
   runId?: string;
   label?: OrgSessionLabel;
+  /**
+   * The org envelope's runtime. Default `marshal-sdk`, which names where the run came from; forks ignore it, but the
+   * desktop's take-back of a cloud session accepts only `claude` (electron/org/org-cloud-move.ts), so pass `claude`
+   * when the owner should be able to take the session itself home rather than a fork of it.
+   */
+  runtime?: string;
   /** Upload each idle session's native Claude state, so a teammate can fork it and continue. Default true. */
   envelopes?: boolean;
   /** Reads a session's native state; default reads `<configDir or ~/.claude>/projects/<cwd>/<native id>.jsonl`. */
@@ -104,7 +110,7 @@ export async function publishToOrg(options: OrgPublishOptions): Promise<OrgPubli
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
         labels: options.label ?? "team",
-        runtime: ORG_RUNTIME,
+        runtime: options.runtime ?? ORG_RUNTIME,
       });
       const local = options.store.messages(record.id);
       const fresh = entry.messageCount === 0;
