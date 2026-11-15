@@ -184,6 +184,7 @@ test("speech: Google Gemini TTS gives a WhatsApp voice note; ElevenLabs transcri
     decide: { provider: "jev", model: "gpt-5-mini" },
     embed: { provider: "gemini", model: "gemini-embedding-2" },
     speech: { tts: "google", stt: "elevenlabs" },
+    transcribe: "elevenlabs",
   });
 });
 
@@ -218,4 +219,78 @@ test("a host exposes host.models and the marshal.models.* capabilities with the 
   } finally {
     await host.dispose();
   }
+});
+
+test("decide on OpenAI Decisions: Page Studio's request shape, per-option probabilities, noul and score as choices", async () => {
+  const { fetch, calls } = fakeFetch([
+    (call) => {
+      const sent = body(call);
+      assert.equal(call.url, "https://api.openai.com/v1/decisions");
+      assert.equal(header(call, "authorization"), "Bearer sk-test");
+      assert.equal(sent.model, "gpt-6-luna");
+      assert.deepEqual(sent.questions[0], {
+        type: "choice",
+        name: "decision",
+        instructions: "Which edit path?",
+        choices: [
+          { value: "instant", description: "a small text or style change" },
+          { value: "agent", description: "needs an agent" },
+        ],
+      });
+      return json({ answers: [{ name: "decision", probabilities: [{ value: "instant", probability: 0.82 }, { value: "agent", probability: 0.18 }] }], usage: { input_tokens: 40, output_tokens: 2 } });
+    },
+    json({
+      answers: [
+        { name: "ship", probabilities: [{ value: "true", probability: 0.3 }, { value: "false", probability: 0.7 }] },
+        { name: "quality", probabilities: [{ value: "1", probability: 0.1 }, { value: "2", probability: 0.6 }, { value: "3", probability: 0.3 }, { value: "9", probability: 0.5 }] },
+      ],
+    }),
+  ]);
+  const decide = createDecideService({ provider: "decisions" }, { fetch, env: { OPENAI_API_KEY: "sk-test" } });
+  assert.equal(decide.model, "gpt-6-luna");
+  const decided = await decide.decide({ question: "Which edit path?", options: { instant: "a small text or style change", agent: "needs an agent" }, context: "make the headline bigger" });
+  assert.equal(decided.choice, "instant");
+  assert.equal(decided.provider, "decisions");
+  assert.ok(Math.abs((decided.probabilities?.instant ?? 0) - 0.82) < 1e-9);
+  assert.equal(body(calls[0]!).input, "make the headline bigger");
+
+  const judged = await decide.judge({
+    state: { page: "rawdog" },
+    questions: { ship: { type: "noul", instructions: "Ship it?" }, quality: { type: "score", criteria: { "1": "bad", "2": "ok", "3": "great" } } },
+  });
+  const ship = judged.answers.ship as { type: string; noul: number };
+  assert.equal(ship.type, "noul");
+  assert.ok(Math.abs(ship.noul - 0.3) < 1e-9);
+  const quality = judged.answers.quality as { score: number; probabilities: Record<string, number> };
+  assert.equal(quality.score, 2);
+  assert.deepEqual(Object.keys(quality.probabilities), ["1", "2", "3"]);
+  assert.ok(Math.abs(Object.values(quality.probabilities).reduce((a, b) => a + b, 0) - 1) < 1e-9);
+  assert.deepEqual(body(calls[1]!).questions[0].choices.map((c: { value: string }) => c.value), ["true", "false"]);
+});
+
+test("marshal.models.decide picks a provider per call; transcribe on OpenAI posts the audio as multipart", async () => {
+  const { fetch, calls } = fakeFetch([
+    json({ answers: [{ name: "decision", probabilities: [{ value: "a", probability: 0.9 }, { value: "b", probability: 0.1 }] }] }),
+    (call) => {
+      assert.equal(call.url, "https://api.openai.com/v1/audio/transcriptions");
+      const form = call.init.body as FormData;
+      assert.equal(form.get("model"), "gpt-4o-transcribe");
+      assert.equal(form.get("language"), "en");
+      assert.equal((form.get("file") as File).name, "speech.webm");
+      return json({ text: " make the hero darker " });
+    },
+  ]);
+  const models = createModelServices({ decide: { provider: "jev" }, transcribe: { provider: "openai" } }, { fetch, env: { OPENAI_API_KEY: "sk-test" } });
+  const { createModelsProvider } = await import("../src/models/index.js");
+  const provider = createModelsProvider(models);
+  const decided = (await provider.invoke("marshal.models.decide", { question: "a or b?", options: ["a", "b"], provider: "decisions" }, {} as never)) as { output: Record<string, unknown> };
+  assert.equal(decided.output.success, true);
+  assert.equal(decided.output.choice, "a");
+  assert.equal(decided.output.provider, "decisions");
+  assert.equal(calls[0]!.url, "https://api.openai.com/v1/decisions");
+  const heard = (await provider.invoke("marshal.models.transcribe", { audioBase64: Buffer.from("fake-audio").toString("base64"), mimeType: "audio/webm", languageHints: ["en"] }, {} as never)) as { output: Record<string, unknown> };
+  assert.equal(heard.output.success, true);
+  assert.equal(heard.output.text, "make the hero darker");
+  assert.equal(heard.output.provider, "openai");
+  assert.equal(models.describe().transcribe, "openai:gpt-4o-transcribe");
 });

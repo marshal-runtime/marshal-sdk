@@ -13,11 +13,16 @@ import { buildChatRequest, defaultReasoningEffort, openAiErrorMessage, parseChat
 import { isAbortError, postJsonWithRetry, type JevFetch } from "./jev/transport.js";
 import { validateAnswer } from "./jev/validation.js";
 import { modelCredential, type ModelEnv } from "./credentials.js";
+import { createDecisionsClient, DEFAULT_DECISIONS_MODEL, judgeWithDecisions } from "./openai-decisions.js";
 
-export type DecideProviderName = "jev" | "openai";
+export type DecideProviderName = "jev" | "openai" | "decisions";
 
 export interface DecideConfig {
-  /** `jev` (default): Jev's judgement contract with a full probability distribution. `openai`: one structured answer. */
+  /**
+   * `jev` (default): Jev's judgement contract with a full probability distribution, over chat completions.
+   * `decisions`: the same contract on OpenAI's Decisions API (`/v1/decisions`, default `gpt-6-luna`), which returns a
+   * probability per option natively. `openai`: one structured answer.
+   */
   readonly provider?: DecideProviderName;
   readonly model?: string;
   readonly reasoningEffort?: string;
@@ -62,7 +67,7 @@ const number = (value: unknown) => (typeof value === "number" && Number.isFinite
 
 export function createDecideService(config: DecideConfig = {}, deps: { fetch?: JevFetch; env?: ModelEnv } = {}): DecideService {
   const provider = config.provider ?? "jev";
-  const model = config.model ?? DEFAULT_JEV_MODEL;
+  const model = config.model ?? (provider === "decisions" ? DEFAULT_DECISIONS_MODEL : DEFAULT_JEV_MODEL);
   const baseUrl = (config.baseUrl ?? "https://api.openai.com").replace(/\/+$/, "");
   const fetchImpl = deps.fetch ?? ((url, init) => fetch(url, init));
   const keyEnv = config.keyEnv ?? "OPENAI_API_KEY";
@@ -91,8 +96,11 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
     return !requested || /^jev(-|$)/i.test(requested) ? model : requested;
   }
 
+  const decisions = createDecisionsClient({ fetch: fetchImpl, baseUrl, keyEnv, key: () => modelCredential(keyEnv, deps.env) });
+
   async function judge(request: JevAskRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<JevAskResult> {
     const chosen = resolveModel(request.model);
+    if (provider === "decisions") return judgeWithDecisions(decisions, chosen, request, options);
     const started = Date.now();
     const completion = await complete(
       buildChatRequest(chosen, request.state, request.questions, config.reasoningEffort ?? defaultReasoningEffort(chosen)),
@@ -116,7 +124,8 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
   }
 
   async function structured(request: DecideRequest, schema: Record<string, unknown>, options: { signal?: AbortSignal; timeoutMs?: number }) {
-    const chosen = resolveModel(request.model);
+    // The Decisions endpoint only picks among options; a free-form schema answer goes to chat completions.
+    const chosen = provider === "decisions" && !request.model ? DEFAULT_JEV_MODEL : resolveModel(request.model);
     const effort = config.reasoningEffort ?? defaultReasoningEffort(chosen);
     const completion = await complete(
       {
@@ -156,7 +165,7 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
         latencyMs: Date.now() - started,
       };
     }
-    if (provider === "jev") {
+    if (provider === "jev" || provider === "decisions") {
       const question: JevQuestion = criteria
         ? { type: "choice", criteria, instructions: request.question }
         : { type: "noul", instructions: request.question };
