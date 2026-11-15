@@ -4,14 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import type { UserPrincipal } from "@marshal/agent-runtime-org";
+import type { RoomKindSchema, UserPrincipal } from "@marshal/agent-runtime-org";
 import { createInMemoryRoomsProvider } from "@marshal/agent-runtime-org/testing";
 
 import { connectOrgRooms, type OrgRoomsConnection } from "../src/org/rooms/index.js";
 
 const ADA: UserPrincipal = "user:ada@zyg.com";
 const BOB: UserPrincipal = "user:bob@zyg.com";
-const KINDS = [{ identity: "@test/board", kind: "board", schemaVersion: 1, records: { card: { fields: { title: "value", n: "value" } } } }];
+const KINDS: (RoomKindSchema & { identity: string })[] = [{ identity: "@test/board", kind: "board", schemaVersion: 1, records: { card: { fields: { title: "value", n: "value" } } } }];
 
 async function waitFor<T>(read: () => T | undefined | false, what: string, ms = 5000): Promise<T> {
   const until = Date.now() + ms;
