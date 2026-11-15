@@ -1,7 +1,7 @@
 // electron/backend/types.ts
 
 import type { ModelInfo, PermissionKind, SessionSandboxConfig, ContextTier, MessageToolCall, ReasoningEffort, RuntimeSubagentUsage } from "../contract/host-types";
-import type { AutomationCreateInput, AutomationData, AutomationRunData, BackendOrigin, ConditionStatusRecord, CustomMcpServer, GatewayAuthIdentity, GatewayAuthState, HeartbeatControllableMap, HeartbeatSettings, HeartbeatSettingsEnvelope, HeartbeatStatus, HeartbeatStatusEnvelope, IpcEventMap, IpcHandler, IpcInvokeMap, MSettings, McpServerInfo, PermissionsConfig, PermissionsEnvelope, SessionHydrationEvent, SessionMessage, SessionMetadata, SessionRepositoryAgent, SessionSource, StoredSession, WorkspaceConfigPort, BackendCapabilities, SessionRuntimeAgentRole, NormalizedPermissionRequest, IApprovalBroker, IBackgroundToolInvocationManager, ICommandClassifier, IPermissionPolicy, ISelfToolDeps } from "../../host/engine-host-types";
+import type { AutomationCreateInput, AutomationData, AutomationRunData, BackendOrigin, ConditionStatusRecord, CustomMcpServer, GatewayAuthIdentity, GatewayAuthState, HeartbeatControllableMap, HeartbeatSettings, HeartbeatSettingsEnvelope, HeartbeatStatus, HeartbeatStatusEnvelope, IpcEventMap, IpcHandler, IpcInvokeMap, MSettings, McpServerInfo, PermissionsConfig, PermissionsEnvelope, SessionHydrationEvent, SessionMessage, SessionMetadata, SessionRepositoryAgent, SessionSource, StoredSession, WorkspaceConfigPort, BackendCapabilities, SessionRuntimeAgentRole, IApprovalBroker, IBackgroundToolInvocationManager, ICommandClassifier, IPermissionPolicy, ISelfToolDeps } from "../../host/engine-host-types";
 import { normalizeRuntimeId, resolveSessionRuntimeId } from "../common/runtime-config";
 import type { RuntimeClientFactory, RuntimeSendOptions } from "./runtime-contract";
 
@@ -442,36 +442,16 @@ export interface InferOpts {
 
 // ── Approval ────────────────────────────────────────────────────────────
 
-
-/**
- * A fully-typed permission request: the normalized discriminated union plus
- * identity fields.
- */
-export type ApprovalRequest = NormalizedPermissionRequest & {
-  id: string;
-  sessionId: string;
-  /** Set by the local approval adapter / permission-card-manager after construction. */
-  approvalPattern?: string;
-};
-
-/** Marshal-owned approval vocabulary; each backend translates at its own boundary. */
-export type ApprovalDecision = "approved" | "denied-by-rules" | "denied-interactively-by-user";
-
-/**
- * A policy/security hard-deny that carries an actionable, model-facing reason.
- * The CopilotBackend translates this to the SDK's `reject` result with
- * `feedback`, so the model sees WHY it was blocked (and that it should not
- * retry/work around it) instead of the generic "could not request permission
- * from user" message reserved for genuine no-approver situations.
- */
-export type PolicyDenyWithFeedback = {
-  kind: "denied-by-policy-with-feedback";
-  feedback: string;
-};
-
-export type ApprovalResult = ApprovalDecision | PolicyDenyWithFeedback;
-
-export type ApprovalCallback = (request: ApprovalRequest) => Promise<ApprovalResult>;
+// The approval vocabulary is the permission engine's (packages/permissions), reached through the host
+// binding so the path is right in both repositories.
+export type {
+  ApprovalCallback,
+  ApprovalDecision,
+  ApprovalRequest,
+  ApprovalResult,
+  PolicyDenyWithFeedback,
+} from "../../host/engine-host-types";
+import type { ApprovalCallback, ApprovalDecision, ApprovalRequest, ApprovalResult } from "../../host/engine-host-types";
 
 /**
  * Dependencies passed to `IToolBackend.attachApprovalRouter`. The backend

@@ -5,6 +5,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { RuntimeTool } from "../src/backend/runtime-contract";
 
+// The permission engine is a package of this repository: these types are its own.
+export type {
+  ApprovalCallback,
+  ApprovalDecision,
+  ApprovalRequest,
+  ApprovalResult,
+  IPermissionPolicy,
+  PolicyDenyWithFeedback,
+} from "../../permissions/src/policy/approval-contract";
+export type { CommandClassification } from "../../permissions/src/policy/permission-classification-contracts";
+export type { PolicyEvaluation } from "../../permissions/src/policy/permission-policy";
+export type { NormalizedPermissionRequest } from "../../permissions/src/policy/permission-request-types";
+
 type HostShape = any;
 type HostFunction = (...args: any[]) => any;
 
@@ -17,7 +30,6 @@ export type AutomationData = HostShape;
 export type AutomationRunData = HostShape;
 export type BackendCapabilities = HostShape;
 export type BackendOrigin = HostShape;
-export type CommandClassification = HostShape;
 export type ConditionStatusRecord = HostShape;
 export type CustomMcpServer = HostShape;
 export type GatewayAuthIdentity = HostShape;
@@ -30,7 +42,6 @@ export type HeartbeatStatusEnvelope = HostShape;
 export type IApprovalBroker = HostShape;
 export type IBackgroundToolInvocationManager = HostShape;
 export type ICommandClassifier = HostShape;
-export type IPermissionPolicy = HostShape;
 export type ISelfToolDeps = HostShape;
 export type IpcEventMap = HostShape;
 export type IpcHandler<_Channel = unknown> = HostShape;
@@ -39,11 +50,9 @@ export type MSettings = HostShape;
 export type MainSessionWorkspaceBinding = HostShape;
 export type MarshalPromptFiles = HostShape;
 export type McpServerInfo = HostShape;
-export type NormalizedPermissionRequest = HostShape;
 export type PermissionsConfig = HostShape;
 export type PermissionsControllableMap = HostShape;
 export type PermissionsEnvelope = HostShape;
-export type PolicyEvaluation = HostShape;
 export type RepositoryAgentIdentity = HostShape;
 export type SessionHydrationEvent = HostShape;
 export type SessionMessage = HostShape;
