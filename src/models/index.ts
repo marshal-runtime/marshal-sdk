@@ -1,6 +1,7 @@
 import { RUNTIME_PROTOCOL_VERSION, type CapabilityProvider } from "@marshal/runtime";
 import { googleAccessTokenProvider, modelCredential, type ModelEnv } from "./credentials.js";
-import { createDecideService, type DecideConfig, type DecideService } from "./decide.js";
+import { createDecideService, type DecideConfig, type DecideProviderName, type DecideService } from "./decide.js";
+import { createOpenAiTranscriber, type OpenAiTranscribeConfig, type OpenAiTranscriber } from "./openai-transcribe.js";
 import { createEmbedService, type EmbedConfig, type EmbedDeps, type EmbedService } from "./embed.js";
 import { configFromEnv, createSpeech, type Speech, type SpeechConfig } from "./speech/index.js";
 import type { SynthesizeResult, TranscribeResult } from "./speech/types.js";
@@ -8,7 +9,9 @@ import { adcTokenProvider } from "./speech/http.js";
 import type { JevFetch } from "./jev/transport.js";
 
 export { modelCredential, googleAccessTokenProvider } from "./credentials.js";
-export { createDecideService, type DecideConfig, type DecideRequest, type DecideResult, type DecideService } from "./decide.js";
+export { createOpenAiTranscriber, type OpenAiTranscribeConfig, type OpenAiTranscriber } from "./openai-transcribe.js";
+export { createDecisionsClient, DEFAULT_DECISIONS_MODEL } from "./openai-decisions.js";
+export { createDecideService, type DecideConfig, type DecideProviderName, type DecideRequest, type DecideResult, type DecideService } from "./decide.js";
 export { createEmbedService, EmbedError, formatForGemini, type EmbedConfig, type EmbedRequest, type EmbedResult, type EmbedService, type LocalEmbedder } from "./embed.js";
 export { createSpeech, configFromEnv as speechConfigFromEnv, type Speech, type SpeechConfig } from "./speech/index.js";
 export type { JevAskRequest, JevAskResult, JevQuestion, JevAnswer } from "./jev/api.js";
@@ -19,14 +22,21 @@ export interface ModelsConfig {
   readonly embed?: EmbedConfig;
   /** Marley's speech settings (see speech/config.ts); unset fields come from the SPEECH_* / ELEVENLABS_* variables. */
   readonly speech?: Omit<SpeechConfig, "fetch">;
+  /** Speech to text: `speech` (Marley's providers, default) or `openai` (gpt-4o-transcribe, OPENAI_API_KEY). */
+  readonly transcribe?: OpenAiTranscribeConfig & { readonly provider?: "speech" | "openai" };
 }
 
 export interface ModelServices {
   readonly decide: DecideService;
+  /** The decide service of another provider (`jev`, `decisions`, `openai`) on the same key, for a per-call override. */
+  decideFor(provider?: DecideProviderName): DecideService;
+  /** OpenAI speech-to-text (`gpt-4o-transcribe`), used when `transcribe.provider` is `openai` or a call asks for it. */
+  readonly transcribeOpenAi: OpenAiTranscriber;
+  readonly transcribeProvider: "speech" | "openai";
   readonly embed: EmbedService;
   /** Built on first use, so a host without speech settings or Google credentials pays nothing. */
   speech(): Speech;
-  describe(): { decide: { provider: string; model: string }; embed: { provider: string; model: string }; speech: { tts: string; stt: string } };
+  describe(): { decide: { provider: string; model: string }; embed: { provider: string; model: string }; speech: { tts: string; stt: string }; transcribe: string };
   dispose(): Promise<void>;
 }
 
@@ -37,7 +47,20 @@ export interface ModelServicesDeps extends Omit<EmbedDeps, "fetch"> {
 
 export function createModelServices(config: ModelsConfig = {}, deps: ModelServicesDeps = {}): ModelServices {
   const env = deps.env ?? process.env;
-  const decide = createDecideService(config.decide, { ...(deps.fetch ? { fetch: deps.fetch as JevFetch } : {}), env });
+  const decideDeps = { ...(deps.fetch ? { fetch: deps.fetch as JevFetch } : {}), env };
+  const decide = createDecideService(config.decide, decideDeps);
+  const decideByProvider = new Map<DecideProviderName, DecideService>([[decide.provider, decide]]);
+  const decideFor = (provider?: DecideProviderName) => {
+    if (!provider) return decide;
+    let service = decideByProvider.get(provider);
+    if (!service) {
+      // Another provider on the same key and endpoint; the configured model only carries over within one provider.
+      service = createDecideService({ ...config.decide, provider, ...(config.decide?.provider === provider ? {} : { model: undefined }) }, decideDeps);
+      decideByProvider.set(provider, service);
+    }
+    return service;
+  };
+  const transcribeOpenAi = createOpenAiTranscriber({ ...config.transcribe, fetch: deps.fetch ?? ((url, init) => fetch(url, init)), env });
   const googleToken = deps.googleToken ?? googleAccessTokenProvider(env);
   const embed = createEmbedService(config.embed, { ...deps, env, googleToken });
   let speech: Speech | undefined;
@@ -56,6 +79,9 @@ export function createModelServices(config: ModelsConfig = {}, deps: ModelServic
   };
   return {
     decide,
+    decideFor,
+    transcribeOpenAi,
+    transcribeProvider: config.transcribe?.provider ?? "speech",
     embed,
     speech: speechService,
     describe: () => {
@@ -64,6 +90,7 @@ export function createModelServices(config: ModelsConfig = {}, deps: ModelServic
         decide: { provider: decide.provider, model: decide.model },
         embed: { provider: embed.provider, model: embed.model },
         speech: { tts: providers.tts, stt: providers.stt },
+        transcribe: config.transcribe?.provider === "openai" ? `openai:${transcribeOpenAi.model}` : providers.stt,
       };
     },
     dispose: () => embed.dispose(),
@@ -95,6 +122,7 @@ const OPERATIONS: Record<string, { title: string; description: string; risk: "lo
         questions: { type: "object" },
         state: {},
         model: { type: "string" },
+        provider: { enum: ["jev", "decisions", "openai"] },
       },
     },
     output: result({
@@ -144,9 +172,16 @@ const OPERATIONS: Record<string, { title: string; description: string; risk: "lo
     input: {
       type: "object",
       required: ["mimeType"],
-      properties: { audioBase64: { type: "string" }, uri: { type: "string" }, mimeType: { type: "string" }, languageHints: { type: "array", items: { type: "string" } } },
+      properties: {
+        audioBase64: { type: "string" },
+        uri: { type: "string" },
+        mimeType: { type: "string" },
+        languageHints: { type: "array", items: { type: "string" } },
+        prompt: { type: "string", maxLength: 2000 },
+        provider: { enum: ["speech", "openai"] },
+      },
     },
-    output: result({ text: { type: "string" }, language: { type: "string" }, durationSec: { type: "number" }, provider: { type: "string" } }),
+    output: result({ text: { type: "string" }, language: { type: "string" }, durationSec: { type: "number" }, provider: { type: "string" }, model: { type: "string" }, latencyMs: { type: "number" } }),
   },
 };
 
@@ -180,11 +215,12 @@ export function createModelsProvider(models: ModelServices): CapabilityProvider 
       try {
         switch (name) {
           case "marshal.models.decide": {
+            const decideService = models.decideFor(input.provider);
             if (input.questions && typeof input.questions === "object") {
-              const judged = await models.decide.judge({ state: input.state ?? input.context ?? null, questions: input.questions, ...(input.model ? { model: input.model } : {}) });
-              return { output: { success: true, answers: judged.answers, provider: models.decide.provider, model: judged.model, usage: judged.usage, latencyMs: judged.latencyMs } };
+              const judged = await decideService.judge({ state: input.state ?? input.context ?? null, questions: input.questions, ...(input.model ? { model: input.model } : {}) });
+              return { output: { success: true, answers: judged.answers, provider: decideService.provider, model: judged.model, usage: judged.usage, latencyMs: judged.latencyMs } };
             }
-            const decided = await models.decide.decide({
+            const decided = await decideService.decide({
               question: String(input.question ?? ""),
               ...(input.options ? { options: input.options } : {}),
               ...(input.context !== undefined ? { context: input.context } : {}),
@@ -207,6 +243,15 @@ export function createModelsProvider(models: ModelServices): CapabilityProvider 
             return { output: { success: true, audioBase64: spoken.audio.toString("base64"), mimeType: spoken.mimeType, durationSec: spoken.durationSec, provider: spoken.provider } };
           }
           case "marshal.models.transcribe": {
+            if ((input.provider ?? models.transcribeProvider) === "openai") {
+              const heard = await models.transcribeOpenAi.transcribe({
+                audio: Buffer.from(String(input.audioBase64 ?? ""), "base64"),
+                mimeType: String(input.mimeType),
+                ...(Array.isArray(input.languageHints) && input.languageHints[0] ? { language: String(input.languageHints[0]) } : {}),
+                ...(typeof input.prompt === "string" ? { prompt: input.prompt } : {}),
+              });
+              return { output: { success: true, ...heard } };
+            }
             const audio = typeof input.uri === "string" ? input.uri : Buffer.from(String(input.audioBase64 ?? ""), "base64");
             const heard: TranscribeResult = await models.speech().transcribe({
               audio,

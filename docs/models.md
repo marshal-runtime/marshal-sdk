@@ -4,9 +4,9 @@ Every SDK host has native model services alongside its chat agent. They are part
 
 | Service | What it does | Providers (default first) |
 | --- | --- | --- |
-| decide | Answers a question from a context: picks one of the options (with probabilities), answers yes/no, or fills a JSON schema | `jev`, `openai` |
+| decide | Answers a question from a context: picks one of the options (with probabilities), answers yes/no, or fills a JSON schema | `jev`, `decisions` (OpenAI Decisions API), `openai` |
 | embed | Turns texts into L2-normalized vectors (`document` or `query` task) | `gemini`, `local` |
-| speech | Synthesizes text as a mono Ogg Opus voice note, and transcribes audio | `google` (Chirp 3 STT, Gemini TTS), `elevenlabs` (scribe_v2, eleven_v3) |
+| speech | Synthesizes text as a mono Ogg Opus voice note, and transcribes audio | `google` (Chirp 3 STT, Gemini TTS), `elevenlabs` (scribe_v2, eleven_v3); transcribe also `openai` (gpt-4o-transcribe) |
 
 You can reach them in two ways:
 
@@ -41,8 +41,9 @@ await host.invoke("marshal.models.embed", { texts: ["refund policy"], task: "que
 The same object can be passed as `createMarshalHost({ models })`; an explicit option wins over the manifest.
 
 - **decide:**
-  - `provider` is `jev` or `openai`.
-  - `model` defaults to `gpt-5-mini`.
+  - `provider` is `jev`, `decisions` or `openai`. A call to `marshal.models.decide` can pick another one with `provider`.
+  - `model` defaults to `gpt-5-mini` (`gpt-6-luna` for `decisions`).
+  - `decisions` calls OpenAI's Decisions API (`POST /v1/decisions`), the endpoint Page Studio's edit router, zyg-agents' search judge and the channel gateway use. It answers named choice questions with a probability per option. Jev's contract maps onto it: `choice` and `score` become choice questions, `noul` a `true`/`false` choice. A `schema` question falls back to chat completions on `gpt-5-mini`.
   - `reasoningEffort` is optional.
   - `baseUrl` points at any OpenAI-compatible endpoint; default `https://api.openai.com`.
   - `keyEnv` defaults to `OPENAI_API_KEY`.
@@ -57,6 +58,7 @@ The same object can be passed as `createMarshalHost({ models })`; an explicit op
   - `concurrency` defaults to 8.
   - Texts get the same task wording as Zygstinct's embedding proxy, so vectors match the ones it stores.
   - `local` runs the on-device mxbai-embed-xsmall model through `@quillstone/embedding-runtime`. That package and its transformers.js / onnxruntime peers must be installed next to the SDK; without them the call fails with code `not-installed`. Options for it go in `local`.
+- **transcribe:** `{provider: "openai"}` sends `marshal.models.transcribe` to OpenAI (`gpt-4o-transcribe`, `OPENAI_API_KEY`), as Page Studio's voice dictation does; `model`, `baseUrl`, `keyEnv` are optional. A call can ask for it with `provider: "openai"` and pass a vocabulary `prompt`. Default `speech` uses the speech providers below.
 - **speech:** Marley's speech settings (`ttsProvider`, `sttProvider`, `google: {...}`, `elevenlabs: {...}`, limits). Any field left unset is read from the same `SPEECH_*` / `ELEVENLABS_*` variables Marley reads (`speechConfigFromEnv`). The speech service is built on first use, so a host that never speaks pays nothing.
 
 ## Credentials
@@ -65,7 +67,7 @@ Keys are read from the host's environment (`createMarshalHost({ env })`, else `p
 
 | Key | Used by |
 | --- | --- |
-| `OPENAI_API_KEY` | decide |
+| `OPENAI_API_KEY` | decide, OpenAI transcribe |
 | `GEMINI_API_KEY` | embed with an API key |
 | `ELEVENLABS_API_KEY` | ElevenLabs speech |
 
@@ -85,5 +87,5 @@ Google calls (Vertex embeddings, Google speech) need a token. `googleAccessToken
 
 ## Not here yet
 
-- Jev on TypeSafe's native API: both providers use OpenAI-compatible chat completions, as the extension does today.
+- Jev on TypeSafe's native API: `jev` and `openai` use OpenAI-compatible chat completions, as the extension does today; `decisions` uses OpenAI's Decisions API.
 - Video and images.
