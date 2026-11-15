@@ -212,3 +212,15 @@ export {
   type PromptMemoryEntry,
   type SessionPromptContext,
 } from "./prompt.js";
+export {
+  createMarshalPermissions,
+  createMemoryPermissionSettings,
+  DEFAULT_POLICY_PERMISSIONS,
+  PermissionPolicy,
+  type MarshalPermissions,
+  type MarshalPermissionsOptions,
+  type PermissionApprovalPort,
+  type PermissionPrompt,
+  type PermissionPromptResult,
+  type PermissionsConfig,
+} from "./permissions.js";

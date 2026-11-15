@@ -1,10 +1,15 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023", "DOM"],
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
@@ -12,6 +17,15 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "test", "packages/providers/src"],
-  "exclude": ["packages/providers/src/**/*.test.ts", "packages/providers/src/testing"]
+  "include": [
+    "src",
+    "test",
+    "packages/providers/src",
+    "packages/permissions/src",
+    "packages/permissions/host-deps.ts"
+  ],
+  "exclude": [
+    "packages/providers/src/**/*.test.ts",
+    "packages/providers/src/testing"
+  ]
 }
