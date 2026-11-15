@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import type { MessageSender } from "./session-messages.js";
+
 export type SessionState = "running" | "idle" | "failed";
 
 export interface SessionUsage {
@@ -38,6 +40,8 @@ export interface SessionRecord {
   reasoningEffort?: string;
   native: NativeSessionRef;
   parentId?: string;
+  /** A lane: the session that started it. A lane has no parent; nothing reports back to its launcher on its own. */
+  launchedBy?: string;
   runId: string;
   host: { id: string; kind: string };
   workspace?: string;
@@ -53,6 +57,8 @@ export interface TranscriptMessage {
   content: string;
   timestamp: string;
   error?: boolean;
+  /** Who sent a user-role message that did not come from the session's own launcher call. */
+  from?: MessageSender;
 }
 
 export interface SessionFilter {
@@ -75,6 +81,7 @@ export interface NewSession {
   reasoningEffort?: string;
   native: NativeSessionRef;
   parentId?: string;
+  launchedBy?: string;
   workspace?: string;
   labels?: Record<string, string>;
 }
@@ -102,7 +109,7 @@ export class FileSessionStore {
 
   constructor(
     readonly root: string,
-    private readonly origin: { runId: string; host: { id: string; kind: string } },
+    readonly origin: { runId: string; host: { id: string; kind: string } },
   ) {
     fs.mkdirSync(root, { recursive: true });
     for (const record of readIndex(root)) this.records.set(record.id, record);
@@ -123,6 +130,7 @@ export class FileSessionStore {
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       native: input.native,
       ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(input.launchedBy ? { launchedBy: input.launchedBy } : {}),
       runId: this.origin.runId,
       host: this.origin.host,
       ...(input.workspace ? { workspace: input.workspace } : {}),

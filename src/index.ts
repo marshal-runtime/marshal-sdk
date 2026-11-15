@@ -7,7 +7,17 @@ export {
   type AgentTranscript,
   type QueryFn,
 } from "./agent-port.js";
-export { createAgentProvider } from "./agent-provider.js";
+export { callerSessionId, createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
+export {
+  isLocalAddress,
+  senderLine,
+  type DeliveryMode,
+  type DeliveryResult,
+  type MessageSender,
+  type SessionAddress,
+  type SessionEnvelope,
+  type SessionTransport,
+} from "./session-messages.js";
 export {
   claudeNativePath,
   publishToOrg,

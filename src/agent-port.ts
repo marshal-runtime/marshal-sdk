@@ -1,6 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { randomUUID } from "node:crypto";
+
+import {
+  isLocalAddress,
+  senderLine,
+  type DeliveryMode,
+  type DeliveryResult,
+  type MessageSender,
+  type SessionEnvelope,
+  type SessionTransport,
+} from "./session-messages.js";
 import type { FileSessionStore, SessionRecord, TranscriptMessage } from "./session-store.js";
 
 /** The slice of the Claude Agent SDK's `query` this port relies on; tests pass a fake. */
@@ -30,6 +41,10 @@ export interface AgentLaunchRequest {
   systemPrompt?: string;
   attachments?: readonly string[];
   parentId?: string;
+  /** Starts a lane: a top-level session (no parent) that records the session which launched it. */
+  launchedBy?: string;
+  /** Who the task comes from, recorded on the first transcript message. */
+  from?: MessageSender;
   labels?: Record<string, string>;
 }
 
@@ -60,9 +75,19 @@ export interface AgentPortOptions {
   log?: (line: string) => void;
 }
 
+interface QueuedMessage {
+  id: string;
+  /** The text the session reads (with the sender line when it came from someone else). */
+  text: string;
+  from?: MessageSender;
+  attachments: readonly string[];
+  /** Called with the turn's answer, or undefined when the message was dropped, interrupted or failed. */
+  waiters: ((reply: string | undefined) => void)[];
+}
+
 interface LiveAgent {
   id: string;
-  queue: string[];
+  queue: QueuedMessage[];
   abort?: AbortController;
   running: boolean;
   lastResult?: string;
@@ -88,8 +113,23 @@ const MAX_TRANSCRIPT_LIMIT = 200;
 export class ClaudeAgentPort {
   private readonly live = new Map<string, LiveAgent>();
   private readonly launches = new Map<string, string>();
+  private readonly transports = new Map<string, SessionTransport>();
 
   constructor(private readonly options: AgentPortOptions) {}
+
+  /** This host's id in session addresses. */
+  get hostId(): string {
+    return this.options.store.origin.host.id;
+  }
+
+  /** Reach the sessions of another host (the link registers one per connected host). Returns the unregister call. */
+  addTransport(transport: SessionTransport): () => void {
+    if (transport.hostId === this.hostId) throw new Error(`${transport.hostId} is this host; its sessions need no transport.`);
+    this.transports.set(transport.hostId, transport);
+    return () => {
+      if (this.transports.get(transport.hostId) === transport) this.transports.delete(transport.hostId);
+    };
+  }
 
   launch(request: AgentLaunchRequest): AgentSummary {
     const existing = this.launches.get(request.idempotencyKey);
@@ -105,6 +145,7 @@ export class ClaudeAgentPort {
         ...(this.options.env.CLAUDE_CONFIG_DIR ? { configDir: this.options.env.CLAUDE_CONFIG_DIR } : {}),
       },
       ...(request.parentId ? { parentId: request.parentId } : {}),
+      ...(request.launchedBy ? { launchedBy: request.launchedBy } : {}),
       ...(this.options.workspaceName ? { workspace: this.options.workspaceName } : {}),
       labels: request.labels,
     });
@@ -117,22 +158,95 @@ export class ClaudeAgentPort {
     };
     this.live.set(session.id, agent);
     this.launches.set(request.idempotencyKey, session.id);
-    this.start(agent, request.task, request.attachments ?? []);
+    this.start(agent, {
+      id: randomUUID(),
+      text: request.task,
+      ...(request.from ? { from: request.from } : {}),
+      attachments: request.attachments ?? [],
+      waiters: [],
+    });
     return this.summary(session.id);
   }
 
-  send(agentId: string, message: string, deliveryMode: "queue" | "interrupt" = "queue"): AgentSummary {
+  /** A message from the session's own caller (an extension, the host): no sender line. */
+  send(agentId: string, message: string, deliveryMode: DeliveryMode = "queue", from?: MessageSender): AgentSummary {
     const agent = this.live.get(agentId) ?? this.adopt(agentId);
-    if (!agent.running) {
-      this.options.store.update(agentId, { state: "running" });
-      this.start(agent, message, []);
-    } else if (deliveryMode === "interrupt") {
-      agent.queue.unshift(message);
-      agent.abort?.abort();
-    } else {
-      agent.queue.push(message);
-    }
+    this.enqueue(agent, { id: randomUUID(), text: message, ...(from ? { from } : {}), attachments: [], waiters: [] }, deliveryMode);
     return this.summary(agentId);
+  }
+
+  /**
+   * Delivers a message from another session, a person or a host. A session on this host gets it with the sender line
+   * the desktop uses ("Message from session <name> (<id>):") and `from` on its transcript message; a session on another
+   * host goes through that host's transport.
+   */
+  async deliver(envelope: SessionEnvelope): Promise<DeliveryResult> {
+    const refused = (error: string): DeliveryResult => ({ success: false, accepted: false, messageId: envelope.messageId, error });
+    if (!envelope.body.trim()) return refused("message is required");
+    if (!isLocalAddress(envelope.to, this.hostId)) {
+      const transport = this.transports.get(envelope.to.host!);
+      return transport ? transport.deliver(envelope) : refused(`No route to host ${envelope.to.host}.`);
+    }
+    const targetId = envelope.to.sessionId;
+    if (!this.options.store.get(targetId)) return refused("Session not found");
+    const from = envelope.from;
+    if (from.kind === "session" && from.sessionId === targetId && isLocalAddress({ host: from.host, sessionId: targetId }, this.hostId)) {
+      return refused("A session cannot message itself");
+    }
+    const agent = this.live.get(targetId) ?? this.adopt(targetId);
+    const replacedMessageIds: string[] = [];
+    if (envelope.replaceQueued) {
+      const sender = senderKey(from);
+      for (const queued of [...agent.queue]) {
+        if (queued.from && senderKey(queued.from) === sender) {
+          agent.queue.splice(agent.queue.indexOf(queued), 1);
+          replacedMessageIds.push(queued.id);
+          for (const waiter of queued.waiters) waiter(undefined);
+        }
+      }
+    }
+    const item: QueuedMessage = {
+      id: envelope.messageId,
+      text: `${senderLine(from)}\n\n${envelope.body}`,
+      from,
+      attachments: [],
+      waiters: [],
+    };
+    const reply = envelope.waitForResponse ? new Promise<string | undefined>((resolve) => item.waiters.push(resolve)) : undefined;
+    const deliveryState = this.enqueue(agent, item, envelope.deliveryMode);
+    const result: DeliveryResult = {
+      success: true,
+      accepted: true,
+      messageId: envelope.messageId,
+      deliveryState,
+      ...(replacedMessageIds.length ? { replacedMessageIds } : {}),
+    };
+    if (!reply) return result;
+    let timer: NodeJS.Timeout | undefined;
+    const answer = await Promise.race([
+      reply.then((text) => ({ text })),
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), envelope.timeoutMs ?? 300_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (answer === "timeout") return { ...result, status: "timeout" };
+    return answer.text === undefined ? result : { ...result, response: answer.text };
+  }
+
+  private enqueue(agent: LiveAgent, item: QueuedMessage, deliveryMode: DeliveryMode): "queued" | "started" {
+    if (!agent.running) {
+      this.options.store.update(agent.id, { state: "running" });
+      this.start(agent, item);
+      return "started";
+    }
+    if (deliveryMode === "interrupt") {
+      agent.queue.unshift(item);
+      agent.abort?.abort();
+      return "started";
+    }
+    agent.queue.push(item);
+    return "queued";
   }
 
   transcript(agentId: string, limit = 20): AgentTranscript {
@@ -151,7 +265,7 @@ export class ClaudeAgentPort {
 
   cancel(agentId: string): AgentSummary {
     const agent = this.agent(agentId);
-    agent.queue.length = 0;
+    dropQueue(agent);
     agent.abort?.abort();
     return this.summary(agentId);
   }
@@ -182,31 +296,35 @@ export class ClaudeAgentPort {
   /** Stops every session; resolves when their backends have exited. */
   async dispose(): Promise<void> {
     for (const agent of this.live.values()) {
-      agent.queue.length = 0;
+      dropQueue(agent);
       agent.abort?.abort();
     }
     await Promise.allSettled([...this.live.values()].map((agent) => agent.idle));
   }
 
-  private start(agent: LiveAgent, message: string, attachments: readonly string[]): void {
+  private start(agent: LiveAgent, first: QueuedMessage): void {
     agent.running = true;
-    agent.idle = this.drain(agent, message, attachments).catch((error: unknown) => {
+    agent.idle = this.drain(agent, first).catch((error: unknown) => {
       this.options.log?.(`agent ${agent.id} stopped: ${errorText(error)}`);
     });
   }
 
   /** Runs the given message and then every queued one; the session reads as running until the queue is empty. */
-  private async drain(agent: LiveAgent, first: string, attachments: readonly string[]): Promise<void> {
-    let message: string | undefined = first;
-    let files = attachments;
+  private async drain(agent: LiveAgent, first: QueuedMessage): Promise<void> {
+    let item: QueuedMessage | undefined = first;
     try {
-      while (message !== undefined) {
-        await this.turn(agent, message, files);
-        files = [];
-        message = agent.queue.shift();
+      while (item !== undefined) {
+        let reply: string | undefined;
+        try {
+          reply = await this.turn(agent, item.text, item.attachments, item.from);
+        } finally {
+          for (const waiter of item.waiters) waiter(reply);
+        }
+        item = agent.queue.shift();
       }
       this.options.store.update(agent.id, { state: "idle" });
     } catch (error) {
+      dropQueue(agent);
       this.options.store.update(agent.id, { state: "failed", lastError: errorText(error) });
       throw error;
     } finally {
@@ -214,10 +332,16 @@ export class ClaudeAgentPort {
     }
   }
 
-  private async turn(agent: LiveAgent, message: string, attachments: readonly string[]): Promise<void> {
+  /** One backend turn; resolves with the answer, or undefined when the turn was cancelled. */
+  private async turn(
+    agent: LiveAgent,
+    message: string,
+    attachments: readonly string[],
+    from?: MessageSender,
+  ): Promise<string | undefined> {
     const store = this.options.store;
     const session = this.session(agent.id);
-    store.appendMessage(agent.id, { role: "user", content: message });
+    store.appendMessage(agent.id, { role: "user", content: message, ...(from ? { from } : {}) });
     const abort = new AbortController();
     agent.abort = abort;
     const systemPrompt = agent.systemPrompt ?? this.options.systemPrompt(session);
@@ -263,7 +387,7 @@ export class ClaudeAgentPort {
     } catch (error) {
       if (abort.signal.aborted) {
         store.appendMessage(agent.id, { role: "system", content: "Turn cancelled." });
-        return;
+        return undefined;
       }
       store.appendMessage(agent.id, { role: "assistant", content: errorText(error), error: true });
       throw error;
@@ -272,7 +396,7 @@ export class ClaudeAgentPort {
     }
     if (abort.signal.aborted) {
       store.appendMessage(agent.id, { role: "system", content: "Turn cancelled." });
-      return;
+      return undefined;
     }
     const content = failed ?? final ?? lastText;
     agent.lastResult = content;
@@ -281,6 +405,7 @@ export class ClaudeAgentPort {
       content,
       ...(failed !== undefined ? { error: true } : {}),
     });
+    return content;
   }
 
   private summary(agentId: string): AgentSummary {
@@ -323,6 +448,14 @@ export class ClaudeAgentPort {
     if (!session) throw Object.assign(new Error(`No agent ${agentId} on this host.`), { code: "not-found" });
     return session;
   }
+}
+
+function dropQueue(agent: LiveAgent): void {
+  for (const dropped of agent.queue.splice(0)) for (const waiter of dropped.waiters) waiter(undefined);
+}
+
+function senderKey(from: MessageSender): string {
+  return `${from.kind}:${from.host ?? ""}:${from.sessionId ?? from.personId ?? from.name ?? ""}`;
 }
 
 /** A plain string, or one user message with the pictures as image blocks ahead of the text. */

@@ -18,7 +18,7 @@ import { createRuntimeToolAdapter, RUNTIME_MCP_TOOLS } from "@marshal/runtime/mc
 import { z } from "zod";
 
 import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
-import { createAgentProvider } from "./agent-provider.js";
+import { createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
 import desktopPlacements from "./desktop-placements.json" with { type: "json" };
 import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type ExtensionSkill } from "./extension-skills.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
@@ -175,6 +175,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       () => createAgentProvider(agents, (id) => id !== undefined && sessions.get(id) !== undefined),
       createRuntimeBuiltinsSource({
         typescript: true,
+      () => createSessionToolsProvider(agents, sessions),
         artifacts: true,
         effects: false,
         scheduling: false,

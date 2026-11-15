@@ -241,3 +241,50 @@ extension they came from.
 
 Tests: `test/extension-skills.test.ts`, with a fixture extension carrying one skill and one reference, on the pinned
 packs.
+
+## Lanes and messages between sessions
+
+Sessions on a host talk to each other under the desktop's names (`electron/self-tools.ts`), so an agent prompted for
+the desktop calls the same capabilities here:
+
+- **`marshal.tool.startLane {task, name?, model?, reasoningEffort?}`** starts a lane. A lane is a top-level session
+  with no parent, so nothing reports back on its own. It starts with only the brief:
+  - When a session launches it, the brief opens with the desktop's lane line ("You are a new Marshal session (a lane)
+    started by session ... send it ... with marshal.tool.messageSession {sessionId: ...}"), then the task.
+  - The record carries `launchedBy`, and the brief's transcript message carries `from`.
+  - Desktop-only fields (workspace, worktree, runtime, permission mode) are accepted and ignored.
+- **`marshal.tool.messageSession {sessionId, host?, message, deliveryMode?, replaceQueued?, waitForResponse?,
+  timeoutMs?}`** messages any session by id:
+  - `queue` (the default) runs the message after the target's current turn. `interrupt` stops that turn ("Turn
+    cancelled." in its transcript) and runs this message next.
+  - `replaceQueued` drops the sender's own undelivered messages. `waitForResponse` returns the target's reply to this
+    message.
+  - The target reads the desktop's sender line, "Message from session <title> (<id>):". Its transcript message
+    records `from: {kind, sessionId, name, host?}`.
+  - A session can't message itself.
+- **`marshal.tool.searchSessions {query, since?, until?, workspace?, includeSubagents?, limit?}`** searches this
+  host's store and leaves the caller out. Hits carry `parentId` and `launchedBy`. The kit's `sessions.search` also
+  covers the team's shared sessions.
+- **`marshal.tool.getSessionTranscript {sessionId, lastN?}`** returns the latest messages, each with `from` when
+  someone else sent it.
+
+`marshal.agent.launch` from a session now makes a child of it (`parentId`). Before this change the provider read the
+caller from the wrong field, so no SDK child had a parent.
+
+**Addressing for other hosts.** A target is `{host?, sessionId}`; no `host`, or this host's id, means this host.
+`src/session-messages.ts` defines:
+
+- the `SessionEnvelope`: `messageId`, `from`, `to`, `body`, `deliveryMode`, `sentAt` and the options above;
+- the `DeliveryResult`;
+- the `SessionTransport { hostId, deliver(envelope) }`.
+
+`host.agents.addTransport(transport)` routes envelopes for another host through it. A host with no transport is
+refused ("No route to host ..."). On the receiving side, `host.agents.deliver(envelope)` puts an envelope into a local
+session with the sender's `host` kept on `from`. The link implements the transport; this package does not.
+
+Tests: `test/session-messages.test.ts`:
+
+- port level: the sender line and `from`, queue and wait for the reply, interrupt, replaceQueued, the refusals, and a
+  fake transport carrying an envelope;
+- host level: sessions act through their own `marshal` MCP server. A session starts a lane, launches a child with a
+  parent, and the lane messages its launcher back; both are found and read.
