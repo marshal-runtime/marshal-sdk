@@ -81,6 +81,16 @@ export {
   type SessionState,
   type SessionUsage,
   type TranscriptMessage,
+export {
+  ConversationRoomRoute,
+  conversationRoomId,
+  parseAnswer,
+  questionText,
+  type ConversationRoomLike,
+  type ConversationRoomRecord,
+  type ConversationRoomRouteOptions,
+} from "./rooms-route.js";
+export { linkPersonRoute, readDecisions } from "./link/decisions.js";
 } from "./session-store.js";
 export { LinkClient, LinkError, type LinkClientOptions, type LinkStream } from "./link/client.js";
 export { FileRoots, type FileContent, type FileEntry } from "./link/files.js";

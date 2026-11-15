@@ -411,8 +411,9 @@ hears answers calls `sink({questionId, choice?, text?, by, route})`. Routes come
   (`{questionId, choice?, text?, by?}`) and moved to `inbox/done/`;
 - `TestPersonRoute`: keeps `sent` and has an `answer()` that plays the person.
 
-WhatsApp (Marley) and a specific Marshal instance (the link) are routes still to be written against the same
-interface. With no route, entries are recorded and the ask says that nobody has seen the question yet.
+Two Marshal routes ship as well: `link`, which a host serving the link registers by itself (docs/link.md,
+`/v1/decisions`), and `ConversationRoomRoute`, which uses the session's conversation room in the organization
+(docs/org-bridge.md). WhatsApp (Marley) is still to be written against the same interface. With no route, entries are recorded and the ask says that nobody has seen the question yet.
 
 Tests: `test/decisions.test.ts`:
 

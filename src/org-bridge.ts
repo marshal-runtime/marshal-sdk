@@ -56,6 +56,13 @@ export interface OrgBridgeOptions extends Omit<OrgPublishOptions, "client" | "st
   syncSeconds?: number;
   /** A person's display name for the sender line; default their principal without `user:`. */
   nameOf?: (principal: UserPrincipal) => string | undefined;
+  /**
+   * Offered every claimed message before it runs. A route that asked the session a question (src/rooms-route.ts)
+   * takes the message as its answer; the answer then reaches the session through the decisions desk instead.
+   */
+  answers?: {
+    takeInboxAnswer(sessionId: string, message: { author: string; text: string }): Promise<{ accepted: boolean; error?: string } | undefined>;
+  };
   log?: (line: string) => void;
 }
 
@@ -241,6 +248,8 @@ export function createOrgBridge(options: OrgBridgeOptions): OrgBridge {
   }
 
   async function runMessage(entry: OrgBridgeSession, message: OrgSessionMessage): Promise<{ text: string; error?: string }> {
+    const taken = await options.answers?.takeInboxAnswer(entry.sessionId, { author: message.author, text: message.text });
+    if (taken?.accepted) return { text: "Answer recorded; the session has it." };
     const before = store.messages(entry.sessionId).length;
     const name = options.nameOf?.(message.author) ?? message.author.replace(/^user:/, "");
     const result = await options.agents.deliver({

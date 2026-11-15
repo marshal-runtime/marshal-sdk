@@ -99,6 +99,14 @@
   .page-card { padding: 10px 12px; border-bottom: 1px solid var(--border, #8882); }
   .page-card .title { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .item.pages-row .title { color: var(--primary, var(--link, LinkText)); }
+  .item.questions-row .title { color: var(--warning-fg, var(--warning, darkorange)); }
+  .q-card { padding: 10px 12px; border-bottom: 1px solid var(--border, #8882); }
+  .q-card .title { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .q-card .options { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .q-card .options .ghost { text-align: start; display: flex; flex-direction: column; gap: 2px; }
+  .q-card .options .ghost .sub { font-size: 12px; color: var(--muted-foreground, GrayText); }
+  .q-card input { flex: 1 1 180px; min-height: 32px; padding: 6px 10px; border-radius: var(--radius, 8px); border: 1px solid var(--input, var(--border, #8886)); background: var(--card, transparent); color: inherit; }
+  .q-card.recorded .title { font-weight: 500; font-size: 13px; }
   .chip.source { border-style: dashed; }
   pre.preview { margin: 0; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
 
@@ -158,6 +166,8 @@
     files: { root: null, path: "", preview: null },
     pages: { runId: null, list: [], pageStudio: false },
     showPages: false,
+    questions: { runId: null, list: [], answers: false },
+    showQuestions: false,
   };
   let watchGeneration = 0;
 
@@ -254,6 +264,7 @@
     $("heading").textContent = view === "runs" ? "SDK sessions"
       : view === "sessions" ? (host().name || state.hostId) + " · run " + shortId(state.runId)
       : state.showPages ? "Pages · run " + shortId(state.runId)
+      : state.showQuestions ? "Questions · run " + shortId(state.runId)
       : (session && session.title) || "Session";
   }
 
@@ -355,14 +366,22 @@
         el("div", { class: "meta" }, pages.map((page) => page.title).join(" · ")),
         el("div", { class: "meta" }, "Open in Page Studio to keep editing")));
     }
+    const asked = state.questions.runId === state.runId ? state.questions.list.filter((entry) => entry.kind === "question") : [];
+    if (asked.length) {
+      const open = asked.filter((entry) => entry.status === "open");
+      items.unshift(el("button", { class: "item questions-row", type: "button", "aria-current": state.showQuestions, onclick: () => openQuestions() },
+        el("div", { class: "title" }, open.length ? "❓ " + open.length + (open.length === 1 ? " question waits" : " questions wait") + " for an answer" : "✓ " + asked.length + (asked.length === 1 ? " question" : " questions") + " answered"),
+        el("div", { class: "meta" }, (open.length ? open : asked).map((entry) => entry.text).join(" · "))));
+    }
     box.replaceChildren(...items);
   }
 
   async function loadSessions() {
     const runId = state.runId;
-    const [out, pages] = await Promise.all([
+    const [out, pages, questions] = await Promise.all([
       call("sdksessions.sessions", { hostId: state.hostId, runId }),
       call("sdksessions.pages", { hostId: state.hostId, runId }).catch(() => ({ pages: [] })),
+      call("sdksessions.questions", { hostId: state.hostId, runId }).catch(() => ({ decisions: [] })),
     ]);
     if (runId !== state.runId) return;
     state.sessions = out.sessions || [];
@@ -370,14 +389,19 @@
     const key = (entries) => entries.map((page) => page.id + "@" + page.version).join(",");
     const changed = state.pages.runId !== runId || key(state.pages.list) !== key(list);
     state.pages = { runId, list, pageStudio: !!(pages && pages.pageStudio) };
+    const entries = (questions && questions.decisions) || [];
+    const entryKey = (all) => all.map((entry) => entry.id + "@" + entry.status).join(",");
+    const questionsChanged = state.questions.runId !== runId || entryKey(state.questions.list) !== entryKey(entries) || state.questions.answers !== !!(questions && questions.answers);
+    state.questions = { runId, list: entries, answers: !!(questions && questions.answers) };
     renderSessions();
     if (state.showPages && changed) renderPages();
+    if (state.showQuestions && questionsChanged) renderQuestions();
   }
 
   async function openRun(runId, keepSession) {
     state.runId = runId;
     state.hits = null;
-    if (!keepSession) { stopWatch(); state.sessionId = null; state.detail = null; state.showPages = false; }
+    if (!keepSession) { stopWatch(); state.sessionId = null; state.detail = null; state.showPages = false; state.showQuestions = false; }
     renderRuns();
     $("sessions").replaceChildren(el("div", { class: "empty" }, "Loading…"));
     setView("sessions");
@@ -403,6 +427,7 @@
   async function openSession(sessionId) {
     stopWatch();
     state.showPages = false;
+    state.showQuestions = false;
     $("tabs").style.display = "";
     state.sessionId = sessionId;
     state.detail = null;
@@ -638,6 +663,7 @@
   function openPages() {
     stopWatch();
     state.showPages = true;
+    state.showQuestions = false;
     state.sessionId = null;
     state.detail = null;
     renderSessions();
@@ -687,7 +713,93 @@
     $("detail-body").replaceChildren(...(pages.length ? pages.map(pageCard) : [el("div", { class: "empty" }, "This run made no pages.")]));
   }
 
+  function openQuestions() {
+    stopWatch();
+    state.showQuestions = true;
+    state.showPages = false;
+    state.sessionId = null;
+    state.detail = null;
+    renderSessions();
+    setView("detail");
+    renderQuestions();
+  }
+
+  function questionCard(entry) {
+    const notice = el("div", { class: "notice", role: "status", "aria-live": "polite" });
+    const asking = el("div", { class: "meta" }, "Asked by " + (entry.sessionTitle || shortId(entry.sessionId) || "the host") + " · " + when(entry.createdAt));
+    if (entry.status === "answered" && entry.answer) {
+      const by = (entry.answer.by && (entry.answer.by.name || entry.answer.by.personId)) || "someone";
+      return el("div", { class: "q-card" },
+        el("div", { class: "title" }, entry.text), asking,
+        el("div", { class: "notice ok" }, "Answered by " + by + (entry.answer.route ? " (" + entry.answer.route + ")" : "") + ": " + entry.answer.text));
+    }
+    const answers = state.questions.answers;
+    const controls = [];
+    const send = async (payload, button) => {
+      for (const control of controls) control.disabled = true;
+      notice.className = "notice";
+      notice.textContent = "Sending your answer…";
+      try {
+        const out = await call("sdksessions.answer", { hostId: state.hostId, questionId: entry.id, ...payload });
+        notice.className = "notice " + (out && out.ok ? "ok" : "warn");
+        notice.textContent = out && out.ok ? "Answered. The session has it as a message from you." : (out && out.message) || "The answer was not taken.";
+        if (out && out.ok) setTimeout(() => loadSessions().catch(() => {}), 300);
+        else for (const control of controls) control.disabled = false;
+      } catch (error) {
+        notice.className = "notice warn";
+        notice.textContent = error.message || String(error);
+        for (const control of controls) control.disabled = false;
+      }
+    };
+    const options = (entry.options || []).map((option, index) => {
+      const button = el("button", { class: "ghost", type: "button", disabled: !answers, onclick: () => send({ choice: index }, button) },
+        el("span", {}, (index + 1) + ". " + option.title, index === entry.recommendedIndex ? el("span", { class: "chip" }, "recommended") : null),
+        option.description ? el("span", { class: "sub" }, option.description) : null);
+      controls.push(button);
+      return button;
+    });
+    const input = el("input", { type: "text", placeholder: options.length ? "Or write your own answer" : "Your answer", "aria-label": "Your answer to: " + entry.text, disabled: !answers });
+    const submit = el("button", { class: "primary", type: "button", disabled: !answers, onclick: () => input.value.trim() && send({ text: input.value.trim() }, submit) }, "Answer");
+    input.addEventListener("keydown", (event) => { if (event.key === "Enter" && input.value.trim()) send({ text: input.value.trim() }, submit); });
+    controls.push(input, submit);
+    if (!answers) {
+      notice.className = "notice warn";
+      notice.textContent = host().kind === "link" ? "This host serves a finished run; nobody is there to take the answer." : "A run in a folder on this Mac has no host running it; answer it where it runs.";
+    }
+    return el("div", { class: "q-card" },
+      el("div", { class: "title" }, entry.text), asking,
+      entry.defaultTaken ? el("div", { class: "meta" }, "Meanwhile it went with: " + entry.defaultTaken) : null,
+      options.length ? el("div", { class: "options" }, ...options) : null,
+      el("div", { class: "actions" }, input, submit),
+      notice);
+  }
+
+  function renderQuestions() {
+    $("tabs").style.display = "none";
+    $("composer").replaceChildren();
+    const h = host();
+    const list = state.questions.runId === state.runId ? state.questions.list : [];
+    const asked = list.filter((entry) => entry.kind === "question");
+    const open = asked.filter((entry) => entry.status === "open");
+    const answered = asked.filter((entry) => entry.status !== "open");
+    const recorded = list.filter((entry) => entry.kind !== "question");
+    $("detail-head").replaceChildren(el("div", { class: "detail" },
+      el("div", { class: "title" }, "Questions from run " + shortId(state.runId)),
+      el("div", { class: "live" }, h.kind === "link" ? "On " + (h.name || h.id) + "; your answer goes back over the link." : "In this run's folder on this Mac (read only)."),
+      el("div", { class: "notice" }, "The first answer wins; it reaches the asking session as a message from you.")));
+    const nodes = [
+      ...open.map(questionCard),
+      ...answered.map(questionCard),
+      recorded.length ? el("div", { class: "section" }, el("h3", {}, "Recorded by the sessions")) : null,
+      ...recorded.map((entry) => el("div", { class: "q-card recorded" },
+        el("div", { class: "title" }, el("span", { class: "chip" }, entry.kind), " ", entry.text),
+        el("div", { class: "meta" }, (entry.sessionTitle || shortId(entry.sessionId) || "the host") + " · " + when(entry.createdAt) + (entry.defaultTaken ? " · went with: " + entry.defaultTaken : "")))),
+    ].filter(Boolean);
+    $("detail-body").replaceChildren(...(nodes.length ? nodes : [el("div", { class: "empty" }, "This run asked nothing.")]));
+  }
+
   function renderDetail() {
+    if (state.showQuestions) return renderQuestions();
     if (state.showPages) return renderPages();
     $("tabs").style.display = "";
     for (const tab of document.querySelectorAll(".tab")) tab.setAttribute("aria-selected", String(tab.dataset.tab === state.tab));
@@ -794,11 +906,13 @@
       const hostId = wanted.hostId && state.hosts.some((entry) => entry.id === wanted.hostId) ? wanted.hostId : "local";
       if (["transcript", "telemetry", "files"].includes(wanted.tab)) state.tab = wanted.tab;
       const wantsPages = wanted.tab === "pages";
+      const wantsQuestions = wanted.tab === "questions";
       await openHost(hostId);
       const runId = wanted.runId || (state.runs[0] && state.runs[0].runId);
       if (runId) {
         await openRun(runId, !!wanted.sessionId);
         if (wantsPages) openPages();
+        else if (wantsQuestions) openQuestions();
         else if (wanted.sessionId) {
           await openSession(wanted.sessionId);
           if (wanted.filesRoot) {

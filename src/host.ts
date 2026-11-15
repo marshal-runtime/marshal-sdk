@@ -28,8 +28,10 @@ import { createForkToolsProvider } from "./fork-provider.js";
 import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { readPackageManifest } from "./onboarding.js";
+import { linkPersonRoute } from "./link/decisions.js";
 import { startLinkServer, type LinkServer } from "./link/server.js";
 import { createOrgBridge, type OrgBridge, type OrgBridgeOptions } from "./org-bridge.js";
+import { ConversationRoomRoute } from "./rooms-route.js";
 import { FileSessionStore, type SessionRecord } from "./session-store.js";
 
 const HARNESS_ID = "marshal-sdk";
@@ -427,7 +429,16 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   if (options.org) {
     try {
       const { start: startOrg, ...orgOptions } = options.org;
-      org = createOrgBridge({ ...orgOptions, store: sessions, agents, host: orgOptions.host ?? options.host?.id ?? HARNESS_ID, log: orgOptions.log ?? log });
+      // A room route asks in the session's room; the org inbox may carry the answer, so the bridge offers it messages.
+      const answers = orgOptions.answers ?? options.routes?.find((route): route is ConversationRoomRoute => route instanceof ConversationRoomRoute);
+      org = createOrgBridge({
+        ...orgOptions,
+        ...(answers ? { answers } : {}),
+        store: sessions,
+        agents,
+        host: orgOptions.host ?? options.host?.id ?? HARNESS_ID,
+        log: orgOptions.log ?? log,
+      });
       if (startOrg !== false) org.start();
     } catch (error) {
       await agents.dispose().catch(() => undefined);
@@ -462,10 +473,12 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       log(`link serving on ${link.url}`);
     } catch (error) {
       await agents.dispose().catch(() => undefined);
+          answer: (input) => decisions.answer({ ...input, route: "link" }),
       await runtime.dispose().catch(() => undefined);
       throw error;
     }
   }
+      await decisions.addRoute(linkPersonRoute(link.url));
 
   return {
     runId,

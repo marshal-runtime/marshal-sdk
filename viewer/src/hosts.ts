@@ -7,6 +7,8 @@ import { gzipSync } from "zlib";
 
 import { LinkClient, LinkError } from "../../src/link/client";
 import { FileRoots } from "../../src/link/files";
+import type { DecisionEntry } from "../../src/decisions";
+import { readDecisions, type DecisionFilter } from "../../src/link/decisions";
 import { PAGE_ID, PageStore, writePage, type PageManifest, type PageSummary } from "../../src/link/pages";
 import { StoreReader } from "../../src/link/store-reader";
 import { activityOf, combineTelemetry, type Activity, type EventLine, type Telemetry } from "../../src/link/telemetry";
@@ -70,6 +72,10 @@ export interface Host {
   pages(runId?: string): Promise<{ pageStudio: boolean; pages: (PageSummary & { from?: string })[] }>;
   /** A Page Studio data folder on this Mac holding the page, ready for pagestudio.page.import (pulled first for a linked host). */
   pageFolder(pageId: string, runId: string | undefined, pullRoot: string): Promise<{ dataDir: string; pageId: string; origin: string; pulled?: { pictures: number; bytes: number } }>;
+  /** Decisions, questions and gaps the host's sessions recorded; `answers`: whether this host takes answers now. */
+  decisions(filter: DecisionFilter): Promise<{ answers: boolean; decisions: DecisionEntry[] }>;
+  /** Answers an open question as this Marshal's person; the answer becomes a message from them in the asking session. */
+  answer(questionId: string, input: { choice?: number; text?: string; by: { name?: string; personId?: string } }): Promise<Row>;
   /** The envelope marshal.sessions.importNative takes, or why there is none. */
   native(sessionId: string): Promise<{ ok: true; state: Row; title: string; bytes: number } | { ok: false; reason: string; message: string }>;
 }
@@ -252,6 +258,24 @@ export function folderHost(roots: readonly string[]): Host {
       if (!best) throw new Error(`No page ${pageId} in the runs on this Mac.`);
       return { dataDir: best.dir, pageId, origin: `${best.label}${runId ? ` · run ${runId.slice(0, 8)}` : ""} (this Mac)` };
     },
+    async decisions(filter) {
+      // A run held in its own folder and in a pulled copy: one entry, the copy that knows the answer winning.
+      const byId = new Map<string, DecisionEntry>();
+      for (const store of stores()) {
+        for (const entry of readDecisions(store, filter)) {
+          const have = byId.get(entry.id);
+          if (!have || (have.status !== "answered" && entry.status === "answered")) byId.set(entry.id, entry);
+        }
+      }
+      return { answers: false, decisions: [...byId.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt)) };
+    },
+    async answer() {
+      return {
+        ok: false,
+        reason: "read-only",
+        message: "This run is a folder on this Mac with no host running it. Answer it on the host that runs it (a linked host), or with marshal.decisions.answer there.",
+      };
+    },
     async send() {
       return {
         ok: false,
@@ -382,6 +406,25 @@ export function linkedHost(config: LinkedHostConfig): Host {
     },
     async pages(runId) {
       return client.pages(runId);
+    },
+    async decisions(filter) {
+      try {
+        return await client.decisions(filter);
+      } catch (error) {
+        // A host from before the decisions endpoints: nothing to show.
+        if (error instanceof LinkError && error.status === 404) return { answers: false, decisions: [] };
+        throw error;
+      }
+    },
+    async answer(questionId, input) {
+      try {
+        return { ok: true, ...(await client.answer(questionId, input)) };
+      } catch (error) {
+        if (error instanceof LinkError && (error.code === "not-accepted" || error.code === "store-only" || error.status === 400)) {
+          return { ok: false, reason: error.code, message: error.message };
+        }
+        return { ok: false, ...linkProblem(error) };
+      }
     },
     async pageFolder(pageId, runId, pullRoot) {
       if (!PAGE_ID.test(pageId)) throw new Error("That is not a page id.");

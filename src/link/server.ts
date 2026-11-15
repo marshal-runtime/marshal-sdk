@@ -9,6 +9,7 @@ import { gzipSync } from "node:zlib";
 
 import type { SessionFilter, SessionRecord, SessionState, TranscriptMessage } from "../session-store.js";
 import { DEFAULT_MAX_FILE_BYTES, FileAccessError, FileRoots } from "./files.js";
+import { DECISION_ID, readDecisions } from "./decisions.js";
 import { PageStore } from "./pages.js";
 import { readLinesFrom, SESSION_ID, StoreReader } from "./store-reader.js";
 import { activityOf, combineTelemetry, type EventLine } from "./telemetry.js";
@@ -30,6 +31,12 @@ export interface LinkLivePort {
   invoke(capability: string, input: unknown): Promise<unknown>;
   extensions(): { identity: string; version: string }[];
   capabilities(): Promise<string[]>;
+  /** A person on the linked Marshal answers an open question (src/decisions.ts DecisionDesk.answer, route `link`). */
+  answer?(input: { questionId: string; choice?: number; text?: string; by?: { personId?: string; name?: string } }): Promise<{
+    accepted: boolean;
+    error?: string;
+    messageId?: string;
+  }>;
 }
 
 export interface LinkServerOptions {
@@ -441,6 +448,36 @@ export async function startLinkServer(options: LinkServerOptions): Promise<LinkS
       const body = await readBody(request);
       if (typeof body.capability !== "string" || !body.capability) throw new HttpError(400, "invalid-request", "capability is required.");
       return { capability: body.capability, output: await port.invoke(body.capability, body.input ?? {}) };
+    }
+    if (resource === "decisions") {
+      if (method === "GET" && !id) {
+        const filter = Object.fromEntries(["kind", "status", "runId", "sessionId"].map((key) => [key, query.get(key) ?? undefined]));
+        return { decisions: readDecisions(options.sessionsRoot, filter), answers: !!live?.answer };
+      }
+      if (!id || !DECISION_ID.test(id)) throw new HttpError(404, "not-found", "No such entry.");
+      if (method === "GET" && !action) {
+        const entry = readDecisions(options.sessionsRoot).find((candidate) => candidate.id === id);
+        if (!entry) throw new HttpError(404, "not-found", `No entry ${id} on this host.`);
+        return { decision: entry };
+      }
+      if (method === "POST" && action === "answer") {
+        const port = requireLive();
+        if (!port.answer) throw new HttpError(409, "no-decisions", "This host takes no answers.");
+        const body = await readBody(request);
+        const choice = Number.isInteger(body.choice) && body.choice >= 0 ? (body.choice as number) : undefined;
+        const text = typeof body.text === "string" ? body.text.trim().slice(0, 4000) : undefined;
+        if (choice === undefined && !text) throw new HttpError(400, "invalid-request", "An answer needs a choice or text.");
+        const name = typeof body.by?.name === "string" ? body.by.name.slice(0, 200) : undefined;
+        const personId = typeof body.by?.personId === "string" ? body.by.personId.slice(0, 200) : undefined;
+        const result = await port.answer({
+          questionId: id,
+          ...(choice !== undefined ? { choice } : {}),
+          ...(text ? { text } : {}),
+          ...(name || personId ? { by: { ...(name ? { name } : {}), ...(personId ? { personId } : {}) } } : {}),
+        });
+        if (!result.accepted) throw new HttpError(409, "not-accepted", result.error ?? "The answer was not accepted.");
+        return { questionId: id, ...result };
+      }
     }
     if (method === "GET" && resource === "pages") {
       if (!id) {

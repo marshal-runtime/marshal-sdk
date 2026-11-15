@@ -122,6 +122,12 @@ export function createExtension(context: Context) {
   };
 
   const pullRoot = () => (typeof context.configuration?.pullRoot === "string" ? context.configuration.pullRoot : PULL_ROOT);
+  /** Who answers from this Marshal: configuration.person {name, personId}, else this Mac's user name. */
+  const person = (): { name?: string; personId?: string } => {
+    const configured = (context.configuration?.person ?? {}) as Row;
+    const name = typeof configured.name === "string" && configured.name ? configured.name : os.userInfo().username;
+    return { name, ...(typeof configured.personId === "string" && configured.personId ? { personId: configured.personId } : {}) };
+  };
 
   /** Calls a Page Studio capability; ok:false with a reason when Page Studio isn't there or refused. */
   const pageStudio = async (target: string, input: Row, invocation: unknown): Promise<{ ok: true; value: Row } | { ok: false; reason: string; message: string }> => {
@@ -150,7 +156,7 @@ export function createExtension(context: Context) {
       name: "sdksessions.open",
       title: "Open the SDK sessions viewer",
       description: "Open the tab that shows hosts running marshal-sdk (local folders and linked hosts), their runs, sessions, transcripts, telemetry and files. hostId, runId, sessionId and tab preselect.",
-      input: obj({ hostId, runId: str, sessionId: str, tab: { type: "string", enum: ["transcript", "telemetry", "files", "pages"] }, filesRoot: str, filesPath: str, placement: str, roots }),
+      input: obj({ hostId, runId: str, sessionId: str, tab: { type: "string", enum: ["transcript", "telemetry", "files", "pages", "questions"] }, filesRoot: str, filesPath: str, placement: str, roots }),
       read: false,
       handler: async (input, invocation) => {
         if (!context.execute) throw new Error("This Marshal doesn't let extensions open views.");
@@ -386,6 +392,33 @@ export function createExtension(context: Context) {
       },
     },
     {
+      name: "sdksessions.questions",
+      title: "Questions and decisions of SDK sessions",
+      description:
+        "What a host's sessions asked a person (questions with their options, open or answered) and the decisions and gaps they recorded (marshal.tool.askUser / recordDecision on the host). status open lists what still waits for someone; sdksessions.answer answers one.",
+      input: obj({ hostId, runId: str, sessionId: str, kind: { type: "string", enum: ["question", "decision", "gap"] }, status: { type: "string", enum: ["open", "answered", "recorded"] }, roots }),
+      read: true,
+      handler: async (input) => {
+        const host = hostFor(input);
+        const filter = Object.fromEntries(["runId", "sessionId", "kind", "status"].filter((key) => typeof input[key] === "string" && input[key]).map((key) => [key, input[key]]));
+        return { hostId: host.summary.id, ...(await host.decisions(filter)) };
+      },
+    },
+    {
+      name: "sdksessions.answer",
+      title: "Answer an SDK session's question",
+      description:
+        "Answer an open question a session on a linked host asked: choice (0-based option) and/or text. The answer reaches the asking session as a message from you (configuration.person, else this Mac's user name). The first answer wins; ok:false with a reason when it was already answered or the host can't take answers.",
+      input: obj({ hostId, questionId: str, choice: int(0, 5), text: str, roots }, ["questionId"]),
+      read: false,
+      handler: async (input) => {
+        const choice = typeof input.choice === "number" ? input.choice : undefined;
+        const text = typeof input.text === "string" && input.text.trim() ? input.text.trim() : undefined;
+        if (choice === undefined && !text) return { ok: false, reason: "invalid", message: "Pick an answer or write one." };
+        return hostFor(input).answer(String(input.questionId), { ...(choice !== undefined ? { choice } : {}), ...(text ? { text } : {}), by: person() });
+      },
+    },
+    {
       name: "sdksessions.search",
       title: "Search SDK sessions",
       description: "Find sessions by words in their title, labels, run id or transcript, on one host or all of them.",
@@ -582,6 +615,8 @@ export const CAPABILITY_NAMES = [
   "sdksessions.search",
   "sdksessions.pages",
   "sdksessions.openInPageStudio",
+  "sdksessions.questions",
+  "sdksessions.answer",
 ];
 
 function unavailable() {

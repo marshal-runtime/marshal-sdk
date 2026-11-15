@@ -38,6 +38,23 @@ What the host remembers sits next to the session store:
 
 Restarting the host resumes from there.
 
+## Questions through the session's room
+
+A session that asks a person (`marshal.tool.askUser`, docs/kit.md) can be answered by anyone it is shared with. `ConversationRoomRoute` (src/rooms-route.ts) is a `PersonRoute`:
+
+- **The question goes into the room.** It is written into the conversation room of the session's org session (`session:msdk-<id>`) as an `assistant` message for the owner, with numbered options. Every Marshal with a role on the session shows that room.
+- **A reply in the room answers it.** A final `user` message whose `replyTo` is the question's record answers it. The writer is the one the server names (`updatedBy`), and a number or an option's title picks that option.
+- **So does the next instruction posted to the session.** The bridge offers each claimed inbox message to the route first (`answers.takeInboxAnswer`). While the session has an open question asked in its room, the message is taken as the answer, and the turn is completed with "Answer recorded". After that, messages run as usual.
+
+The answer reaches the session through `DecisionDesk.answer`, as a message from that person. A host created with both `org` and a `ConversationRoomRoute` in `routes` wires the route into the bridge.
+
+The route writes through the runtime's rooms API (`RoomsApi.open(roomId)`; runtime `packages/agent-runtime-org/src/rooms`, on runtime main since #53–#55, not in the pinned packs). It needs only `query`, `set` and `subscribe` of a room, so `openRoom` is the host's to supply. On a host with the rooms service bound, that is `rooms.open(roomId)`. Without rooms, a session that is not shared gets a delivery that says so, and the question still goes out on the other routes (`link`, file).
+
+What's open:
+
+- The SDK host has no rooms client yet: no socket client, no replica. It gets one when the SDK pins a runtime with rooms.
+- Questions asked before a host restart are not re-posted to the room. They are still open on the link and through `marshal.decisions.answer`.
+
 ## Production
 
 `createOrgBridge` refuses to start (code `production-org-off`) unless the organization's API is a test one: a loopback host, or a name under `.test`, `.example`, `.invalid` or `.localhost`. The exception is when the caller passes `allowProductionOrg: true`. Whether a host writes to Zyg's production org is the owner's decision. Nothing in this package turns it on.
@@ -62,6 +79,8 @@ A fleet of hosts (agent-sandbox, zyg-agents) cannot hold each person's token. Wh
 Until the server has that, a host runs the bridge with a token of the person it works for: a sign-in on that person's own machine, or a token they hand to their own sandbox. zyg-agents avoids the problem today by writing org sessions straight into its database (`src/shared/org-sessions/cloud-publish.ts`), not through HTTP.
 
 ## Tests
+
+`test/decision-routes.test.ts`: a linked Marshal lists and answers a live host's question (and a store-only host refuses); a question in a fake conversation room answered by a reply there (a streaming reply does not count); the next org inbox instruction answering the open question, after which instructions run as usual.
 
 `test/org-bridge.test.ts`, against the contract's in-memory organization (`createInMemoryOrgProvider`, with features `messages`, `liveSessions`, `leases`, `cloudRuns`, `forks` and `multiUser`). No model is involved; the session answers `echo: …`.
 

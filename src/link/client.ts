@@ -189,6 +189,16 @@ export class LinkClient {
     return this.request("GET", `pages/${encodeURIComponent(id)}`, {}, undefined, 60_000);
   }
 
+  /** Decisions, questions and gaps the host's sessions recorded; `answers` says whether this host takes answers. */
+  decisions(filter: { kind?: string; status?: string; runId?: string; sessionId?: string } = {}) {
+    return this.request("GET", "decisions", filter);
+  }
+
+  /** Answers an open question as a person on this Marshal; the answer becomes a message from them in the asking session. */
+  answer(questionId: string, answer: { choice?: number; text?: string; by?: { personId?: string; name?: string } }) {
+    return this.request("POST", `decisions/${encodeURIComponent(questionId)}/answer`, {}, answer);
+  }
+
   pagePicture(id: string, brand: string, name: string) {
     return this.bytes(`pages/${encodeURIComponent(id)}/pictures/${encodeURIComponent(brand)}/${encodeURIComponent(name)}`);
   }
