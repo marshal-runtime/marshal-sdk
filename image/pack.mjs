@@ -1,7 +1,7 @@
 // One installable artifact: marshal-sdk with the desktop's pinned runtime packs bundled inside it and the
 // extensions it serves, as a single npm tarball. Installing it is one step and needs only the public registry:
 //
-//   node image/pack.mjs [--out .pack] [--packs <desktop checkout>] [--extension <packageRoot>]...
+//   node image/pack.mjs [--out .pack] [--packs <desktop checkout>] [--manifest marshal-sdk.json] [--extension <packageRoot>]...
 //   npm install -g .pack/marshal-sdk-<version>.tgz      # then: marshal-sdk page-run --help
 //
 // The packs are the exact tarballs the desktop pins (its package.json pnpm.overrides), unpacked into the
@@ -13,8 +13,10 @@
 //   node "$(npm root -g)/@marshal/sdk/node_modules/playwright-core/cli.js" install --with-deps chromium
 // or point MARSHAL_SDK_CHROME at one.
 //
-// TODO(extension onboarding): take the extension list from the onboarding manifest once that lane lands its
-// format; until then the list is --extension (repeatable), default Page Studio's built package.
+// The extension list: --manifest <marshal-sdk.json> (the onboarding manifest, src/onboarding.ts: its `path` entries,
+// relative to the manifest) and/or --extension <packageRoot> (repeatable); with neither, Page Studio's built package.
+// TODO(extension onboarding): resolve `archive` and registry `id` entries through src/onboarding.ts once it is
+// committed, so the tarball carries exactly what the manifest names.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -28,6 +30,16 @@ for (let index = 2; index < process.argv.length; index += 2) {
   if (!value) throw new Error(`--${key} needs a value`);
   if (key === "extension") args.extension.push(path.resolve(value));
   else args[key] = path.resolve(value);
+}
+if (args.manifest) {
+  const manifest = JSON.parse(fs.readFileSync(args.manifest, "utf8"));
+  if (manifest?.version !== 1 || !Array.isArray(manifest.extensions)) throw new Error(`${args.manifest}: expected {"version": 1, "extensions": [...]}.`);
+  for (const [index, entry] of manifest.extensions.entries()) {
+    if (typeof entry?.path !== "string") {
+      throw new Error(`${args.manifest}: extensions[${index}] is not a package folder (path); pack takes only path entries for now.`);
+    }
+    args.extension.push(path.resolve(path.dirname(args.manifest), entry.path));
+  }
 }
 if (!args.extension.length) args.extension.push("/Users/omer/marshal-tracking/page-studio/out/package");
 
