@@ -1,0 +1,8 @@
+{
+  "name": "@marshal/permissions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Marshal's permission engine: policy, rules, the 3-tier shell classifier, path and credential guards, audit records. One source for the Marshal desktop and the Marshal SDK; the person-facing approval UI stays with each host.",
+  "type": "module",
+  "files": ["src", "host-deps.ts"]
+}
