@@ -10,8 +10,8 @@ today's behavior.
 | Option | What it does | Desktop equivalent |
 | --- | --- | --- |
 | `permissions.broker` | Decides each capability call. It runs after the kit's guard (Brain writes stay denied unless the kit allows them). The first broker that doesn't allow a call decides it. | `permissionBroker` over `decidePermission` |
-| `permissions.approval` | The runtime's `permissionApproval`: requests that wait on a person, plus verification afterwards. | `approval.permissionApproval` |
-| `permissions.resolveGrants`, `permissions.patterns` | Dynamic grants from a persisted policy, and extra principal permissions. | the runtime's `resolvePermissionGrants` / `permissionPatterns` |
+| `permissions.approval` | The runtime's `permissionApproval`: requests that wait on a person, plus verification afterwards. Not taken yet since the host runs on the shared `MarshalRuntimeHost`; the host logs that it was ignored. | `approval.permissionApproval` |
+| `permissions.resolveGrants`, `permissions.patterns` | Dynamic grants from a persisted policy, and extra principal permissions. Not taken yet on the shared host, as above. | the runtime's `resolvePermissionGrants` / `permissionPatterns` |
 | `permissions.canUseTool` | Decides the model backend's own tool requests (shell, file writes, MCP tools) in the desktop's `RuntimePermissionRequest` shape, with the Marshal session id. When it's given, sessions stop running with `bypassPermissions`. On the Claude Agent SDK it becomes `canUseTool` (mapped the way the desktop's Claude client maps it). On provider clients it becomes `onPermissionRequest`. | each backend's `onPermissionRequest` |
 | `ui.applicationAuthority` | Decides first for calls an application owns. | `applicationAuthority.decide` |
 | `ui.reactUi`, `ui.declarativeUi`, `ui.placementsRequired` | View compilation, declarative UI, and whether an extension's tabs need a placement. | `createMarshalReactUiOptions()`, extension options |
@@ -22,7 +22,7 @@ today's behavior.
 | `serviceContainer`, `compositionRegistry` | The embedder's container (rooms, Brain and memory services bound by the host). Its providers resolve those services from it. | `serviceContainer`, `compositionRegistry` |
 | `nodeExecutable` | The Node binary for TypeScript modules and the browser MCP server. A packaged app's `process.execPath` is the app, not Node. | `nodeExecutable` |
 | `trustedTypeScript` | `true` uses the desktop's trusted import policy (every package and builtin, `trusted_node` execution). You can also pass a policy. | `trustedTypeScript` + `TRUSTED_TYPESCRIPT_IMPORT_POLICY` |
-| `builtins` | Runtime built-ins over the SDK's defaults: limits, effects, extension authoring. | `createRuntimeBuiltinsSource` options |
+| `builtins` | Runtime built-ins over the desktop host's defaults and the SDK's: limits, effects, extension authoring. | `createRuntimeBuiltinsSource` options |
 | `telemetry` | Host events with metadata only: `host.started`, `extension.installed`, `runtime.<lifecycle>`, `session.idle` / `session.failed`, `settings.changed`. | `diagnostics` |
 | `notifications` | Where `marshal.tool.sendNotification` goes. The capability is offered only when this is set. | the notifications self-tool |
 | `settings` | A live settings store: new sessions take its current `model` and `reasoningEffort`, and a `subscribe` call reports each change. | settings store + change events |

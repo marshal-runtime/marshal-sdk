@@ -57,3 +57,12 @@ test("the shared desktop runtime host starts outside Electron and answers a sear
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("createMarshalHost composes its runtime on this shared host, not a runtime of its own", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const hostSource = await readFile(path.join(repoRoot, "src", "host.ts"), "utf8");
+  assert.match(hostSource, /createSharedRuntime\(/);
+  assert.doesNotMatch(hostSource, /createAgentRuntime\b/);
+  const shared = await readFile(path.join(repoRoot, "src", "shared-runtime.ts"), "utf8");
+  assert.match(shared, /new shared\.MarshalRuntimeHost\(/);
+});

@@ -8,12 +8,7 @@ import { createAllowAllPermissionBroker } from "@marshal/runtime";
 import * as runtimeExtensions from "@marshal/runtime/extensions";
 import { RUNTIME_EVENT_BUS } from "@marshal/runtime/events";
 import { RUNTIME_EXTENSION_LIFECYCLE_SERVICE } from "@marshal/runtime/extensions";
-import {
-  createAgentRuntime,
-  createRuntimeBuiltinsSource,
-  createRuntimeHostMaterializer,
-  createRuntimeServiceContainer,
-} from "@marshal/runtime/host";
+import { createRuntimeServiceContainer } from "@marshal/runtime/host";
 import { createRuntimeToolAdapter, RUNTIME_MCP_TOOLS } from "@marshal/runtime/mcp";
 import { z } from "zod";
 
@@ -42,6 +37,7 @@ import { createHostPrompts, sdkBaseLayer, type HostPromptOptions, type HostPromp
 import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
+import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
 import { createLinkCallProvider } from "./link/call-provider.js";
 import { linkPersonRoute } from "./link/decisions.js";
 import { startLinkServer, type LinkLivePort, type LinkServer } from "./link/server.js";
@@ -51,6 +47,7 @@ import { ConversationRoomRoute } from "./rooms-route.js";
 import { FileSessionStore, type SessionRecord } from "./session-store.js";
 
 const HARNESS_ID = "marshal-sdk";
+const SDK_VERSION = "0.0.1";
 const DEFAULT_MODEL = "claude-opus-5-5";
 const SESSIONS_DIRECTORY = "sessions";
 const AUTOMATIONS_DIRECTORY = "automations";
@@ -301,43 +298,34 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const broker =
     composeBrokers([kit?.permissionBroker, options.permissions?.broker], options.ui?.applicationAuthority) ?? createAllowAllPermissionBroker();
   const hostScope = workspaceScope(workspacePath);
-  const runtime = await createAgentRuntime({
-    // With a runtimeRoot the runtime's own folder is host-private (the desktop's layout) and every call works in the
-    // workspace the resolver names; without one the runtime keeps its state inside the workspace.
-    ...(runtimeRoot
-      ? { workspacePath: runtimeRoot, stateDirectory: "state", resolveWorkspace: options.resolveWorkspace ?? (() => hostScope) }
-      : {
-          workspacePath,
-          stateDirectory: `.marshal/runtime/${createHash("sha256").update(HARNESS_ID).digest("hex").slice(0, 16)}`,
-          ...(options.resolveWorkspace ? { resolveWorkspace: options.resolveWorkspace } : {}),
-        }),
-    protectedLifecycleResultRoot: privateRoot,
-    ...(options.worktreeRoot ? { worktreeRoot: options.worktreeRoot } : {}),
-    ...(importPolicy ? { importPolicy } : {}),
+  const runtimeHostRoot =
+    runtimeRoot ?? path.join(workspacePath, ".marshal", "runtime", createHash("sha256").update(HARNESS_ID).digest("hex").slice(0, 16));
+  const workspaceName = path.basename(workspacePath);
+  const callContext = (sessionId: string) => sharedCallContext(sessionId, workspaceName, workspacePath);
+  if (options.permissions?.approval || options.permissions?.resolveGrants || options.permissions?.patterns) {
+    log("permissions.approval, resolveGrants and patterns are not taken by the shared runtime host yet; brokers and canUseTool decide");
+  }
+  // The desktop's own runtime host (packages/host), with the SDK's providers, brokers and scheduler plugged in.
+  const runtime = await createSharedRuntime({
+    root: runtimeHostRoot,
+    workspacePath,
+    workspaceName,
+    ...(options.resolveWorkspace ? { resolveWorkspace: options.resolveWorkspace as never } : {}),
+    privateRoot,
+    worktreeRoot: options.worktreeRoot ?? path.join(stateRoot, "worktrees"),
+    extensionRoot: path.join(stateRoot, "extensions"),
+    serviceContainer: options.serviceContainer ?? createRuntimeServiceContainer(),
     ...(options.compositionRegistry ? { compositionRegistry: options.compositionRegistry } : {}),
-    ...(options.permissions?.approval ? { permissionApproval: options.permissions.approval } : {}),
-    ...(options.permissions?.resolveGrants ? { resolvePermissionGrants: options.permissions.resolveGrants } : {}),
-    ...(options.permissions?.patterns ? { permissionPatterns: options.permissions.patterns } : {}),
-    identity: { harnessId: HARNESS_ID },
+    broker,
     principal: {
       id: `${HARNESS_ID}:${runId}`,
       kind: "agent",
       ...(kit && Object.keys(kit.claims).length ? { claims: kit.claims } : {}),
     },
-    // An unattended host has nobody to approve; what a run may do is decided by what is installed on it.
-    permissionBroker: broker,
-    // The Brain extension requires the code-intelligence service.
-    codeIntelligence: kit?.codeIntelligence ?? false,
-    extensions: extensions.length
-      ? {
-          allowedRoots: extensions.map((extension) => extension.packageRoot),
-          discoveryRoots: extensions.map((extension) => extension.packageRoot),
-          // An extension's tabs and panels stay unplaced here; its capabilities still activate.
-          uiPlacementsRequired: options.ui?.placementsRequired ?? false,
-          restore: false,
-        }
-      : false,
-    serviceContainer: options.serviceContainer ?? createRuntimeServiceContainer(),
+    harnessId: HARNESS_ID,
+    ...(options.nodeExecutable ? { nodeExecutable: options.nodeExecutable } : {}),
+    ...(importPolicy ? { trustedTypeScript: true } : {}),
+    version: SDK_VERSION,
     providerSources: [
       ...(options.providerSources ?? []),
       () => createAgentProvider(agents, (id) => id !== undefined && sessions.get(id) !== undefined),
@@ -348,25 +336,36 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       () => createModelsProvider(models),
       () => createLinkCallProvider(() => linkRelay),
       ...(options.notifications ? [() => createNotificationsProvider(options.notifications!)] : []),
-      createRuntimeBuiltinsSource({
-        typescript: true,
-        artifacts: true,
-        effects: false,
-        extensionAuthoring: false,
-        authoredUiPromotion: false,
-        ...options.builtins,
-        // runtime.schedules.* on this host's durable scheduler (agent.wake and the automation task kinds).
-        scheduling: true,
-        scheduler: hostAutomations.scheduler,
-        reactUi: options.ui?.reactUi ?? false,
-        declarativeUi: options.ui?.declarativeUi ?? false,
-        ...(options.nodeExecutable ? { nodeExecutable: options.nodeExecutable } : {}),
-        ...(importPolicy ? { importPolicy } : {}),
-      }),
       ...(kit?.providerSources ?? []),
       ...(extensionSkills.length && !runtimeReadsSkills ? [extensionSkillSource(extensionSkills)] : []),
     ],
-  } as never);
+    builtins: {
+      artifacts: true,
+      effects: false,
+      extensionAuthoring: false,
+      authoredUiPromotion: false,
+      ...options.builtins,
+      // runtime.schedules.* on this host's durable scheduler (agent.wake and the automation task kinds).
+      scheduling: true,
+      scheduler: hostAutomations.scheduler,
+      reactUi: options.ui?.reactUi ?? false,
+      declarativeUi: options.ui?.declarativeUi ?? false,
+      ...(importPolicy ? { importPolicy } : {}),
+    },
+  });
+  // The runtime lists extension skills; the desktop host's resource port doesn't read skill:// URIs, so the SDK does.
+  const skillResources = extensionSkillSource(extensionSkills)().resources;
+  const resourcesPort = {
+    listResources: async (callerContext: unknown) => [...((await runtime.resources?.listResources(callerContext)) ?? [])],
+    readResource: async (uri: string, callerContext: unknown) => {
+      try {
+        return await runtime.resources.readResource(uri, callerContext);
+      } catch (error) {
+        if (uri.startsWith("skill://") && extensionSkills.length) return skillResources.readResource(uri);
+        throw error;
+      }
+    },
+  };
   // The core kernel takes the caller's own invocation context, so the Brain sees the same principal.
   kit?.bind((runtime as unknown as { core: never }).core);
   const lifecycleSubscription = options.telemetry
@@ -383,21 +382,19 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const installedExtensions: { identity: string; version: string }[] = [];
   const extensionStates: MarshalHostExtensionState[] = [];
   try {
-    const lifecycle = runtime.serviceContainer.tryGet(RUNTIME_EXTENSION_LIFECYCLE_SERVICE);
+    const lifecycle = runtime.serviceContainer.tryGet(RUNTIME_EXTENSION_LIFECYCLE_SERVICE) as any;
     for (const [index, extension] of extensions.entries()) {
       if (!lifecycle) throw new Error("This runtime was composed without extension support.");
       const declared = packages[index]!;
       let installed: { identity: string };
       try {
-        const materializer = await createRuntimeHostMaterializer({ allowedRoots: [extension.packageRoot] });
-        const request = await materializer.materialize({ packageRoot: extension.packageRoot });
         // The org extension reaches this host only through capabilities; what it cannot ask for (who the host is, where
         // to keep its ledgers) the host gives it here, under any configuration the manifest set.
         const configuration =
           declared.identity === ORG_EXTENSION
             ? { hostId: (options.host ?? { id: HARNESS_ID }).id, hostKind: (options.host ?? { kind: "local" }).kind, stateDir: path.join(stateRoot, "org"), ...(extension.configuration as object | undefined) }
             : extension.configuration;
-        installed = await lifecycle.install(request, { configuration } as never);
+        installed = await runtime.installLocalExtension(extension.packageRoot, configuration);
       } catch (error) {
         throw new Error(`Extension ${declared.identity}@${declared.version} (${extension.packageRoot}) could not be installed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
       }
@@ -428,7 +425,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     throw error;
   }
   // Events the runtime publishes (lifecycle, extensions) trigger event automations too.
-  const eventBus = runtime.serviceContainer.tryGet(RUNTIME_EVENT_BUS as never) as
+  const eventBus = (runtime.serviceContainer as any).tryGet(RUNTIME_EVENT_BUS as never) as
     | { subscribe(type: "*", listener: (event: { type: string; payload: unknown }) => unknown): { dispose(): void } }
     | undefined;
   const eventSubscription = eventBus?.subscribe("*", (event) => {
@@ -444,9 +441,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const adapterFor = (sessionId: string) =>
     createRuntimeToolAdapter({
       kernel: runtime.kernel,
-      resources: runtime.resources,
+      resources: resourcesPort,
       lifecycle: runtime.lifecycle,
-      context: { sessionId, workspacePath },
+      context: callContext(sessionId),
     } as never);
   const hostAdapter = adapterFor(context.sessionId);
   const browserServer =
@@ -617,7 +614,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     cancel: (sessionId) => agents.cancel(sessionId),
     invoke: (capability, input) => invoke(capability, input),
     extensions: () => [...installedExtensions],
-    capabilities: () => (names ??= capabilityNames(runtime.kernel as never, runId, context)),
+    capabilities: () => (names ??= capabilityNames(runtime.kernel as never, callContext(context.sessionId))),
     answer: (input) => decisions.answer({ ...input, route: "link" }),
   };
   const linkFiles = { workspace: workspacePath, ...options.link?.files };
@@ -702,10 +699,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
 /** Every capability the runtime lists: the kernel's search without a query returns the whole catalog. */
 async function capabilityNames(
   kernel: { search(request: unknown, context: unknown): Promise<{ matches?: { capability?: { name?: string } }[] }> },
-  runId: string,
-  scope: { sessionId: string; workspacePath: string },
+  context: unknown,
 ): Promise<string[]> {
-  const found = await kernel.search({ limit: 500 }, { principal: { id: `${HARNESS_ID}:${runId}`, kind: "agent" }, scope }).catch(() => undefined);
+  const found = await kernel.search({ limit: 500 }, context).catch(() => undefined);
   return [...new Set((found?.matches ?? []).map((match) => match.capability?.name).filter((name): name is string => !!name))].sort();
 }
 
