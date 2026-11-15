@@ -50,6 +50,13 @@ export interface SessionRecord {
   updatedAt: string;
   source: "marshal-sdk";
   runtime: string;
+  /**
+   * The desktop's durable session partition (CLAUDE.md invariant): which runtime owns the session. Records written
+   * before it existed read it from `runtime`.
+   */
+  runtimeId: string;
+  /** The runtime's compatibility transport family, as the desktop's index rows carry it (local runtimes: "copilot"). */
+  backendOrigin: string;
   model?: string;
   reasoningEffort?: string;
   native: NativeSessionRef;
@@ -130,7 +137,7 @@ export class FileSessionStore {
     readonly origin: { runId: string; host: { id: string; kind: string } },
   ) {
     fs.mkdirSync(root, { recursive: true });
-    for (const record of readIndex(root)) this.records.set(record.id, record);
+    for (const record of readIndex(root)) this.records.set(record.id, withPartition(record));
   }
 
   create(input: NewSession): SessionRecord {
@@ -145,6 +152,8 @@ export class FileSessionStore {
       updatedAt: now,
       source: "marshal-sdk",
       runtime: input.runtime,
+      runtimeId: input.runtime,
+      backendOrigin: backendOriginOf(input.runtime),
       ...(input.model ? { model: input.model } : {}),
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       native: input.native,
@@ -295,4 +304,17 @@ function readJsonLines<T>(file: string): T[] {
     }
   }
   return rows;
+}
+
+/** The desktop's compatibility origin of a runtime id; runtimes the desktop doesn't know keep their own id. */
+export function backendOriginOf(runtimeId: string): string {
+  return LOCAL_RUNTIME_ORIGINS[runtimeId] ?? runtimeId;
+}
+
+// common/runtime-config.ts: the local adapters keep the legacy Copilot transport family for persisted-row compatibility.
+const LOCAL_RUNTIME_ORIGINS: Record<string, string> = { claude: "copilot", codex: "copilot", cursor: "copilot", copilot: "copilot", gateway: "gateway" };
+
+function withPartition(record: SessionRecord): SessionRecord {
+  const runtimeId = record.runtimeId ?? record.runtime;
+  return { ...record, runtimeId, backendOrigin: record.backendOrigin ?? backendOriginOf(runtimeId) };
 }

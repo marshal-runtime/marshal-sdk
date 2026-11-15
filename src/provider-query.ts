@@ -181,7 +181,7 @@ async function* turn(
   }
 }
 
-function sessionConfig(turnOptions: Record<string, unknown>, cwd: string, extras: TurnExtras | undefined): RuntimeSessionConfig {
+export function sessionConfig(turnOptions: Record<string, unknown>, cwd: string, extras: TurnExtras | undefined): RuntimeSessionConfig {
   const servers = (turnOptions.mcpServers ?? {}) as Record<string | symbol, unknown>;
   const tools = (servers[PROVIDER_TOOLS] as RuntimeTool[] | undefined) ?? [];
   const mcpServers: Record<string, RuntimeMcpServerConfig> = {};
@@ -240,7 +240,7 @@ function mcpServerConfig(server: unknown): RuntimeMcpServerConfig | undefined {
 }
 
 /** The port's prompt text: a string, or the text of one user message (its files come as paths in TURN_EXTRAS). */
-async function promptText(prompt: unknown): Promise<string> {
+export async function promptText(prompt: unknown): Promise<string> {
   if (typeof prompt === "string") return prompt;
   const texts: string[] = [];
   if (prompt && typeof (prompt as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function") {

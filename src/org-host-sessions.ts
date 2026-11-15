@@ -15,7 +15,7 @@ import { gunzipSync } from "node:zlib";
 
 import type { LinkRelay } from "./org-host-room.js";
 import type { DeliveryResult, SessionEnvelope } from "./session-messages.js";
-import type { SessionRecord, SessionState, TranscriptMessage } from "./session-store.js";
+import { backendOriginOf, type SessionRecord, type SessionState, type TranscriptMessage } from "./session-store.js";
 
 /** Calls one capability and returns its output; throws with the capability's error. */
 export type CapabilityCall = (name: string, input: Record<string, unknown>) => Promise<Record<string, any>>;
@@ -168,6 +168,8 @@ function recordOf(agent: AgentSummary, host: { id: string; kind: string }, runId
     updatedAt: agent.updatedAt,
     source: "marshal-sdk",
     runtime: "claude",
+    runtimeId: "claude",
+    backendOrigin: backendOriginOf("claude"),
     ...(agent.model ? { model: agent.model } : {}),
     ...(agent.reasoningEffort ? { reasoningEffort: agent.reasoningEffort } : {}),
     native: { kind: "claude", cwd: "", ...(agent.sessionId ? { sessionId: agent.sessionId } : {}) },
