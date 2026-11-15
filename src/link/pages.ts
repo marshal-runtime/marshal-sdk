@@ -87,6 +87,13 @@ function libraryUrls(page: Row): string[] {
   return [...urls];
 }
 
+/** Page Studio's own rule (create.ts isPlumbing): a section of only styles and tokens, nothing a visitor reads or sees. */
+function isPlumbing(section: Row): boolean {
+  const body = String(section?.src ?? "").replace(/<(style|script)\b[\s\S]*?<\/\1\s*>/gi, "");
+  const text = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return !text && !/<(img|picture|video|svg|iframe|form|input|button)\b/i.test(body);
+}
+
 const isPage = (value: unknown): value is Row => {
   const page = value as Row | null;
   return !!page && typeof page === "object" && typeof page.title === "string" && !!page.brand && Array.isArray(page.sections);
@@ -148,7 +155,7 @@ export class PageStore {
         product: typeof page.product === "string" ? page.product : null,
         source: String(page.source ?? ""),
         sections: page.sections.length,
-        labels: page.sections.filter((section: Row) => !section?.shell).map((section: Row) => String(section?.label ?? section?.key ?? "")).slice(0, 24),
+        labels: page.sections.filter((section: Row) => !isPlumbing(section)).map((section: Row) => String(section?.label ?? section?.key ?? "")).slice(0, 24),
         version: Number(page.version ?? 0),
         updatedAt,
         updatedBy: String(page.updatedBy ?? ""),
