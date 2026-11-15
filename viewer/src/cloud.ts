@@ -182,6 +182,16 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: (
               /* a partial upload; the next sync reads it */
             }
           }
+          // agent-sandbox's run.json carries no title or brand: they live in the run's page (pageId) in page-studio/.
+          const pageId = entry.run?.pageId;
+          if (!entry.run?.title && typeof pageId === "string" && /^[A-Za-z0-9._-]+$/.test(pageId)) {
+            try {
+              const page = JSON.parse(fs.readFileSync(path.join(cacheDir, "page-studio", "pages", `${pageId}.json`), "utf8")) as Row;
+              entry.run = { ...(entry.run ?? {}), ...(typeof page.title === "string" ? { title: page.title } : {}), ...(page.brand?.name ? { brand: page.brand.name } : {}) };
+            } catch {
+              /* the page isn't written yet */
+            }
+          }
           entry.cacheDir = cacheDir;
         } else {
           // Their pipeline's plan (agent/plan.json) names the product and the page idea; a finished run doesn't change.
