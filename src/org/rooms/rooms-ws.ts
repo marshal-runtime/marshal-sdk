@@ -1,6 +1,6 @@
 // Replaces electron/org/rooms/rooms-ws.ts (c75500b1b), which wrapped `ws`: the SDK uses Node 22's global WebSocket, so
 // it adds no dependency. The lifted socket client wants the `.on(...)` shape; this adapts the browser-style events.
-import type { RoomsSocketFactory, RoomsSocketLike } from "./rooms-socket.js";
+import type { RoomsSocketFactory, RoomsSocketLike } from "../../org-rooms.js";
 
 type Listener = (...args: never[]) => void;
 

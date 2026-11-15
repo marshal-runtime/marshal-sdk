@@ -24,7 +24,8 @@ Run it with `MARSHAL_ORG_TOKEN_FILE=/run/secrets/org-token marshal-sdk serve …
 | Sessions through capabilities | `src/org-host-sessions.ts` | The host's sessions as the extension sees them. `marshal.agent.list`, `send`, `wait` and `cancel` drive turns. `marshal.link.call` supplies full transcripts and the native state. |
 | Questions in rooms | `src/rooms-route.ts` | Posts a session's open question into its conversation room. A reply there, or the next inbox instruction, answers it. |
 | Host room | `src/org-host-room.ts` | The contract below and its host side, `HostRoomEndpoint`. |
-| Rooms client | `src/org/rooms/*` | Socket, replica, text, files and routes, lifted from the desktop (`electron/org/rooms` at c75500b1b), behind the runtime's `RoomsApi` and `Room` (`connectOrgRooms`). |
+| The organization layer | `packages/org` | The desktop's whole non-UI org layer, one source for both shells (below). |
+| Rooms client | `src/org/rooms/*` | `connectOrgRooms`: the shared rooms client (`packages/org/src/rooms`, bundled as `dist/src/org-rooms.js`) behind the runtime's `RoomsApi` and `Room`. |
 | The extension | `extensions/org` | Wires all of the above and exposes the `marshal.org.*` capabilities. |
 | Link in process | `src/link/call-provider.ts` | `marshal.link.call`: the SDK host answers link v1 requests without exposing a port, through a private loopback link that starts on first use. |
 
@@ -109,17 +110,33 @@ The desktop reaches an SDK host through `SdkHostTransport` (OmerMachluf/marshal 
 | `cancel(id)` | request `POST /v1/sessions/:id/cancel` |
 | `native(id)` | the org checkpoint (`getEnvelope`), or request `GET /v1/sessions/:id/native` |
 
+## One org layer for both shells: `packages/org`
+
+`packages/org/src` is the Marshal desktop's organization layer, everything that is not UI, IPC or Electron: connect and the token store, the org service and status, publishing, leases, inbox and outbox, remote sessions, rooms, sharing and shared context, mentions, comments, cloud move and placement, the org extension and skill catalogs and admission, workspace routines, projects, run chats, agent defaults, Slack destinations, audits and the cloud-session sanitizer, plus the org contract types (`src/contract/org-types.ts`) and the shared `common/org-*` helpers. The desktop vendors the same tree as `packages/marshal-org/src` and pins it to a commit of this repository with a content hash (`scripts/marshal-org-source.mjs` there), so change org code here and sync it into the desktop.
+
+Everything the tree needs from outside comes through `packages/org/host-deps.ts`, which each repository writes for itself. The desktop points it at its app paths, safeStorage, session importer and IPC contract. Here it points at the provider layer and the host ports in `packages/org/host`:
+
+| Port | Default on an SDK host | Set with |
+| --- | --- | --- |
+| State root | `MARSHAL_SDK_HOME` or `~/.marshal-sdk` | `configureOrgHost({ stateDir })` |
+| Encryption of org files (token store, outboxes, share links) | AES-256-GCM, key in `<stateDir>/org-state.key` (0600) | `configureOrgHost({ cipher })` (`null` is plaintext) |
+| First-party extension catalog for admission | none | `configureOrgHost({ firstPartyExtensionCatalog })` |
+| Run-chat import | not supported | `configureOrgHost({ importClaudeTranscript })` |
+| The person's org token | — | `connectOrg({ token \| tokenFile })`, else `MARSHAL_ORG_TOKEN_FILE` / `MARSHAL_ORG_TOKEN` (R18: the person who started the run) |
+
+`dist/src/org-package.js` bundles the whole layer (`import { … } from "@marshal/sdk/dist/src/org-package.js"`). The rooms client and the sanitizer also have narrow bundles (`org-rooms.js`, `org-scrub.js`) so the `@marshal/org` extension stays inside the host loader's built-ins. Everything `src/org-publish.ts` sends to the org goes through the desktop's sanitizer first (secrets and local paths scrubbed).
+
 ## What the desktop would switch to later (north star, not now)
 
-The desktop keeps its own org layer (`electron/org`); this repository changes nothing there. When it moves onto the SDK, it would:
+The desktop now runs this repository's org layer (`packages/marshal-org`, vendored from `packages/org`); its `electron/org` files re-export it. What is left for the full move:
 
 1. Load `@marshal/org` like any extension. The runtime already binds the rooms service and the agent provider there. The extension then needs one host capability the desktop lacks today (`marshal.link.call`, or a smaller `marshal.sessions.exportNative` for checkpoints), plus a way to read full transcripts beyond `marshal.agent.transcript`'s 20 messages.
 2. Implement `SdkHostTransport` over org and rooms with the table above (the "marshal <-> sdk sessions" lane).
-3. Retire its own copies of what was lifted: `rooms-*` is now in `src/org/rooms`, the onboarding resolver in `src/org-extensions.ts`, and the live executor in `src/org-bridge.ts`.
+3. Retire the duplicates on this side: the onboarding resolver in `src/org-extensions.ts` and the live executor in `src/org-bridge.ts` overlap `packages/org/src/org-onboarding.ts` and the desktop's remote executor.
 
 ## Lifted code
 
-`src/org/rooms/*` is a copy of `electron/org/rooms` at OmerMachluf/marshal c75500b1b, adapted: a local log sink instead of `createLogger`, `fs.mkdirSync` instead of `secureMkdirSync`, and Node 22's WebSocket instead of `ws`. Each of those files names its source. `src/org-extensions.ts` installs the way `electron/org/org-onboarding.ts` does. The bridge, the host room and the extension are new code on the runtime's org contract.
+`packages/org/src` is shared with the desktop byte for byte (see above). `src/org/rooms/rooms-ws.ts` keeps Node 22's WebSocket for the extension, which has no `ws`. `src/org-extensions.ts` installs the way `electron/org/org-onboarding.ts` does. The bridge, the host room and the extension are new code on the runtime's org contract.
 
 ## Tests (fakes only)
 
@@ -132,4 +149,5 @@ The desktop keeps its own org layer (`electron/org`); this repository changes no
   - Ada grants Bob the host room; Bob's own rooms client sees `info:host` and the session record, asks for telemetry, and gets a `done` link payload.
   - Disposing the host gives the lease back with a checkpoint.
   - A manifest naming an org loads `@marshal/org` by default; `"defaults": {"org": false}` leaves it out.
-- `test/org-rooms-client.test.ts` (rooms client lane): the lifted client against the rooms fake.
+- `test/org-rooms-client.test.ts` (rooms client lane): the shared client against the rooms fake.
+- `test/org-package.test.ts`: the shared token store keeps the person's token encrypted under the host's state root (default key file, or a host cipher); the shared sanitizer scrubs secrets and local paths. The desktop runs the tree's own vitest suites (`packages/marshal-org/src/**/*.test.ts`).
