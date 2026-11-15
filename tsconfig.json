@@ -2,8 +2,8 @@
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023", "DOM"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "types": ["node"],
     "strict": true,
     "noEmit": true,
@@ -12,5 +12,6 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "packages/providers/src"],
+  "exclude": ["packages/providers/src/**/*.test.ts", "packages/providers/src/testing"]
 }

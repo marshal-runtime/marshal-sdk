@@ -19,6 +19,7 @@ import { createRuntimeToolAdapter, RUNTIME_MCP_TOOLS } from "@marshal/runtime/mc
 import { z } from "zod";
 
 import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
+import { marshalProviderTools, PROVIDER_TOOLS, resolveProvider, type ProviderSelection } from "./provider-selection.js";
 import { createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
 import { createAutomationsProvider, HostAutomations } from "./automations.js";
 import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decisions.js";
@@ -83,6 +84,8 @@ export interface MarshalHostOptions {
   env?: Record<string, string>;
   /** Give sessions a headless browser (Playwright MCP) when the package is installed. Default true. */
   browser?: boolean | MarshalHostBrowser;
+  /** The model provider of this host's sessions and its credentials: Claude, Codex or Cursor, subscription or API key (docs/providers.md). Default: Claude on the Claude Agent SDK with `env` as given. */
+  provider?: ProviderSelection;
   query?: QueryFn;
   log?: (line: string) => void;
   /** Serve this host over the link (docs/link.md) so another Marshal can watch and drive it. */
@@ -205,12 +208,16 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   let prompt: string | undefined;
   let serversFor: (session: SessionRecord) => Record<string, unknown> = () => ({});
   let automations: HostAutomations | undefined;
+  const provider = options.provider
+    ? resolveProvider(options.provider, { env: options.env ?? definedEnv(process.env), privateRoot, log })
+    : undefined;
+  if (provider) log(provider.description);
   const agents = new ClaudeAgentPort({
-    query: options.query ?? (claudeQuery as unknown as QueryFn),
+    query: options.query ?? provider?.query ?? (claudeQuery as unknown as QueryFn),
     store: sessions,
     cwd: workspacePath,
-    env: options.env ?? definedEnv(process.env),
-    defaultModel: options.model ?? DEFAULT_MODEL,
+    env: provider?.env ?? options.env ?? definedEnv(process.env),
+    defaultModel: options.model ?? provider?.defaultModel ?? DEFAULT_MODEL,
     ...(options.reasoningEffort ? { defaultReasoningEffort: options.reasoningEffort } : {}),
     workspaceName: path.basename(workspacePath),
     systemPrompt: () => prompt,
@@ -414,7 +421,12 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         ),
       ],
     });
-    return { marshal, ...(browserServer ? { playwright: browserServer } : {}) };
+    return {
+      marshal,
+      ...(browserServer ? { playwright: browserServer } : {}),
+      // Providers other than the Claude Agent SDK take these tools directly; that SDK reads only string keys.
+      [PROVIDER_TOOLS]: marshalProviderTools(call as never, (uri) => adapter.readResource(uri) as never, RUNTIME_MCP_TOOLS as never),
+    };
   };
 
   const invoke = async <T>(capability: string, input: unknown = {}, timeoutMs = EXEC_TIMEOUT_MS): Promise<T> => {
@@ -522,6 +534,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       forks.dispose();
       await models.dispose().catch(() => undefined);
       await agents.dispose();
+      await provider?.query?.dispose();
       await runtime.dispose();
     },
   };
