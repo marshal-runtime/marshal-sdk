@@ -56,3 +56,18 @@ export function nativeSubagentHook(allowlist: readonly string[]) {
     };
   };
 }
+
+/**
+ * The native tools a Claude session on this host keeps (the CLI's surface minus DISABLED_NATIVE_TOOLS), as the
+ * "Tools on this host" list names them. Seen in a real session's init event (2026-11-16): Task, Bash, Edit, Monitor,
+ * NotebookEdit, Read, ReportFindings, Skill, TaskStop, ToolSearch, WebSearch, Write.
+ */
+export const CLAUDE_NATIVE_PROMPT_TOOLS: readonly { name: string; description: string }[] = [
+  { name: "Bash", description: "Run shell commands in this run's working folder (background with run_in_background; Monitor and TaskStop follow and stop them)." },
+  { name: "Read", description: "Read a file, an image (you see it) or a PDF." },
+  { name: "Write", description: "Create or overwrite a file." },
+  { name: "Edit", description: "Exact string replacement in a file you have read." },
+  { name: "NotebookEdit", description: "Edit a Jupyter notebook cell." },
+  { name: "WebSearch", description: "Search the web for facts that live outside the organization's systems." },
+  { name: "Task", description: `Only the ${NATIVE_SUBAGENT_ALLOWLIST.join(", ")} subagent, to read a web page; split other work with marshal.tool.forkSubagents.` },
+];

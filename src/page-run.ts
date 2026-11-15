@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import type { QueryFn } from "./agent-port.js";
 import type { KitOptions, SessionsPublishOptions } from "./kit/index.js";
+import { cloudRunLayer } from "./prompt-cloud.js";
 import { writeRunLogs, type RunSummaryJson } from "./run-contract.js";
 import { escapeRegExp, finishPage, markSections, type FinishedPage } from "./page-finish.js";
 
@@ -39,6 +40,12 @@ export interface PageRunOptions {
   kit?: readonly KitPartName[];
   /** Publish the run's sessions to the team Brain's session index (adds the Brain and sessions kit parts). */
   publish?: SessionsPublishOptions;
+  /** Who started the run (email), named in the sessions' prompt. Default: $MARSHAL_SDK_STARTED_BY. */
+  startedBy?: string;
+  /** Where the runner uploads the state folder (e.g. gs://…/agent/marshal-state/), named in the prompt. Default: $MARSHAL_SDK_STATE_LOCATION. */
+  stateLocation?: string;
+  /** The runner's run id (theirs, not the host's), named in the prompt. */
+  runLabel?: string;
   /** The page request. Default: page/operator-request.md, then the positioning brief from page/brief.json. */
   idea?: string;
   /** Critic rounds for depth single (1 to 4; Page Studio's default is 2). */
@@ -105,6 +112,13 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     extensions: [{ packageRoot: extension }],
     host: options.host ?? { id: "marshal-sdk", kind: "local" },
     labels: { job: "page-run", depth, ...options.labels },
+    prompt: runPrompt("page-run", options, {
+      purpose: `build one landing page from this run's input pack (depth ${depth})`,
+      contract: [
+        "out/index.html (the page, every section tagged data-zyg-section), out/assets/, out/shots/ and out/notes.md",
+        "logs/summary.json (cost per agent, sections, error), logs/run.jsonl and logs/query/",
+      ],
+    }),
     env,
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { reasoningEffort: options.effort } : {}),
@@ -264,6 +278,9 @@ export interface PageEditOptions {
   quickModel?: string;
   kit?: readonly KitPartName[];
   publish?: SessionsPublishOptions;
+  startedBy?: string;
+  stateLocation?: string;
+  runLabel?: string;
   fake?: boolean;
   env?: Record<string, string>;
   host?: { id: string; kind: string };
@@ -305,6 +322,10 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     extensions: [{ packageRoot: extension }],
     host: options.host ?? { id: "marshal-sdk", kind: "local" },
     labels: { job: "page-edit" },
+    prompt: runPrompt("page-edit", options, {
+      purpose: "one edit turn on the page an earlier run made, asked in plain words",
+      contract: ["out/index.html and out/shots/ (the edited page)", "logs/summary.json and logs/run.jsonl for this turn"],
+    }),
     env,
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { reasoningEffort: options.effort } : {}),
@@ -631,6 +652,8 @@ const USAGE = `marshal-sdk page-run: one Page Studio page from an agent-sandbox 
                      those people (default: $MARSHAL_SDK_PUBLISH_SESSIONS, else off); adds the Brain and sessions kit
   --publish-context <text>  one line in front of each published session's first prompt, e.g. the run id and the
                      state folder's GCS path (default: $MARSHAL_SDK_PUBLISH_CONTEXT)
+  --started-by <email>  --state-location <gs://…>  --run-label <id>   named in the sessions' prompt (cloud run layer;
+                     defaults $MARSHAL_SDK_STARTED_BY, $MARSHAL_SDK_STATE_LOCATION)
   --workspace <dir>  the sessions' working folder (default: the folder holding --input)
   --claude-config-dir <dir>  run the backend on that Claude account and drop ANTHROPIC_API_KEY
   --offline          do not read the product from the public store
@@ -688,6 +711,9 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
     ...(one("quick-model") ? { quickModel: one("quick-model")! } : {}),
     ...(kitArgument(one("kit")) ? { kit: kitArgument(one("kit"))! } : {}),
     ...publishArgument(one("publish-sessions"), one("publish-context")),
+    ...(one("started-by") ? { startedBy: one("started-by")! } : {}),
+    ...(one("state-location") ? { stateLocation: one("state-location")! } : {}),
+    ...(one("run-label") ? { runLabel: one("run-label")! } : {}),
     ...(idea ? { idea: idea.startsWith("@") ? fs.readFileSync(idea.slice(1), "utf8") : idea } : {}),
     requiredSkills: values.get("required-skill") ?? [],
     offline: flags.has("offline"),
@@ -706,6 +732,28 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
     })}\n`,
   );
   return summary.error ? 1 : 0;
+}
+
+/** The cloud run layer of the run's sessions (src/prompt-cloud.ts): who it is for, where results and state go. */
+function runPrompt(
+  job: string,
+  options: { kit?: readonly KitPartName[]; publish?: SessionsPublishOptions; startedBy?: string; stateLocation?: string; runLabel?: string; model?: string; effort?: string },
+  run: { purpose: string; contract: string[] },
+) {
+  const parts = new Set(hostKit(options.kit, options.publish).kit?.parts ?? []);
+  const startedBy = options.startedBy ?? process.env.MARSHAL_SDK_STARTED_BY;
+  const stateLocation = options.stateLocation ?? process.env.MARSHAL_SDK_STATE_LOCATION;
+  return cloudRunLayer({
+    job,
+    purpose: run.purpose,
+    contract: run.contract,
+    pageStudio: true,
+    kit: { brain: parts.has("brain") || parts.has("memory"), memory: parts.has("memory"), sessions: parts.has("sessions"), publishes: Boolean(options.publish) },
+    ...(options.runLabel ? { runId: options.runLabel } : {}),
+    ...(startedBy ? { startedBy } : {}),
+    ...(stateLocation ? { stateLocation } : {}),
+    ...(options.model ? { limits: `model ${options.model}${options.effort ? ` at ${options.effort} effort` : ""}` } : {}),
+  });
 }
 
 /** The host's kit: the parts asked for, plus the Brain and sessions when the run publishes its sessions. */
@@ -739,6 +787,7 @@ const EDIT_USAGE = `marshal-sdk page-edit: one edit turn on a page a page-run ma
   --page-id <id>     default: the page the run made
   --model <id>  --effort <level>  --quick-model <id>  --kit <brain,memory,sessions>  --fake
   --publish-sessions <team|email,...>  --publish-context <text>   (as page-run)
+  --started-by <email>  --state-location <gs://…>  --run-label <id>   (as page-run)
   --claude-config-dir <dir>  --host-id <id>  --host-kind <kind>
 
 Exit code 0 when the edited page was written, 1 otherwise (summary.json carries the error).
@@ -788,6 +837,9 @@ export async function pageEditCommand(argv: readonly string[]): Promise<number> 
     ...(values.get("quick-model") ? { quickModel: values.get("quick-model")! } : {}),
     ...(kit ? { kit } : {}),
     ...publishArgument(values.get("publish-sessions"), values.get("publish-context")),
+    ...(values.get("started-by") ? { startedBy: values.get("started-by")! } : {}),
+    ...(values.get("state-location") ? { stateLocation: values.get("state-location")! } : {}),
+    ...(values.get("run-label") ? { runLabel: values.get("run-label")! } : {}),
     fake: flags.has("fake"),
     host: { id: values.get("host-id") ?? "marshal-sdk", kind: values.get("host-kind") ?? "local" },
     log: (line) => process.stderr.write(`[marshal-sdk page-edit ${new Date().toISOString().slice(11, 19)}] ${line}\n`),

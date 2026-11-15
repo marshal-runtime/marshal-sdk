@@ -69,3 +69,37 @@ The layer code (`PromptLayer`, `assembleHostPrompt`, `mergePromptLayers`, `rende
 and adds the SDK host's own pieces (`sdkBaseLayer`, `createHostPrompts`). The desktop vendors `packages/prompt/src`
 (pinned commit and content hash, like `packages/providers`) and renders its v2 prompt through `assembleHostPrompt`
 with the desktop layer above, so the two shells run the same prompt code, not two that happen to agree.
+
+## Cloud run layer
+
+A sandbox host is not a desktop: nobody is at a screen, nothing can be asked mid-run, results go where the run's
+contract says, and the tools are the host's. `cloudRunLayer({job, purpose?, runId?, startedBy?, stateLocation?,
+contract?, pageStudio?, kit?, limits?})` (`src/prompt-cloud.ts`) is that host's layer; `page-run` and `page-edit` apply
+it (`--started-by`, `--state-location`, `--run-label`, or `MARSHAL_SDK_STARTED_BY` / `MARSHAL_SDK_STATE_LOCATION`).
+The SDK's base also lists the Claude backend's native tools now (Bash, Read, Write, Edit, NotebookEdit, WebSearch,
+Task for `web-fetch`), and the host serves `marshal.tool.setSessionTodos` (the plan, kept as `todos.json` beside the
+transcript), so the v2 core's "plan visibly" step is true on a sandbox.
+
+Rendered prompts (2026-11-16, Page Studio + kit): before, after, and the desktop's workspace-main prompt are in the
+overnight tracking folder (`reports/marshal-sdk/lane-b/prompt-*.md`).
+
+| Desktop section (v2) | Sandbox before | Sandbox with the cloud run layer |
+| --- | --- | --- |
+| Identity ("on the user's own computer") | cloud host "for the people who start your runs" | cloud sandbox for the person who started this run (by email); nobody at a screen |
+| How you work a task: "ask once" | "ask once, the way this surface allows" (no way exists) | record the question with `recordDecision` and the default taken |
+| How you work a task: `setSessionTodos` | named, **not on the host** | `marshal.tool.setSessionTodos` exists; plan saved with the session |
+| Calling Marshal's tools | `runtimeSearch` and TypeScript blocks (desktop tool names) | `mcp__marshal__runtime_exec` operation / inline_module, `runtime_search` |
+| Finding information: sessions | `marshal.tool.searchSessions` said to cover the org (it covers this host only) | host store via `marshal.tool.searchSessions`; team index via the kit's `sessions.search` |
+| Finding information: memory | `marshal.tool.recall` (**missing**) | `memory.recall` (kit) or "no memory store" |
+| Finding information: web | `WebSearch` and `WebFetch` (**no WebFetch**) | `WebSearch`; pages through the `web-fetch` subagent |
+| Delegation: forks | v2 desktop section absent; host's forks section | unchanged (`marshal.tool.forkSubagents` exists on the host) |
+| TypeScript blocks / Showing results / Track what the user asked / Work that outlives this turn / Extending Marshal / Workspaces / Browser control | absent (desktop-only) | absent: no screen, no request ledger, no automations, one checkout; Page Studio renders pages itself |
+| Remembering: personal memory | `marshal.tool.remember` / `forget` (**missing**) | "this run cannot save memories; lessons go in the result" (or `memory.remember` with writes on) |
+| Record decisions | kept by the host | kept in the run's decisions record, uploaded with the state |
+| Your tools | 3 MCP tools, "do not assume any other tool exists" (**the session also had Bash, Read, Write…**) | runtime tools + the backend's native tools |
+| Asking the user | absent | absent; "This run" says there is no chat, no `askUser`, no approval |
+| Knowledge: the company Brain | kit section (`knowledge.*`) | kit section; publishing noted when on |
+| Skills / Extensions | extension skills + raw guidance | unchanged |
+| Your role | worker | worker (Page Studio's own task text sets each agent's job) |
+| — | — | **This run**: job, run id, starter, limits, run contract (out/, logs/), state location, published sessions, no messages to people |
+| — | — | **Page Studio on this host**: `pagestudio.snapshot` / `applyOps` / `render`, skills first, facts only from the input pack |

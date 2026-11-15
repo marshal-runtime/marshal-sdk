@@ -114,6 +114,7 @@ export interface NewSession {
 const INDEX_FILE = "index.json";
 const TRANSCRIPT_FILE = "transcript.jsonl";
 const EVENTS_FILE = "events.jsonl";
+const TODOS_FILE = "todos.json";
 const EMPTY_USAGE: SessionUsage = {
   inputTokens: 0,
   outputTokens: 0,
@@ -229,6 +230,22 @@ export class FileSessionStore {
   messages(id: string, limit?: number): TranscriptMessage[] {
     const all = readJsonLines<TranscriptMessage>(path.join(this.root, id, TRANSCRIPT_FILE));
     return limit === undefined ? all : all.slice(-limit);
+  }
+
+  /** The session's plan (`marshal.tool.setSessionTodos`), replaced whole; `todos.json` beside its transcript. */
+  setTodos(id: string, plan: { todos: { id: string; title: string; status: string }[]; goalLabel?: string; updatedAt: string }): void {
+    const target = path.join(this.root, id, TODOS_FILE);
+    fs.writeFileSync(`${target}.tmp`, `${JSON.stringify(plan, null, 2)}\n`);
+    fs.renameSync(`${target}.tmp`, target);
+  }
+
+  todos(id: string): { todos: { id: string; title: string; status: string }[]; goalLabel?: string; updatedAt: string } | undefined {
+    try {
+      // SF-4: our own file; a corrupt one reads as no plan.
+      return JSON.parse(fs.readFileSync(path.join(this.root, id, TODOS_FILE), "utf8")) as never;
+    } catch {
+      return undefined;
+    }
   }
 
   events(id: string): { seq: number; at: string; event: unknown }[] {

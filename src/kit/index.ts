@@ -149,7 +149,7 @@ export function prepareKit(input: {
     providerSources,
     permissionBroker: kitPermissionBroker(denied),
     denied,
-    promptSection: kitPrompt(parts, { memoryWrites, ingest }),
+    promptSection: kitPrompt(parts, { memoryWrites, ingest, publishes }),
     publishes,
     bind(next) {
       kernel = next;
@@ -177,7 +177,7 @@ export function kitPermissionBroker(denied: ReadonlySet<string>, inner: Permissi
   };
 }
 
-function kitPrompt(parts: ReadonlySet<KitPart>, on: { memoryWrites: boolean; ingest: boolean }) {
+function kitPrompt(parts: ReadonlySet<KitPart>, on: { memoryWrites: boolean; ingest: boolean; publishes: boolean }) {
   const lines: string[] = [];
   if (parts.has("brain")) {
     lines.push(
@@ -193,7 +193,9 @@ function kitPrompt(parts: ReadonlySet<KitPart>, on: { memoryWrites: boolean; ing
   }
   if (parts.has("sessions")) {
     lines.push(
-      on.ingest
+      on.publishes
+        ? "- **Past sessions**: `sessions.search {query}` searches this host's earlier sessions and sessions shared to the team Brain (Marshal chats people shared, zyg-agents runs); use it before redoing an investigation. This host publishes every one of its sessions to that index itself after each turn."
+        : on.ingest
         ? "- **Past sessions**: `sessions.search {query}` searches this host's earlier sessions and sessions shared to the team Brain (Marshal chats people shared, zyg-agents runs); use it before redoing an investigation. `sessions.share {sessionId}` shares one of this host's sessions."
         : "- **Past sessions**: `sessions.search {query}` searches this host's earlier sessions and sessions shared to the team Brain (Marshal chats people shared, zyg-agents runs); use it before redoing an investigation. It is read-only.",
     );
