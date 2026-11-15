@@ -95,9 +95,24 @@
       "sha256": "9d3e7ea0b10d71a0ae85a4b2f463c551b7257441d0c529c1d67a40cfe1c5fe8e"
     },
     {
+      "name": "@marshal/agentic-debugger-extension",
+      "archive": "marshal-agentic-debugger-extension-1.0.0-marshal-host-1.tgz",
+      "sha256": "f32bd13f2038c5793db0600baa7611fb0a48c517c16fa7a5e916c1f541c37155"
+    },
+    {
+      "name": "@marshal/overlay-review",
+      "archive": "marshal-overlay-review-0.1.0-marshal-host-2.tgz",
+      "sha256": "91bdcb999040d7c1ec1e4798c0d14537aec68e452c97ce24f190452fe3347db7"
+    },
+    {
       "name": "@marshal/runtime",
       "archive": "marshal-runtime-0.1.0-marshal-host-88.tgz",
       "sha256": "9bae16c9b042a67d29fec948e9017c89d0890f8a5ed6e334bb054d4f02a920d8"
+    },
+    {
+      "name": "@marshal/swarm",
+      "archive": "marshal-swarm-0.1.0-marshal-host-51.tgz",
+      "sha256": "3f6f74a817a00cc930b7c076145f7f6b348a1c8b681ecaf8e35aa272c3ef1251"
     }
   ]
 }

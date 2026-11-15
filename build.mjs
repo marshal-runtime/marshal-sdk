@@ -43,3 +43,33 @@ await build({
   packages: "external",
   plugins: [sharedLogger],
 });
+// The runtime host shared with the desktop (packages/host): bundled into dist/host-runtime.js. `electron` resolves to
+// the host platform shim, `@common/*` to the shared common folder, and `?raw` imports load as text, as in the desktop's
+// Vite build.
+const hostRoot = path.join(root, "packages", "host");
+await build({
+  ...common,
+  entryPoints: { "host-runtime": path.join(hostRoot, "index.ts") },
+  outdir: path.join(root, "dist"),
+  bundle: true,
+  packages: "external",
+  alias: { electron: path.join(hostRoot, "platform", "electron.ts") },
+  plugins: [
+    {
+      name: "host-source",
+      setup(context) {
+        context.onResolve({ filter: /^@common\// }, (args) => ({
+          path: path.join(hostRoot, "src", "common", `${args.path.slice("@common/".length)}.ts`),
+        }));
+        context.onResolve({ filter: /\?raw$/ }, (args) => ({
+          path: path.join(args.resolveDir, args.path.slice(0, -"?raw".length)),
+          namespace: "raw-text",
+        }));
+        context.onLoad({ filter: /.*/, namespace: "raw-text" }, async (args) => ({
+          contents: (await import("node:fs")).readFileSync(args.path, "utf8"),
+          loader: "text",
+        }));
+      },
+    },
+  ],
+});

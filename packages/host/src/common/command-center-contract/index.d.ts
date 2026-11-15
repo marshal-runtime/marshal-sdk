@@ -1,0 +1,37 @@
+// generated-stub
+// Desktop-only module the host names in types; not part of the shared host source.
+export type CommandCenterArtifactSummary<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterBlockerSummary<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterEvent<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterFileSummary<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterRelationshipSummary<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterReplayState<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterRunSummary<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterSessionActivityDetails<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterSessionActivityFileChange<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterSessionActivitySource<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterSessionSummary<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterSnapshot<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterTodoStatus<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterTodoSummary<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type CommandCenterToolSummary<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type RemoveWorktreeRequest<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type SessionWorkspaceOverview<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type SessionWorkspaceState<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceBranchSwitch<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceCommit<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceCommitFile<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceCommitFiles<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceCommitFilesRequest<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceDiffScope<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceFileChange<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceFilePatch<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceFilePatchRequest<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceFileTouch<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspacePullRequestRef<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceRepoBase<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceRepoState<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceTurnPrompt<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceTurnRef<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorkspaceWorktree<T0 = any, T1 = any, T2 = any, T3 = any> = any;
+export type WorktreeDiskUsage<T0 = any, T1 = any, T2 = any, T3 = any> = any;
