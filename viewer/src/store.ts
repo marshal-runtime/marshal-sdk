@@ -41,9 +41,21 @@ export interface TranscriptMessage {
   error?: boolean;
 }
 
+export interface RunSource {
+  store: string;
+  /** The run folder (`<run>` of `<run>/state/sessions`). */
+  folder: string;
+  label: string;
+  /** Set on a copy pulled from a linked host: that host's id. */
+  pulledFrom?: string;
+}
+
 export interface RunSummary {
   runId: string;
+  /** The store the run's own sessions are in (the original before a pulled copy). */
   store: string;
+  /** Every store that holds this run: the original first, then copies pulled from hosts. */
+  sources: RunSource[];
   host: { id: string; kind: string };
   startedAt: string;
   updatedAt: string;
@@ -116,41 +128,79 @@ export function readTranscript(store: string, sessionId: string): TranscriptMess
   return rows;
 }
 
-export function summarizeRuns(stores: readonly string[]): RunSummary[] {
-  const runs = new Map<string, RunSummary>();
+/** Each session once: from its own run's store before a copy pulled from a host, the newest record within those. */
+export function uniqueSessions(stores: readonly string[]): { store: string; session: SessionRecord }[] {
+  const best = new Map<string, { store: string; session: SessionRecord; pulled: boolean }>();
   for (const store of stores) {
     for (const session of readSessions(store)) {
-      const key = `${store}\u0000${session.runId}`;
-      const run =
-        runs.get(key) ??
-        ({
-          runId: session.runId,
-          store,
-          host: session.host,
-          startedAt: session.createdAt,
-          updatedAt: session.updatedAt,
-          sessions: 0,
-          running: 0,
-          failed: 0,
-          models: [],
-          costUsd: 0,
-          outputTokens: 0,
-          firstTitle: session.title,
-        } satisfies RunSummary);
-      run.sessions += 1;
-      if (session.state === "running") run.running += 1;
-      if (session.state === "failed") run.failed += 1;
-      if (session.model && !run.models.includes(session.model)) run.models.push(session.model);
-      run.costUsd += session.usage?.costUsd ?? 0;
-      run.outputTokens += session.usage?.outputTokens ?? 0;
-      if (session.createdAt < run.startedAt) {
-        run.startedAt = session.createdAt;
-        run.firstTitle = session.title;
-      }
-      if (session.updatedAt > run.updatedAt) run.updatedAt = session.updatedAt;
-      runs.set(key, run);
+      const pulled = !!session.labels?.pulledFrom;
+      const have = best.get(session.id);
+      if (!have || (have.pulled && !pulled) || (have.pulled === pulled && session.updatedAt > have.session.updatedAt)) best.set(session.id, { store, session, pulled });
     }
   }
+  return [...best.values()].map(({ store, session }) => ({ store, session }));
+}
+
+/** The run folder around a store (`<run>/state/sessions`), or the store itself. */
+export function runFolderOf(store: string): string {
+  return path.basename(store) === "sessions" && path.basename(path.dirname(store)) === "state" ? path.dirname(path.dirname(store)) : store;
+}
+
+/** A store's run folder as people read it: relative to the root it was found under (".runs/quick1"), else with ~. */
+export function sourceLabel(store: string, roots: readonly string[] = []): string {
+  const folder = runFolderOf(store);
+  for (const root of roots.map((entry) => path.resolve(expandHome(entry)))) {
+    if (folder === root || folder.startsWith(root + path.sep)) return path.join(path.basename(root), path.relative(root, folder));
+  }
+  return folder.startsWith(os.homedir()) ? "~" + folder.slice(os.homedir().length) : folder;
+}
+
+/** One row per run id, however many stores hold it (a run and a copy pulled from a host); `sources` names them. */
+export function summarizeRuns(stores: readonly string[], roots: readonly string[] = []): RunSummary[] {
+  const runs = new Map<string, RunSummary>();
+  const unique = uniqueSessions(stores);
+  for (const { store, session } of unique) {
+    const run =
+      runs.get(session.runId) ??
+      ({
+        runId: session.runId,
+        store,
+        sources: [],
+        host: session.host,
+        startedAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        sessions: 0,
+        running: 0,
+        failed: 0,
+        models: [],
+        costUsd: 0,
+        outputTokens: 0,
+        firstTitle: session.title,
+      } satisfies RunSummary);
+    run.sessions += 1;
+    if (session.state === "running") run.running += 1;
+    if (session.state === "failed") run.failed += 1;
+    if (session.model && !run.models.includes(session.model)) run.models.push(session.model);
+    run.costUsd += session.usage?.costUsd ?? 0;
+    run.outputTokens += session.usage?.outputTokens ?? 0;
+    if (session.createdAt < run.startedAt) {
+      run.startedAt = session.createdAt;
+      run.firstTitle = session.title;
+    }
+    if (session.updatedAt > run.updatedAt) run.updatedAt = session.updatedAt;
+    if (!session.labels?.pulledFrom) run.store = store;
+    runs.set(session.runId, run);
+  }
+  for (const store of stores) {
+    const sessions = readSessions(store);
+    for (const runId of new Set(sessions.map((session) => session.runId))) {
+      const run = runs.get(runId);
+      if (!run || run.sources.some((source) => source.store === store)) continue;
+      const pulledFrom = sessions.find((session) => session.runId === runId && session.labels?.pulledFrom)?.labels.pulledFrom;
+      run.sources.push({ store, folder: runFolderOf(store), label: sourceLabel(store, roots), ...(pulledFrom ? { pulledFrom } : {}) });
+    }
+  }
+  for (const run of runs.values()) run.sources.sort((left, right) => Number(!!left.pulledFrom) - Number(!!right.pulledFrom));
   return [...runs.values()].sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 

@@ -96,6 +96,10 @@
   .crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border, #8882); font-size: 12px; }
   .crumbs button { border: 0; background: none; color: var(--link, LinkText); cursor: pointer; padding: 2px 0; }
   .file-row { display: grid; grid-template-columns: 1fr max-content; gap: 8px; }
+  .page-card { padding: 10px 12px; border-bottom: 1px solid var(--border, #8882); }
+  .page-card .title { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .item.pages-row .title { color: var(--primary, var(--link, LinkText)); }
+  .chip.source { border-style: dashed; }
   pre.preview { margin: 0; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
 
   /* Phone: one pane at a time, drill in and back. */
@@ -152,6 +156,8 @@
     query: "", hits: null, tab: "transcript",
     detail: null, // { session, messages: [], cursor, eventCursor, activity }
     files: { root: null, path: "", preview: null },
+    pages: { runId: null, list: [], pageStudio: false },
+    showPages: false,
   };
   let watchGeneration = 0;
 
@@ -247,6 +253,7 @@
     const session = currentSession();
     $("heading").textContent = view === "runs" ? "SDK sessions"
       : view === "sessions" ? (host().name || state.hostId) + " · run " + shortId(state.runId)
+      : state.showPages ? "Pages · run " + shortId(state.runId)
       : (session && session.title) || "Session";
   }
 
@@ -283,6 +290,7 @@
         el("div", { class: "meta" }, when(run.startedAt) + " · " + seconds(run.startedAt, run.updatedAt) + "s · " + run.sessions + " sessions · " + money(run.costUsd)),
         el("div", { class: "chips" },
           el("span", { class: "chip" }, run.host.id + " (" + run.host.kind + ")"),
+          ...(run.sources || []).map((source) => el("span", { class: "chip source", title: source.folder }, source.pulledFrom ? "pulled from " + source.pulledFrom + " · " + source.label : "📁 " + source.label)),
           ...(run.models || []).map((model) => el("span", { class: "chip" }, model)),
           run.running ? badge("running", run.running + " running") : null,
           run.failed ? badge("failed", run.failed + " failed") : null))));
@@ -340,19 +348,36 @@
       for (const child of state.sessions.filter((other) => other.parentId === session.id)) add(child, depth + 1);
     };
     roots.forEach((session) => add(session, 0));
+    const pages = state.pages.runId === state.runId ? state.pages.list : [];
+    if (pages.length) {
+      items.unshift(el("button", { class: "item pages-row", type: "button", "aria-current": state.showPages, onclick: () => openPages() },
+        el("div", { class: "title" }, "📄 " + pages.length + (pages.length === 1 ? " page" : " pages") + " from this run"),
+        el("div", { class: "meta" }, pages.map((page) => page.title).join(" · ")),
+        el("div", { class: "meta" }, "Open in Page Studio to keep editing")));
+    }
     box.replaceChildren(...items);
   }
 
   async function loadSessions() {
-    const out = await call("sdksessions.sessions", { hostId: state.hostId, runId: state.runId });
+    const runId = state.runId;
+    const [out, pages] = await Promise.all([
+      call("sdksessions.sessions", { hostId: state.hostId, runId }),
+      call("sdksessions.pages", { hostId: state.hostId, runId }).catch(() => ({ pages: [] })),
+    ]);
+    if (runId !== state.runId) return;
     state.sessions = out.sessions || [];
+    const list = (pages && pages.pages) || [];
+    const key = (entries) => entries.map((page) => page.id + "@" + page.version).join(",");
+    const changed = state.pages.runId !== runId || key(state.pages.list) !== key(list);
+    state.pages = { runId, list, pageStudio: !!(pages && pages.pageStudio) };
     renderSessions();
+    if (state.showPages && changed) renderPages();
   }
 
   async function openRun(runId, keepSession) {
     state.runId = runId;
     state.hits = null;
-    if (!keepSession) { stopWatch(); state.sessionId = null; state.detail = null; }
+    if (!keepSession) { stopWatch(); state.sessionId = null; state.detail = null; state.showPages = false; }
     renderRuns();
     $("sessions").replaceChildren(el("div", { class: "empty" }, "Loading…"));
     setView("sessions");
@@ -377,6 +402,8 @@
 
   async function openSession(sessionId) {
     stopWatch();
+    state.showPages = false;
+    $("tabs").style.display = "";
     state.sessionId = sessionId;
     state.detail = null;
     state.files = { root: null, path: "", preview: null };
@@ -608,7 +635,61 @@
     return el("div", { class: "crumbs" }, ...nodes);
   }
 
+  function openPages() {
+    stopWatch();
+    state.showPages = true;
+    state.sessionId = null;
+    state.detail = null;
+    renderSessions();
+    setView("detail");
+    renderPages();
+  }
+
+  function pageCard(page) {
+    const notice = el("div", { class: "notice", role: "status", "aria-live": "polite" });
+    const button = el("button", { class: "primary", type: "button", onclick: async () => {
+      button.disabled = true;
+      button.textContent = "Bringing it in…";
+      notice.className = "notice";
+      notice.textContent = host().kind === "link" ? "Pulling the page and its pictures over the link…" : "";
+      try {
+        const out = await call("sdksessions.openInPageStudio", { hostId: state.hostId, runId: state.runId, pageId: page.id });
+        notice.className = "notice " + (out && out.ok ? "ok" : "warn");
+        notice.textContent = out && out.ok
+          ? out.message + " " + out.sections + " sections, " + ((out.pictures && out.pictures.copied) || 0) + " pictures copied" + (out.pictures && out.pictures.reused ? ", " + out.pictures.reused + " already there" : "") + "."
+          : (out && out.message) || "Couldn't bring the page in.";
+      } catch (error) {
+        notice.className = "notice warn";
+        notice.textContent = error.message || String(error);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Open in Page Studio";
+      }
+    } }, "Open in Page Studio");
+    const pictures = page.pictures || { library: 0, missing: 0 };
+    return el("div", { class: "page-card" },
+      el("div", { class: "title" }, page.title, page.brand && page.brand.name ? el("span", { class: "chip" }, page.brand.name) : null),
+      el("div", { class: "meta" }, page.sections + " sections · " + pictures.library + " library pictures" + (pictures.missing ? " (" + pictures.missing + " not on the host)" : "") + " · v" + page.version + " · " + when(page.updatedAt) + (page.notesOpen ? " · " + page.notesOpen + " open notes" : "")),
+      page.labels && page.labels.length ? el("div", { class: "chips" }, ...page.labels.map((label) => el("span", { class: "chip" }, label))) : null,
+      el("div", { class: "meta" }, page.id + (page.from ? " · " + page.from : "")),
+      el("div", { class: "actions" }, button, notice));
+  }
+
+  function renderPages() {
+    $("tabs").style.display = "none";
+    $("composer").replaceChildren();
+    const h = host();
+    $("detail-head").replaceChildren(el("div", { class: "detail" },
+      el("div", { class: "title" }, "Pages from run " + shortId(state.runId)),
+      el("div", { class: "live" }, h.kind === "link" ? "On " + (h.name || h.id) + "; Open in Page Studio pulls the page and its pictures over the link first." : "In this run's Page Studio folder on this Mac."),
+      el("div", { class: "notice" }, "Each opens in your Page Studio as an ordinary page (sections, pictures, notes) that people keep editing; the run's copy stays as it is.")));
+    const pages = state.pages.runId === state.runId ? state.pages.list : [];
+    $("detail-body").replaceChildren(...(pages.length ? pages.map(pageCard) : [el("div", { class: "empty" }, "This run made no pages.")]));
+  }
+
   function renderDetail() {
+    if (state.showPages) return renderPages();
+    $("tabs").style.display = "";
     for (const tab of document.querySelectorAll(".tab")) tab.setAttribute("aria-selected", String(tab.dataset.tab === state.tab));
     if (!state.sessionId || !state.detail) {
       $("detail-head").replaceChildren();
@@ -712,11 +793,13 @@
       const wanted = opened.hostId || opened.runId || opened.sessionId ? opened : out.focus || {};
       const hostId = wanted.hostId && state.hosts.some((entry) => entry.id === wanted.hostId) ? wanted.hostId : "local";
       if (["transcript", "telemetry", "files"].includes(wanted.tab)) state.tab = wanted.tab;
+      const wantsPages = wanted.tab === "pages";
       await openHost(hostId);
       const runId = wanted.runId || (state.runs[0] && state.runs[0].runId);
       if (runId) {
         await openRun(runId, !!wanted.sessionId);
-        if (wanted.sessionId) {
+        if (wantsPages) openPages();
+        else if (wanted.sessionId) {
           await openSession(wanted.sessionId);
           if (wanted.filesRoot) {
             state.files = { root: wanted.filesRoot, path: wanted.filesPath || "", preview: null };

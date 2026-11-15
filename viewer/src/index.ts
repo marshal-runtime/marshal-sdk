@@ -23,6 +23,7 @@ const PULL_ROOT = "~/marshal/marshal-sdk/.pulled";
 const PAGE = 500;
 export const IMPORT_NATIVE_CAPABILITY = "marshal.sessions.importNative";
 const IMPORT_NATIVE_PR = "https://github.com/OmerMachluf/marshal/pull/155";
+export const IMPORT_PAGE_CAPABILITY = "pagestudio.page.import";
 const HOW_TO_ADD =
   'Add a linked host with runtimeConfigureExtension {identity: "@omer/marshal-sdk-sessions", configuration: {roots?, hosts: [{id, name, url, token or tokenFile}]}} (keep the hosts already there; a token is only ever shown as its last four characters).';
 /** Why marshal.sessions.importNative refused, in words for the person who pressed Continue. */
@@ -120,12 +121,36 @@ export function createExtension(context: Context) {
     return { ok: false, reason: error, message: IMPORT_ERRORS[error] ?? "Marshal couldn't continue this session." };
   };
 
+  const pullRoot = () => (typeof context.configuration?.pullRoot === "string" ? context.configuration.pullRoot : PULL_ROOT);
+
+  /** Calls a Page Studio capability; ok:false with a reason when Page Studio isn't there or refused. */
+  const pageStudio = async (target: string, input: Row, invocation: unknown): Promise<{ ok: true; value: Row } | { ok: false; reason: string; message: string }> => {
+    if (!context.execute) return { ok: false, reason: "unavailable", message: "This Marshal doesn't let extensions call other extensions." };
+    const response = await context.execute({ protocolVersion: PROTOCOL_VERSION, targetType: "operation", target, input }, invocation);
+    if (response.status !== "success") {
+      const code = String(response.error?.code ?? "");
+      const text = String(response.error?.message ?? "");
+      if (code === "not-found" || /was not found|unknown capability/i.test(text)) return { ok: false, reason: "unavailable", message: `Page Studio here has no ${target}.` };
+      if (/approval/i.test(code)) return { ok: false, reason: "approval", message: "Marshal asked you to approve bringing the page in. Approve it, then press Open in Page Studio again." };
+      return { ok: false, reason: "failed", message: text || `${target} failed.` };
+    }
+    let out = (response.result?.output ?? {}) as Row;
+    if (out && "result" in out) out = out.result as Row;
+    if (out && out.ok === true && "value" in out) out = out.value as Row;
+    if (out && out.ok === false) {
+      const text = String(out.error?.message ?? out.error ?? "");
+      if (/Unknown capability/i.test(text)) return { ok: false, reason: "unavailable", message: `Page Studio here has no ${target}.` };
+      return { ok: false, reason: String(out.code ?? "failed"), message: text || `${target} failed.` };
+    }
+    return { ok: true, value: out ?? {} };
+  };
+
   const capabilities: Capability[] = [
     {
       name: "sdksessions.open",
       title: "Open the SDK sessions viewer",
       description: "Open the tab that shows hosts running marshal-sdk (local folders and linked hosts), their runs, sessions, transcripts, telemetry and files. hostId, runId, sessionId and tab preselect.",
-      input: obj({ hostId, runId: str, sessionId: str, tab: { type: "string", enum: ["transcript", "telemetry", "files"] }, filesRoot: str, filesPath: str, placement: str, roots }),
+      input: obj({ hostId, runId: str, sessionId: str, tab: { type: "string", enum: ["transcript", "telemetry", "files", "pages"] }, filesRoot: str, filesPath: str, placement: str, roots }),
       read: false,
       handler: async (input, invocation) => {
         if (!context.execute) throw new Error("This Marshal doesn't let extensions open views.");
@@ -292,7 +317,7 @@ export function createExtension(context: Context) {
         "Copy a run (or one session) from a host into ~/marshal/marshal-sdk/.pulled/<host>/<run> as a session store: records, transcripts, backend events and, when the host has them, the Claude conversation files. The copy then shows under the local host and can be continued offline.",
       input: obj({ hostId, runId: str, sessionId: str, native: { type: "boolean", description: "Also pull Claude conversation files. Default true." }, roots }),
       read: false,
-      handler: async (input) => pull(hostFor(input), input, typeof context.configuration?.pullRoot === "string" ? context.configuration.pullRoot : PULL_ROOT),
+      handler: async (input) => pull(hostFor(input), input, pullRoot()),
     },
     {
       name: "sdksessions.continue",
@@ -305,6 +330,59 @@ export function createExtension(context: Context) {
         const native = await hostFor(input).native(String(input.sessionId));
         if (!native.ok) return native;
         return importNative(native.title, native.state, input.workspaceName, invocation);
+      },
+    },
+    {
+      name: "sdksessions.pages",
+      title: "Pages an SDK run made",
+      description:
+        "Landing pages Page Studio made on a host (its PAGE_STUDIO_DIR): title, brand, sections, pictures, version, open notes and the run that made them (runId filters). sdksessions.openInPageStudio brings one into this Marshal's Page Studio.",
+      input: obj({ hostId, runId: str, roots }),
+      read: true,
+      handler: async (input) => {
+        const host = hostFor(input);
+        return { hostId: host.summary.id, ...(await host.pages(typeof input.runId === "string" ? input.runId : undefined)) };
+      },
+    },
+    {
+      name: "sdksessions.openInPageStudio",
+      title: "Open an SDK run's page in Page Studio",
+      description:
+        "Bring a page an SDK run made (on this Mac or a linked host) into this Marshal's Page Studio as an ordinary page people keep editing: its record, sections and the library pictures it shows. A linked host's page is pulled first into ~/marshal/marshal-sdk/.pulled/<host>/<run>/data. Then pagestudio.page.import, then the Page Studio tab opens on it (open:false skips that). Answers ok:false with a reason instead of failing.",
+      input: obj({ hostId, runId: str, pageId: str, title: str, open: bool, roots }, ["pageId"]),
+      read: false,
+      handler: async (input, invocation) => {
+        const host = hostFor(input);
+        const folder = await host.pageFolder(String(input.pageId), typeof input.runId === "string" ? input.runId : undefined, pullRoot());
+        const imported = await pageStudio(
+          IMPORT_PAGE_CAPABILITY,
+          { dataDir: folder.dataDir, pageId: folder.pageId, origin: folder.origin, ...(typeof input.title === "string" && input.title ? { title: input.title } : {}) },
+          invocation,
+        );
+        if (!imported.ok) {
+          return {
+            ...imported,
+            dataDir: folder.dataDir.replace(os.homedir(), "~"),
+            ...(imported.reason === "unavailable"
+              ? { message: `${imported.message} Update Page Studio to the build with ${IMPORT_PAGE_CAPABILITY}; the page is ready to bring in from ${folder.dataDir.replace(os.homedir(), "~")}.` }
+              : {}),
+          };
+        }
+        const pageId = String(imported.value.pageId ?? folder.pageId);
+        let opened = false;
+        if (input.open !== false) opened = (await pageStudio("pagestudio.open", { pageId }, invocation)).ok;
+        return {
+          ok: true,
+          pageId,
+          title: imported.value.title,
+          sections: imported.value.sections,
+          pictures: imported.value.pictures,
+          library: imported.value.library,
+          from: folder.origin,
+          ...(folder.pulled ? { pulled: folder.pulled } : {}),
+          opened,
+          message: `In Page Studio as ${pageId}${opened ? "; the Page Studio tab is open on it" : ""}.`,
+        };
       },
     },
     {
@@ -474,6 +552,18 @@ async function pull(host: Host, input: Row, pullRoot: string) {
   const temporary = `${indexFile}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(index, null, 1));
   fs.renameSync(temporary, indexFile);
+  let pages = 0;
+  if (host.summary.kind === "link" && typeof input.sessionId !== "string") {
+    try {
+      for (const page of (await host.pages(runId)).pages) {
+        await host.pageFolder(page.id, runId, pullRoot);
+        pages += 1;
+      }
+    } catch {
+      // A host without Page Studio, or one page that failed, never fails the pull of the sessions.
+    }
+  }
+  (totals as Row).pages = pages;
   return { ok: true, hostId: host.summary.id, runId, path: target.replace(os.homedir(), "~"), ...totals, message: `Pulled into ${target.replace(os.homedir(), "~")}; it now shows under the local host.` };
 }
 
@@ -490,6 +580,8 @@ export const CAPABILITY_NAMES = [
   "sdksessions.pull",
   "sdksessions.continue",
   "sdksessions.search",
+  "sdksessions.pages",
+  "sdksessions.openInPageStudio",
 ];
 
 function unavailable() {

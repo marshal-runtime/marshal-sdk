@@ -7,9 +7,10 @@ import { gzipSync } from "zlib";
 
 import { LinkClient, LinkError } from "../../src/link/client";
 import { FileRoots } from "../../src/link/files";
+import { PAGE_ID, PageStore, writePage, type PageManifest, type PageSummary } from "../../src/link/pages";
 import { StoreReader } from "../../src/link/store-reader";
 import { activityOf, combineTelemetry, type Activity, type EventLine, type Telemetry } from "../../src/link/telemetry";
-import { findStores, readSessions, readTranscript, summarizeRuns, type SessionRecord, type TranscriptMessage } from "./store";
+import { findStores, readTranscript, summarizeRuns, uniqueSessions, type SessionRecord, type TranscriptMessage } from "./store";
 
 type Row = Record<string, any>;
 
@@ -65,6 +66,10 @@ export interface Host {
   search(query: string, limit: number): Promise<Row[]>;
   send(sessionId: string, text: string, deliveryMode: "queue" | "interrupt"): Promise<Row>;
   cancel(sessionId: string): Promise<Row>;
+  /** Pages Page Studio made in this host's runs (runId: one run's), or pageStudio:false when the host has none. */
+  pages(runId?: string): Promise<{ pageStudio: boolean; pages: (PageSummary & { from?: string })[] }>;
+  /** A Page Studio data folder on this Mac holding the page, ready for pagestudio.page.import (pulled first for a linked host). */
+  pageFolder(pageId: string, runId: string | undefined, pullRoot: string): Promise<{ dataDir: string; pageId: string; origin: string; pulled?: { pictures: number; bytes: number } }>;
   /** The envelope marshal.sessions.importNative takes, or why there is none. */
   native(sessionId: string): Promise<{ ok: true; state: Row; title: string; bytes: number } | { ok: false; reason: string; message: string }>;
 }
@@ -99,15 +104,28 @@ function runFolders(store: string): Record<string, string> {
 export function folderHost(roots: readonly string[]): Host {
   const stores = () => findStores(roots);
   const locate = (sessionId: string) => {
-    for (const store of stores()) {
-      const session = readSessions(store).find((record) => record.id === sessionId);
-      if (session) return { store, session, reader: new StoreReader(store) };
-    }
-    return undefined;
+    const found = uniqueSessions(stores()).find((entry) => entry.session.id === sessionId);
+    return found ? { ...found, reader: new StoreReader(found.store) } : undefined;
   };
   const storeOfRun = (runId: string | undefined) => {
-    for (const store of stores()) if (!runId || readSessions(store).some((session) => session.runId === runId)) return store;
-    return undefined;
+    const runs = summarizeRuns(stores());
+    return (runId ? runs.find((run) => run.runId === runId) : runs[0])?.store;
+  };
+  /** Page Studio folders of the runs on this Mac: a run folder's data/ (its PAGE_STUDIO_DIR), originals before pulled copies. */
+  const pageFolders = (runId?: string) => {
+    const runs = summarizeRuns(stores(), roots);
+    // A run folder's pages belong to the runs stored in that folder, never to another run on this Mac.
+    const folders: { dir: string; label: string; runs: typeof runs }[] = [];
+    for (const run of runs) {
+      for (const source of run.sources) {
+        const dir = path.join(source.folder, "data");
+        if (!fs.existsSync(path.join(dir, "pages"))) continue;
+        const folder = folders.find((entry) => entry.dir === dir);
+        if (folder) folder.runs.push(run);
+        else folders.push({ dir, label: source.label, runs: [run] });
+      }
+    }
+    return { folders: runId ? folders.filter((folder) => folder.runs.some((run) => run.runId === runId)) : folders };
   };
   return {
     summary: { id: LOCAL_HOST_ID, name: "This Mac (folders)", kind: "folder", roots: [...roots] },
@@ -116,11 +134,12 @@ export function folderHost(roots: readonly string[]): Host {
       return { status: "local", mode: "folder", stores: found, runs: summarizeRuns(found).length, extensions: [], capabilities: [], files: ["workspace", "output", "data"] };
     },
     async runs() {
-      return summarizeRuns(stores());
+      return summarizeRuns(stores(), roots);
     },
     async sessions(runId) {
-      return stores()
-        .flatMap((store) => readSessions(store).filter((session) => session.runId === runId))
+      return uniqueSessions(stores())
+        .map((entry) => entry.session)
+        .filter((session) => session.runId === runId)
         .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
     },
     async session(sessionId) {
@@ -155,9 +174,8 @@ export function folderHost(roots: readonly string[]): Host {
       }
       const runId = String(target.runId ?? "");
       const parts: { session: SessionRecord; telemetry: Telemetry }[] = [];
-      for (const store of stores()) {
-        const reader = new StoreReader(store);
-        for (const session of reader.sessions({ runId })) parts.push({ session, telemetry: reader.telemetry(session.id) });
+      for (const { store, session } of uniqueSessions(stores())) {
+        if (session.runId === runId) parts.push({ session, telemetry: new StoreReader(store).telemetry(session.id) });
       }
       if (!parts.length) return { found: false };
       return {
@@ -193,25 +211,46 @@ export function folderHost(roots: readonly string[]): Host {
     async search(query, limit) {
       const words = query.toLowerCase().split(/\s+/).filter(Boolean);
       const hits: Row[] = [];
-      for (const store of stores()) {
-        for (const session of readSessions(store)) {
-          const head = `${session.title} ${Object.values(session.labels ?? {}).join(" ")} ${session.runId}`.toLowerCase();
-          let score = words.filter((word) => head.includes(word)).length * 3;
-          let snippet = session.title;
-          for (const message of readTranscript(store, session.id)) {
-            const text = String(message.content ?? "").toLowerCase();
-            const matched = words.filter((word) => text.includes(word));
-            if (!matched.length) continue;
-            score += matched.length;
-            if (snippet === session.title) {
-              const at = Math.max(0, text.indexOf(matched[0]!) - 60);
-              snippet = String(message.content).slice(at, at + 200);
-            }
+      for (const { store, session } of uniqueSessions(stores())) {
+        const head = `${session.title} ${Object.values(session.labels ?? {}).join(" ")} ${session.runId}`.toLowerCase();
+        let score = words.filter((word) => head.includes(word)).length * 3;
+        let snippet = session.title;
+        for (const message of readTranscript(store, session.id)) {
+          const text = String(message.content ?? "").toLowerCase();
+          const matched = words.filter((word) => text.includes(word));
+          if (!matched.length) continue;
+          score += matched.length;
+          if (snippet === session.title) {
+            const at = Math.max(0, text.indexOf(matched[0]!) - 60);
+            snippet = String(message.content).slice(at, at + 200);
           }
-          if (score > 0) hits.push({ session, snippet, score });
         }
+        if (score > 0) hits.push({ session, snippet, score });
       }
       return hits.sort((left, right) => right.score - left.score).slice(0, limit);
+    },
+    async pages(runId) {
+      const { folders } = pageFolders(runId);
+      const byId = new Map<string, PageSummary & { from?: string }>();
+      for (const folder of folders) {
+        for (const page of new PageStore(folder.dir).list(folder.runs)) {
+          const have = byId.get(page.id);
+          if (!have || page.version > have.version) byId.set(page.id, { ...page, from: folder.label });
+        }
+      }
+      const pages = [...byId.values()].filter((page) => !runId || page.runId === runId);
+      return { pageStudio: folders.length > 0, pages: pages.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)) };
+    },
+    async pageFolder(pageId, runId) {
+      if (!PAGE_ID.test(pageId)) throw new Error("That is not a page id.");
+      const { folders } = pageFolders(runId);
+      let best: { dir: string; label: string; version: number } | undefined;
+      for (const folder of folders) {
+        const page = new PageStore(folder.dir).page(pageId);
+        if (page && (!best || Number(page.version ?? 0) > best.version)) best = { ...folder, version: Number(page.version ?? 0) };
+      }
+      if (!best) throw new Error(`No page ${pageId} in the runs on this Mac.`);
+      return { dataDir: best.dir, pageId, origin: `${best.label}${runId ? ` · run ${runId.slice(0, 8)}` : ""} (this Mac)` };
     },
     async send() {
       return {
@@ -340,6 +379,18 @@ export function linkedHost(config: LinkedHostConfig): Host {
       } catch (error) {
         return { ok: false, ...linkProblem(error) };
       }
+    },
+    async pages(runId) {
+      return client.pages(runId);
+    },
+    async pageFolder(pageId, runId, pullRoot) {
+      if (!PAGE_ID.test(pageId)) throw new Error("That is not a page id.");
+      const manifest = (await client.page(pageId)) as PageManifest;
+      const run = runId ?? ((await client.pages()).pages as PageSummary[]).find((page) => page.id === pageId)?.runId ?? "pages";
+      const safe = (value: string) => value.replace(/[^A-Za-z0-9_.-]/g, "-");
+      const target = path.join(pullRoot.startsWith("~") ? path.join(os.homedir(), pullRoot.slice(1)) : pullRoot, safe(config.id), safe(run), "data");
+      const written = await writePage(target, manifest, (picture) => client.pagePicture(pageId, picture.brand, picture.name));
+      return { dataDir: target, pageId, origin: `${config.name ?? config.id} (${safeUrl(config.url)})${run !== "pages" ? ` · run ${run.slice(0, 8)}` : ""}`, pulled: { pictures: written.pictures, bytes: written.bytes } };
     },
     async native(sessionId) {
       try {
