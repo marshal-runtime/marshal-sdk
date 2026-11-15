@@ -110,7 +110,7 @@ test("sessions.search merges this host's sessions with the shared index by rank"
     },
   });
   const provider = createSessionsProvider(store, fake.call);
-  assert.deepEqual(names(provider), ["sessions.search"]);
+  assert.deepEqual(names(provider), ["sessions.read", "sessions.search"]);
   const output = await run(provider, "sessions.search", { query: "checkout banner", workspace: "zyg" });
   assert.equal(fake.calls[0]!.target, "sessions.cloud_search");
   assert.deepEqual(fake.calls[0]!.input, { query: "checkout banner", limit: 20, workspace: "zyg" });
@@ -157,8 +157,8 @@ test("sessions.share exists only with ingest on, and sends user and assistant me
   store.appendMessage(session.id, { role: "system", content: "internal" });
   store.appendMessage(session.id, { role: "assistant", content: "fixed in banner.tsx" });
   const fake = fakeCall({ "sessions.cloud_share": { status: "shared" } });
-  assert.deepEqual(names(createSessionsProvider(store, fake.call)), ["sessions.search"]);
-  assert.deepEqual(names(createSessionsProvider(store, fake.call, { ingest: true })), ["sessions.search", "sessions.share"]);
+  assert.deepEqual(names(createSessionsProvider(store, fake.call)), ["sessions.read", "sessions.search"]);
+  assert.deepEqual(names(createSessionsProvider(store, fake.call, { ingest: true })), ["sessions.read", "sessions.search", "sessions.share"]);
   const output = await run(createSessionsProvider(store, fake.call, { ingest: true }), "sessions.share", {
     sessionId: session.id,
     people: ["a@zyg.com"],

@@ -14,6 +14,7 @@ export {
   createSessionsProvider,
   mergeByRank,
   publishOptions,
+  runOrigin,
   shareAccess,
   shareParts,
   sharePayload,
