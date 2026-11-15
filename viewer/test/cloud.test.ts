@@ -84,6 +84,8 @@ function setup() {
   fs.mkdirSync(path.join(theirs, "images"), { recursive: true });
   fs.writeFileSync(path.join(theirs, "images", "hero.png"), PNG);
   fs.writeFileSync(path.join(theirs, "preview", "index.html"), '<html><body><img src="../images/hero.png"><img src="../images/gone.png"></body></html>');
+  fs.mkdirSync(path.join(theirs, "agent"), { recursive: true });
+  fs.writeFileSync(path.join(theirs, "agent", "plan.json"), JSON.stringify({ product: "RAWDOG Caffeine Under Eye Cream", page_idea: "A '15 seconds a day' argument" }));
   return { dir, gcs, runRoot, pullRoot: path.join(dir, "pulled") };
 }
 
@@ -93,6 +95,7 @@ test("a cloud host lists Marshal runs and their older runs, and serves sessions,
   const runs = await host.cloudRuns(true);
   assert.deepEqual(runs.map((run) => [path.basename(run.outputRoot), run.marshal]).sort(), [["demo-1", true], ["theirs-766", false]]);
   assert.equal(runs.find((run) => run.marshal)?.run?.title, "Rawdog quick");
+  assert.equal(runs.find((run) => !run.marshal)?.run?.title, "RAWDOG Caffeine Under Eye Cream");
   assert.equal(runs[0]!.previewUrl.startsWith("https://storage.cloud.google.com/dev-bucket/runs/"), true);
 
   const listed = await host.runs();

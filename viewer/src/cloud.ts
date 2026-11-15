@@ -131,6 +131,7 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string): Host & {
   let listed: CloudRun[] = [];
   let syncedAt = 0;
   let syncing: Promise<CloudRun[]> | undefined;
+  const olderRuns = new Map<string, Row>();
 
   const sync = async (force = false): Promise<CloudRun[]> => {
     if (!force && Date.now() - syncedAt < SYNC_EVERY_MS && listed.length) return listed;
@@ -160,6 +161,13 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string): Host & {
             }
           }
           entry.cacheDir = cacheDir;
+        } else {
+          // Their pipeline's plan (agent/plan.json) names the product and the page idea; a finished run doesn't change.
+          if (!olderRuns.has(root)) {
+            const plan = await readJson(`${root}/agent/plan.json`);
+            olderRuns.set(root, plan ? { title: typeof plan.product === "string" ? plan.product : undefined, idea: typeof plan.page_idea === "string" ? plan.page_idea.slice(0, 300) : undefined } : {});
+          }
+          entry.run = { ...olderRuns.get(root) };
         }
         runs.push(entry);
       }
