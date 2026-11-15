@@ -30,7 +30,14 @@ export interface BrainKitOptions {
   access?: readonly string[];
   /** knowledge.feedback writes to the Brain's search log. Off unless asked for. */
   feedback?: boolean;
+  /**
+   * How long one Brain call may wait, 1000-120000 ms. Default 60000: the Brain's front scales to zero and a cold
+   * start can take more than the extension's own 30 s default; an unattended host has nobody waiting on it.
+   */
+  timeoutMs?: number;
 }
+
+export const BRAIN_TIMEOUT_MS = 60_000;
 
 export interface BrainConfigurationInput {
   brain: BrainKitOptions;
@@ -90,6 +97,7 @@ export function brainConfiguration(input: BrainConfigurationInput): Record<strin
     cloudUrl,
     cloudAudience,
     cloudCallerServiceAccount: brain.callerServiceAccount ?? BRAIN_CALLER_SERVICE_ACCOUNT,
+    cloudTimeoutMs: Math.min(120_000, Math.max(1_000, Math.round(brain.timeoutMs ?? BRAIN_TIMEOUT_MS))),
     ...(brain.credentialsFile ? { cloudCredentialsFile: brain.credentialsFile } : {}),
     ...(input.memoryWrites
       ? {

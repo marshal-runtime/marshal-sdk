@@ -49,6 +49,22 @@ the kit turns it on). The configuration is the cloud-only surface (`brainConfigu
   - `delegated`: a service on Google Cloud signs with its metadata-server ID token, and the person comes from the
     host principal's `callerEmail` claim (`kit.brain.callerEmail`, with access labels from `kit.brain.access`).
 - A `brainRoutes` entry with `memory: true` is written only when memory writes are on.
+- `cloudTimeoutMs`: 60000 by default (`kit.brain.timeoutMs`, 1000 to 120000).
+
+**Cold starts.** The front scales to zero, and a cold start can take more than 20 s. When it does, the Brain
+extension's own warm-up logs `[brain] cloud warm-up { status: 'failed', code: 'cloud_brain_timeout' }`.
+
+That line only reports the warm-up probe. The Brain stays installed, and later calls still go through, because
+each call has its own `cloudTimeoutMs` and retries.
+
+The host checks readiness itself (`knowledge.schema`, three tries) and logs the outcome:
+
+- `kit: Brain ready in N ms`
+- `kit: Brain not answering after 3 tries …`
+
+On 2026-11-16, in Coder, five page-run starts logged three warm-up timeouts at 20 s and two warm-ups that succeeded, at
+4.4 s and 17.5 s. A kit check right after them answered `knowledge.search` in 4.6 s, `memory.recall` in 2.5 s and
+`sessions.search` (cloud) in 1.1 s.
 
 zyg-agents loads the same package with a heavier setup: a local Quillstone index, a `bootstrapModule`, and
 `BRAIN_PERMISSIONS` including `code.index.rebuild`. The kit deliberately uses only the cloud read path: a

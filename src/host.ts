@@ -583,6 +583,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     return response.result?.output as T;
   };
   if (kit?.publishes) publisher = new SessionPublisher((sessionId) => invoke("sessions.share", { sessionId }), log);
+  if (kit?.parts.has("brain")) void brainReady(invoke, log);
   const search = async (query: string, limit = 10): Promise<unknown> => {
     const result = (await hostAdapter.callTool("runtime_search", { query, limit }, undefined as never)) as {
       structuredContent?: unknown;
@@ -750,3 +751,23 @@ function directProviderTools(directTools: readonly DirectTool[], context: Parame
   }));
 }
 
+
+/**
+ * The Brain's own warm-up gives up after 20 s and only logs; its front scales to zero, so on a cold start that
+ * line says "cloud_brain_timeout" while later calls still work. This says plainly whether the Brain answers.
+ */
+async function brainReady(invoke: (capability: string, input: unknown) => Promise<unknown>, log: (line: string) => void, attempts = 3): Promise<void> {
+  const started = Date.now();
+  let last = "";
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await invoke("knowledge.schema", {});
+      log(`kit: Brain ready in ${Date.now() - started} ms (attempt ${attempt})`);
+      return;
+    } catch (error) {
+      last = (error instanceof Error ? error.message : String(error)).slice(0, 300);
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 5_000).unref());
+    }
+  }
+  log(`kit: Brain not answering after ${attempts} tries in ${Date.now() - started} ms; sessions run without it until it does: ${last}`);
+}
