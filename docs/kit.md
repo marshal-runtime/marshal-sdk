@@ -433,7 +433,8 @@ sets:
 - `env`: merged over the host's; `null` removes a key, for example the host's `ANTHROPIC_API_KEY` behind a proxy;
 - `pathToClaudeCodeExecutable`, and `disableSlashCommands` (Claude Code's `--disable-slash-commands`, through
   `extraArgs`, which also passes any other CLI flag);
-- `hooks`, `outputFormat` (the turn's `structured_output` comes back as `wait(...).structuredOutput`) and
+- `hooks`, `outputFormat` (the turn's `structured_output` comes back as `host.agents.wait(...).structuredOutput`;
+  the `marshal.agent.wait` capability, the runtime's desktop contract, does not carry it) and
   `spawnClaudeCodeProcess` (start the process on a remote machine or as a sandbox user);
 - `mcpServers`, added to the host's; `hostMcpServers: false` drops the host's own servers.
 
