@@ -451,7 +451,7 @@ export type {
   ApprovalResult,
   PolicyDenyWithFeedback,
 } from "../../host/engine-host-types";
-import type { ApprovalCallback, ApprovalDecision, ApprovalRequest, ApprovalResult } from "../../host/engine-host-types";
+import type { ApprovalCallback } from "../../host/engine-host-types";
 
 /**
  * Dependencies passed to `IToolBackend.attachApprovalRouter`. The backend
