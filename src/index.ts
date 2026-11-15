@@ -9,6 +9,16 @@ export {
 } from "./agent-port.js";
 export { callerSessionId, createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
 export {
+  AUTOMATION_CHECK_TASK,
+  AUTOMATION_RUN_TASK,
+  createAutomationsProvider,
+  HostAutomations,
+  parseSchedule,
+  type Automation,
+  type AutomationInput,
+  type AutomationTrigger,
+} from "./automations.js";
+export {
   isLocalAddress,
   senderLine,
   type DeliveryMode,

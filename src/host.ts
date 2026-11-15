@@ -7,6 +7,7 @@ import { createSdkMcpServer, query as claudeQuery, tool } from "@anthropic-ai/cl
 import { assembleAgentPrompt } from "@marshal/agent-runtime-prompt";
 import { createAllowAllPermissionBroker } from "@marshal/runtime";
 import * as runtimeExtensions from "@marshal/runtime/extensions";
+import { RUNTIME_EVENT_BUS } from "@marshal/runtime/events";
 import { RUNTIME_EXTENSION_LIFECYCLE_SERVICE } from "@marshal/runtime/extensions";
 import {
   createAgentRuntime,
@@ -19,6 +20,7 @@ import { z } from "zod";
 
 import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
 import { createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
+import { createAutomationsProvider, HostAutomations } from "./automations.js";
 import desktopPlacements from "./desktop-placements.json" with { type: "json" };
 import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type ExtensionSkill } from "./extension-skills.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
@@ -28,6 +30,7 @@ import { FileSessionStore, type SessionRecord } from "./session-store.js";
 const HARNESS_ID = "marshal-sdk";
 const DEFAULT_MODEL = "claude-opus-5-5";
 const SESSIONS_DIRECTORY = "sessions";
+const AUTOMATIONS_DIRECTORY = "automations";
 const PRIVATE_DIRECTORY = "runtime-private";
 const EXEC_TIMEOUT_MS = 300_000;
 
@@ -63,6 +66,19 @@ export interface MarshalHostOptions {
   log?: (line: string) => void;
   /** Serve this host over the link (docs/link.md) so another Marshal can watch and drive it. */
   link?: MarshalHostLinkOptions;
+  /** Schedule- and event-based runs (docs/kit.md, "Automations"). */
+  automations?: MarshalHostAutomationOptions;
+}
+
+export interface MarshalHostAutomationOptions {
+  /** The scheduler's clock. Tests pass a fake one with start: false and call host.automations.tick(). */
+  now?: () => Date;
+  /** How often the scheduler looks for due runs. Default 5 s. */
+  tickMs?: number;
+  /** Start the clock with the host. Default true; its first tick fires what fell due while no host ran. */
+  start?: boolean;
+  /** Default time zone of cron schedules. Defaults to the host's. */
+  timezone?: string;
 }
 
 export interface MarshalHostLinkOptions {
@@ -101,6 +117,10 @@ export interface MarshalHost {
   systemPrompt(): string | undefined;
   /** The link server, when the host was created with `link`. */
   readonly link?: { url: string; port: number };
+  /** Automations: definitions, the scheduler behind runtime.schedules.*, and tick() for a fake clock. */
+  readonly automations: HostAutomations;
+  /** An event happened on this host; event automations for its type run. */
+  emit(event: string, payload?: Record<string, unknown>): Promise<{ automationId: string; sessionId: string }[]>;
   dispose(): Promise<void>;
 }
 
@@ -136,6 +156,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   // Both are filled once the runtime exists; sessions only read them when a turn starts.
   let prompt: string | undefined;
   let serversFor: (session: SessionRecord) => Record<string, unknown> = () => ({});
+  let automations: HostAutomations | undefined;
   const agents = new ClaudeAgentPort({
     query: options.query ?? (claudeQuery as unknown as QueryFn),
     store: sessions,
@@ -147,7 +168,20 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     systemPrompt: () => prompt,
     mcpServers: (session) => serversFor(session),
     log,
+    onSessionEvent: (type, payload) => {
+      automations?.emit(type, payload).catch((error: unknown) => log(`automations on ${type}: ${String(error)}`));
+    },
   });
+  automations = new HostAutomations({
+    root: path.join(stateRoot, AUTOMATIONS_DIRECTORY),
+    port: agents,
+    sessions,
+    ...(options.automations?.now ? { now: options.automations.now } : {}),
+    ...(options.automations?.tickMs ? { tickMs: options.automations.tickMs } : {}),
+    ...(options.automations?.timezone ? { timezone: options.automations.timezone } : {}),
+    log,
+  });
+  const hostAutomations = automations;
   const runtime = await createAgentRuntime({
     workspacePath,
     protectedLifecycleResultRoot: privateRoot,
@@ -175,12 +209,15 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     serviceContainer: createRuntimeServiceContainer(),
     providerSources: [
       () => createAgentProvider(agents, (id) => id !== undefined && sessions.get(id) !== undefined),
+      () => createSessionToolsProvider(agents, sessions),
+      () => createAutomationsProvider(hostAutomations),
       createRuntimeBuiltinsSource({
         typescript: true,
-      () => createSessionToolsProvider(agents, sessions),
         artifacts: true,
         effects: false,
-        scheduling: false,
+        // runtime.schedules.* on this host's durable scheduler (agent.wake and the automation task kinds).
+        scheduling: true,
+        scheduler: hostAutomations.scheduler,
         reactUi: false,
         declarativeUi: false,
         extensionAuthoring: false,
@@ -214,6 +251,18 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     await runtime.dispose().catch(() => undefined);
     throw error;
   }
+  // Events the runtime publishes (lifecycle, extensions) trigger event automations too.
+  const eventBus = runtime.serviceContainer.tryGet(RUNTIME_EVENT_BUS as never) as
+    | { subscribe(type: "*", listener: (event: { type: string; payload: unknown }) => unknown): { dispose(): void } }
+    | undefined;
+  const eventSubscription = eventBus?.subscribe("*", (event) => {
+    const payload =
+      event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+        ? (event.payload as Record<string, unknown>)
+        : { value: event.payload };
+    void hostAutomations.emit(event.type, payload).catch((error: unknown) => log(`automations on ${event.type}: ${String(error)}`));
+  });
+  if (options.automations?.start !== false) hostAutomations.start();
 
   const adapterFor = (sessionId: string) =>
     createRuntimeToolAdapter({
@@ -358,7 +407,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     },
     skills: extensionSkills.map(({ content: _content, references: _references, ...skill }) => skill),
     ...(link ? { link: { url: link.url, port: link.port } } : {}),
+    automations: hostAutomations,
+    emit: (event, payload = {}) => hostAutomations.emit(event, payload),
     async dispose(): Promise<void> {
+      eventSubscription?.dispose();
+      await hostAutomations.stop();
       await link?.close();
       await agents.dispose();
       await runtime.dispose();

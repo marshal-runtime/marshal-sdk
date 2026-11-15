@@ -73,6 +73,8 @@ export interface AgentPortOptions {
   /** Tool allowlist handed to the backend; undefined leaves its defaults. */
   tools?: readonly string[];
   log?: (line: string) => void;
+  /** A session finished its queued work (`session.idle`) or stopped on an error (`session.failed`). */
+  onSessionEvent?: (type: "session.idle" | "session.failed", payload: Record<string, unknown>) => void;
 }
 
 interface QueuedMessage {
@@ -322,13 +324,31 @@ export class ClaudeAgentPort {
         }
         item = agent.queue.shift();
       }
-      this.options.store.update(agent.id, { state: "idle" });
+      agent.running = false;
+      this.announce("session.idle", this.options.store.update(agent.id, { state: "idle" }));
     } catch (error) {
       dropQueue(agent);
-      this.options.store.update(agent.id, { state: "failed", lastError: errorText(error) });
+      agent.running = false;
+      this.announce("session.failed", this.options.store.update(agent.id, { state: "failed", lastError: errorText(error) }));
       throw error;
     } finally {
       agent.running = false;
+    }
+  }
+
+  private announce(type: "session.idle" | "session.failed", session: SessionRecord): void {
+    try {
+      this.options.onSessionEvent?.(type, {
+        sessionId: session.id,
+        title: session.title,
+        state: session.state,
+        labels: session.labels,
+        ...(session.parentId ? { parentId: session.parentId } : {}),
+        ...(session.launchedBy ? { launchedBy: session.launchedBy } : {}),
+        ...(session.lastError ? { lastError: session.lastError } : {}),
+      });
+    } catch (error) {
+      this.options.log?.(`session event ${type} for ${session.id} failed: ${errorText(error)}`);
     }
   }
 

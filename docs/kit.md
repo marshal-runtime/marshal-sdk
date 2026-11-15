@@ -288,3 +288,54 @@ Tests: `test/session-messages.test.ts`:
   fake transport carrying an envelope;
 - host level: sessions act through their own `marshal` MCP server. A session starts a lane, launches a child with a
   parent, and the lane messages its launcher back; both are found and read.
+
+## Automations: schedule- and event-based runs
+
+**What the runtime gives.** The scheduling builtin is a facade. `runtime.schedules.{create,get,list,update,pause,
+resume,cancel}` dispatch `runtime.schedule.*` effects to a scheduler the host supplies; without one they answer
+`unsupported`. The runtime ships that scheduler too: `RuntimeScheduleService` on a `FileScheduleStore` gives durable
+once, interval and cron timing, retries, catch-up after downtime and an injectable clock. The host now turns the builtin
+on (`scheduling: true`) and passes its scheduler. Its task kinds are:
+
+- `agent.wake`: the runtime's own kind; it wakes a session with a message;
+- `marshal.automation.run`;
+- `marshal.automation.check`.
+
+**The capability family** uses the desktop's automation self-tool names:
+
+- `marshal.tool.createAutomation {name, prompt, …}` creates a prompt that starts a new session per run, or wakes one
+  (`wakeThisSession`, `targetSessionId`). `triggerType` picks the trigger:
+  - **`schedule`**: `schedule` is a five-field cron expression (in `timezone`, default the host's) or "every N
+    minutes|hours|days"; `runAt` or `runInMinutes` make a one-off. The desktop's phrases such as "every weekday at
+    9am" are not parsed here; they are cron here ("0 9 * * 1-5").
+  - **`condition`**: the desktop's check. Every `conditionCheckInterval` minutes (5, 15, 30 or 60), one check session
+    gets the desktop's prompt. On `CONDITION_MET` the automation runs once, completes and its checks stop.
+  - **`event`**: runs on every event of type `event` whose payload has the `eventMatch` values. The payload goes into
+    the prompt, marked as data.
+- `marshal.tool.listAutomations`, `getAutomation`, `updateAutomation` (a new trigger replaces the old schedule;
+  `enabled: false` pauses it), `deleteAutomation` and `runAutomationNow`.
+- `marshal.events.emit {event, payload}` is new (the desktop has no event bus to name it after).
+
+**Event sources:**
+
+- `host.emit(event, payload)`, for host code such as Marley's inbound message handler;
+- `marshal.events.emit`;
+- `session.idle` and `session.failed`, which the agent port raises when a session's queued work ends;
+- every event on the runtime's event bus.
+
+A session an automation started never triggers that same automation.
+
+**Restart.** Definitions live in `<stateRoot>/automations/automations.json` and schedules in
+`<stateRoot>/automations/schedules/`. The first tick after a start fires what fell due while the host was down: once
+per schedule, not once per missed slot. Event automations need nothing re-armed. `automations: {now, start: false}`
+gives a fake clock and `host.automations.tick()`. The tick loop's timer is unref'd, so a host that nobody disposed
+doesn't hold Node open.
+
+Tests: `test/automations.test.ts`, with a fake clock and no model:
+
+- interval, one-off and cron runs;
+- a restart that runs one missed slot once, keeps a paused automation paused and still triggers an event automation;
+- a condition that is not met, then met, through one resumed check session;
+- event matching, the payload in the prompt, `marshal.events.emit`, and `session.idle` without self-triggering;
+- a `runtime.schedules.create` `agent.wake` waking a session;
+- an automation waking its target session.
