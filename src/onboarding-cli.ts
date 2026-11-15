@@ -101,6 +101,7 @@ export async function withManifest(
     ],
     ...(kitFromManifest ? { kit: resolved.kit } : {}),
     ...(resolved.models && options.models === undefined ? { models: resolved.models } : {}),
+    ...(resolved.provider && options.provider === undefined ? { provider: resolved.provider } : {}),
     ...(defaultExtensions.length || options.defaultExtensions ? { defaultExtensions: [...(options.defaultExtensions ?? []), ...defaultExtensions] } : {}),
     ...(!explicit.model && resolved.model ? { model: resolved.model } : {}),
     ...(!explicit.effort && resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}),

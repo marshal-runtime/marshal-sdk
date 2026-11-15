@@ -338,3 +338,20 @@ test("a host on a provider client gives sessions the marshal tools, and they cal
     await host.dispose();
   }
 });
+
+test("marshal-sdk.json picks the provider: parsed, checked, and handed to the host by withManifest", async () => {
+  const { parseManifest } = await import("../src/onboarding.js");
+  const { withManifest } = await import("../src/onboarding-cli.js");
+  const manifest = parseManifest({ version: 1, provider: { id: "codex", account: "work" }, defaults: false, extensions: [] });
+  assert.deepEqual(manifest.provider, { id: "codex", account: "work" });
+  assert.throws(() => parseManifest({ version: 1, provider: { id: "gemini" }, extensions: [] }), /provider is/);
+  assert.throws(() => parseManifest({ version: 1, provider: { id: "codex", apiKey: "sk-inline" }, extensions: [] }), /provider is/);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-provider-manifest-"));
+  const file = path.join(dir, "marshal-sdk.json");
+  fs.writeFileSync(file, JSON.stringify({ version: 1, provider: { id: "cursor", apiKeyEnv: "TEAM_CURSOR_KEY" }, defaults: false, extensions: [] }));
+  const base = { workspacePath: dir, stateRoot: path.join(dir, "state"), env: {} };
+  assert.deepEqual((await withManifest(base, { manifest: file })).provider, { id: "cursor", apiKeyEnv: "TEAM_CURSOR_KEY" });
+  const inCode = { id: "claude" as const, account: "omer-max" };
+  assert.deepEqual((await withManifest({ ...base, provider: inCode }, { manifest: file })).provider, inCode, "a provider given in code wins");
+});

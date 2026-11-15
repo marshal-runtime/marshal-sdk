@@ -16,6 +16,7 @@ import { gunzipSync } from "node:zlib";
 
 import type { KitOptions, KitSelection } from "./kit/index.js";
 import type { ModelsConfig } from "./models/index.js";
+import { PROVIDER_IDS, type ProviderSelection } from "./provider-selection.js";
 
 export const MANIFEST_FILE = "marshal-sdk.json";
 const EXTENSION_ID = /^@[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -69,6 +70,8 @@ export interface SdkManifest {
   profile?: "zyg";
   model?: string;
   reasoningEffort?: string;
+  /** The model provider of this host's sessions and its credentials (docs/providers.md). */
+  provider?: ProviderSelection;
   kit?: KitSelection;
   /** Which provider answers decide / embed / speech on this host (docs/models.md). */
   models?: ModelsConfig;
@@ -119,6 +122,7 @@ export interface OnboardingHostOptions {
   models?: ModelsConfig;
   model?: string;
   reasoningEffort?: string;
+  provider?: ProviderSelection;
   /** Identities that came from the built-in defaults (the start-up report marks them). */
   defaultExtensions: string[];
 }
@@ -229,11 +233,23 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
     defaults = value as ManifestDefaults;
   }
   const kit = root.kit;
+  const provider = record(root.provider);
+  if (root.provider !== undefined) {
+    const fields = ["id", "account", "apiKeyEnv", "home", "engine"];
+    if (
+      !provider ||
+      !(PROVIDER_IDS as readonly unknown[]).includes(provider.id) ||
+      Object.keys(provider).some((key) => !fields.includes(key) || (key !== "id" && typeof provider[key] !== "string"))
+    ) {
+      throw new OnboardingError("manifest-invalid", `${file}: provider is {"id": "${PROVIDER_IDS.join("\" | \"")}", "account"?, "apiKeyEnv"?, "home"?, "engine"?: string}.`);
+    }
+  }
   return {
     version: 1,
     ...(root.profile === "zyg" ? { profile: "zyg" as const } : {}),
     ...(typeof root.model === "string" ? { model: root.model } : {}),
     ...(typeof root.reasoningEffort === "string" ? { reasoningEffort: root.reasoningEffort } : {}),
+    ...(provider ? { provider: provider as unknown as ProviderSelection } : {}),
     ...(kit !== undefined ? { kit: kit as KitSelection } : {}),
     ...(record(root.models) ? { models: root.models as ModelsConfig } : {}),
     ...(org
@@ -420,6 +436,7 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
     ...(manifest.models ? { models: manifest.models } : {}),
     ...(manifest.model ? { model: manifest.model } : {}),
     ...(manifest.reasoningEffort ? { reasoningEffort: manifest.reasoningEffort } : {}),
+    ...(manifest.provider ? { provider: manifest.provider } : {}),
     defaults,
     defaultExtensions: defaults.map((extension) => extension.identity),
   };
