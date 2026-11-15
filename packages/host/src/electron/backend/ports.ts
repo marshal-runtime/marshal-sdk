@@ -30,14 +30,6 @@ import type {
   GoalTransitionProposal,
 } from "../../common/goal-contract";
 import type {
-  ReviewerValidationAuthorizationResult,
-  ReviewerValidationCommandSpec,
-  ReviewerValidationPermissionRequest,
-  ReviewerValidationReceipt,
-  ReviewerValidationRequest,
-} from "../../common/goal-infrastructure-contract";
-import type { PermissionAction } from "../../common/marshal-constants";
-import type {
   AgentMessageApiResult,
   AgentMessageQueueCancellationResult,
   GoalState,
@@ -56,10 +48,15 @@ import type {
   SessionSource,
 } from "../../common/marshal-ipc-contract";
 import type { RelayPublishKind } from "../../common/relay-contract";
+import type {
+  IPermissionPolicy,
+  IReviewerValidationAuthorizationPort,
+  IReviewerValidationExecutorPort,
+  PermissionsEscalationDiff,
+} from "../../packages/marshal-permissions/src/policy/approval-contract";
 import type { ApprovalListener, BrokerRequest, PromptResult } from "../approval-broker";
 import type { RuntimeOneOffWakes } from "../automations/runtime-wakes-types";
 import type { CommandClassification } from "../permission-classification-contracts";
-import type { PermissionDecision, PolicyEvaluation } from "../permission-policy";
 import type { PersistedSession, SessionProgressRecord } from "../session-store";
 import type { SessionDeletedCause } from "../sessions";
 import type { Skill } from "../skills";
@@ -67,12 +64,7 @@ import type { WorkServiceProviders } from "../work-services/contracts";
 import type { WorkflowRunManager } from "../workflows/types";
 import type { IMemoryForgetPort, MemoryPurgeResult } from "./memory-forget-port";
 import type { RuntimeTool } from "./runtime-contract";
-import type {
-  ApprovalDecision,
-  ApprovalRequest,
-  IAutomationManager,
-  IHeartbeatManager,
-} from "./types";
+import type { IAutomationManager, IHeartbeatManager } from "./types";
 
 /**
  * Subset of `ApprovalBroker` that copilot's adapter touches: open a blocking
@@ -90,29 +82,6 @@ export interface IApprovalBroker {
    * callback path resolves the prompt via the awaited `requestPrompt`.
    */
   subscribe(listener: Partial<ApprovalListener>): () => void;
-}
-
-/**
- * Subset of `PermissionPolicy` that the adapter consults: evaluate the
- * auto-approve / auto-deny pipeline, record the user's interactive outcome
- * for audit, and log infrastructure-level failures (no-window, timeout).
- */
-export interface IPermissionPolicy {
-  evaluate(request: ApprovalRequest): PermissionDecision;
-  /**
-   * Optional richer evaluation: same decision as {@link evaluate} plus a
-   * model-facing `denyReason` for hard `deny` outcomes. The CopilotBackend
-   * adapter prefers this (falling back to {@link evaluate}) so policy denials
-   * surface an accurate, actionable message instead of "could not request
-   * permission from user". Optional so gateway-side doubles need not implement it.
-   */
-  evaluateDetailed?(request: ApprovalRequest): PolicyEvaluation;
-  recordInteractiveOutcome(
-    request: ApprovalRequest,
-    action: PermissionAction,
-    decision: ApprovalDecision,
-  ): boolean;
-  logInfraFailure(request: ApprovalRequest, source: "no-window" | "timeout"): void;
 }
 
 /**
@@ -761,20 +730,6 @@ export interface IReviewerSessionFactoryPort {
   createReviewerSession(scope: ReviewerSessionPermissionScope): Promise<string>;
 }
 
-/** Dedicated validation executor resolves registry IDs; requests never carry raw commands. */
-export interface IReviewerValidationExecutorPort {
-  getCommandSpec(commandId: string): Promise<ReviewerValidationCommandSpec | null>;
-  executeValidation(request: ReviewerValidationRequest): Promise<ReviewerValidationReceipt>;
-}
-
-/** Synchronous permission precheck; the async executor still revalidates and claims. */
-export interface IReviewerValidationAuthorizationPort {
-  authorizeReviewerValidation(
-    sessionId: string,
-    request: ReviewerValidationPermissionRequest,
-  ): ReviewerValidationAuthorizationResult;
-}
-
 /** Durable registry for fenced, idempotent operations that can outlive one turn. */
 export interface IExternalOperationRegistryPort {
   reserve(request: ExternalOperationRequest): Promise<{
@@ -802,17 +757,6 @@ export interface IExternalOperationRegistryPort {
  * `sessionManager` is filled in by `SessionManager.setSelfTools` (which
  * passes `this`); main.ts supplies the rest.
  */
-/** Shape of the old-vs-new diff passed to the permissions escalation card.
- *  Only fields that actually change are present. `tools.changed` contains only
- *  the entries being modified, not the full tools map. */
-export interface PermissionsEscalationDiff {
-  allow?: { from: string[]; to: string[] };
-  autoApproveReadOnly?: { from: boolean; to: boolean };
-  tools?: { changed: Record<string, { from: boolean; to: boolean }> };
-  servers?: Record<string, { autoApprove: { from: boolean; to: boolean } }>;
-  /** `forget { completely: true }`: the user's own memory text, shown only on their card. */
-  forgetCompletely?: { memoryText: string };
-}
 
 export interface ISelfToolDeps {
   sessionManager: ISelfToolsSessionManager;
@@ -959,3 +903,11 @@ export interface ISelfToolDeps {
     diff: PermissionsEscalationDiff,
   ) => Promise<boolean>;
 }
+
+// The policy's ports are the permission engine's (packages/marshal-permissions).
+export type {
+  IPermissionPolicy,
+  IReviewerValidationAuthorizationPort,
+  IReviewerValidationExecutorPort,
+  PermissionsEscalationDiff,
+};

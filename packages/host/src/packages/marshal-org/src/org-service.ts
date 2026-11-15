@@ -16,9 +16,9 @@ import {
   type OrgDiscoveryDocument,
 } from "@marshal/agent-runtime-org";
 
-import type { OrgStatus } from "../../common/marshal-ipc-contract";
-import { createLogger } from "../../common/marshal-logger";
-import { normalizeOrgUrl } from "../../common/org-url";
+import { createLogger } from "../host-deps";
+import { normalizeOrgUrl } from "./common/org-url";
+import type { OrgStatus } from "./contract/org-types";
 import {
   BROKER_TIMEOUT_MS,
   prepareBrokerRequest,

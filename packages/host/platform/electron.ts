@@ -50,6 +50,22 @@ export const app = {
   getName(): string {
     return platform.name ?? "Marshal";
   },
+  isReady(): boolean {
+    return true;
+  },
+};
+
+/** No OS keychain outside Electron: encryption is unavailable, so callers take their plain-file or env paths. */
+export const safeStorage = {
+  isEncryptionAvailable(): boolean {
+    return false;
+  },
+  encryptString(_plain: string): Buffer {
+    throw new Error("safeStorage is not available outside Electron");
+  },
+  decryptString(_encrypted: Buffer): string {
+    throw new Error("safeStorage is not available outside Electron");
+  },
 };
 
 export interface BrowserWindow {

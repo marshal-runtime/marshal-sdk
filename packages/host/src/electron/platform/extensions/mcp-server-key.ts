@@ -1,1 +1,1 @@
-export { toMcpServerKey } from "../../../common/mcp-server-key-normalization";
+export * from "../../../packages/marshal-providers/src/engine/platform/extensions/mcp-server-key";
