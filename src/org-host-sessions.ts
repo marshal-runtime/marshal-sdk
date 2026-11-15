@@ -98,7 +98,11 @@ export class HostSessions {
     while (Date.now() < deadline) {
       const timeoutMs = Math.max(1, Math.min(WAIT_SLICE_MS, deadline - Date.now()));
       const waited = await this.options.call("marshal.agent.wait", { agentId: envelope.to.sessionId, ...(typeof sent.messageId === "string" ? { messageId: sent.messageId } : {}), timeoutMs });
-      if (waited.state === "completed") return { success: true, accepted: true, messageId, response: typeof waited.result === "string" ? waited.result : "" };
+      if (waited.state !== "completed") continue;
+      // A failed turn also completes (the agent goes idle); its error is the newest transcript message.
+      const last = ((await this.options.call("marshal.agent.transcript", { agentId: envelope.to.sessionId, limit: 1 })).messages as TranscriptMessage[] | undefined)?.at(-1) as (TranscriptMessage & { error?: boolean }) | undefined;
+      if (last?.error) return { success: false, accepted: true, messageId, error: last.content };
+      return { success: true, accepted: true, messageId, response: typeof waited.result === "string" ? waited.result : "" };
     }
     return { success: true, accepted: true, messageId, status: "timeout" };
   }

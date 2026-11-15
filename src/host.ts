@@ -390,7 +390,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       tools: [
         tool(
           "runtime_search",
-          RUNTIME_MCP_TOOLS[0]!.description,
+          RUNTIME_MCP_TOOLS[0]!.description ?? "",
           {
             query: z.string().optional(),
             name: z.string().optional(),
@@ -403,7 +403,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         ),
         tool(
           "runtime_exec",
-          RUNTIME_MCP_TOOLS[1]!.description,
+          RUNTIME_MCP_TOOLS[1]!.description ?? "",
           {
             targetType: z.enum(["operation", "inline_module", "module"]),
             target: z.string().optional(),
