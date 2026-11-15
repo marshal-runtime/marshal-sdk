@@ -101,7 +101,7 @@ same identity replaces its default.
 | Default | Identity | On when | Package from |
 | --- | --- | --- | --- |
 | `org` | `@marshal/org` | the manifest names an `org` | `$MARSHAL_SDK_ORG_PACKAGE`, the SDK's `extensions/org/out/package`, or the organization |
-| `brain` | `@marshal/brain` | always (the kit's Brain) | `kit.brain.packageRoot`, `$MARSHAL_SDK_BRAIN_PACKAGE`, or the organization |
+| `brain` | `@marshal/brain` | always (the kit's Brain) | `kit.brain.packageRoot`, `$MARSHAL_SDK_BRAIN_PACKAGE`, the SDK's `extensions/brain` (where `image/pack.mjs` puts it), or the organization |
 | `zygTools` | `@zyg/marshal-runtime-extension` | `"profile": "zyg"` (a Zyg host) | `$MARSHAL_SDK_ZYG_EXTENSION` or the organization |
 
 - **Opting out:** `"defaults": {"zygTools": false}` turns one off; Marley is a Zyg host that does this.

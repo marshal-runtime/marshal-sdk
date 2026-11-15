@@ -161,7 +161,7 @@ export interface DefaultSpec {
 /** The built-in default set, in load order. */
 export const DEFAULT_EXTENSIONS: readonly DefaultSpec[] = [
   { key: "org", identity: ORG_EXTENSION, applies: (manifest) => manifest.org !== undefined, env: "MARSHAL_SDK_ORG_PACKAGE", bundled: "extensions/org/out/package", why: "the manifest names an org" },
-  { key: "brain", identity: BRAIN_EXTENSION, applies: () => true, env: "MARSHAL_SDK_BRAIN_PACKAGE", why: "every host carries the kit's Brain" },
+  { key: "brain", identity: BRAIN_EXTENSION, applies: () => true, env: "MARSHAL_SDK_BRAIN_PACKAGE", bundled: "extensions/brain", why: "every host carries the kit's Brain" },
   { key: "zygTools", identity: ZYG_TOOLS_EXTENSION, applies: (manifest) => manifest.profile === "zyg", env: "MARSHAL_SDK_ZYG_EXTENSION", why: "this is a Zyg host (profile zyg)" },
 ];
 
@@ -377,7 +377,11 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
   for (const spec of DEFAULT_EXTENSIONS) {
     if (!defaultOn(manifest, spec) || taken.has(spec.identity)) continue;
     // A kit that already asks for the Brain (or memory, which needs it) loads it itself: not a default then.
-    if (spec.key === "brain" && kitAsksForBrain(kit)) continue;
+    if (spec.key === "brain" && kitAsksForBrain(kit)) {
+      const shipped = spec.bundled && path.join(SDK_ROOT, spec.bundled);
+      if (!brainFromKit(kit) && !envPackage(env[spec.env]) && shipped && fs.existsSync(path.join(shipped, "runtime-extension.json"))) kit = withBrain(kit, shipped);
+      continue;
+    }
     const label = `default ${spec.identity}`;
     let packageRoot = (spec.key === "brain" ? brainFromKit(kit) : undefined) ?? envPackage(env[spec.env]);
     let source: ResolvedExtension["source"] = "path";
@@ -389,7 +393,7 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
     if (!packageRoot) {
       throw new OnboardingError(
         "default-missing",
-        `${label} is on because ${spec.why}, but no package was found: set ${spec.env} to a built package${spec.bundled ? `, build ${spec.bundled}` : ""}${manifest.org ? "" : ", or name the org that serves it"}, or opt out with "defaults": {"${spec.key}": false}.`,
+        `${label} is on because ${spec.why}, but no package was found: set ${spec.env} to a built package${spec.bundled ? `, put one at ${path.join(SDK_ROOT, spec.bundled)}` : ""}${manifest.org ? "" : ", or name the org that serves it"}, or opt out with "defaults": {"${spec.key}": false}.`,
       );
     }
     const resolved = finish(packageRoot, { id: spec.identity }, label, source, "default", env);
