@@ -125,7 +125,7 @@ export function createExtension(context: Context) {
     return out;
   };
   // What the last sdksessions.open asked to show; the view reads it when its own open state is missing.
-  let focus: { hostId: string; runId: string | null; sessionId: string | null; tab: string | null; filesRoot?: string; filesPath?: string } = {
+  let focus: { hostId: string; runId: string | null; sessionId: string | null; tab: string | null; filesRoot?: string; filesPath?: string; query?: string } = {
     hostId: LOCAL_HOST_ID,
     runId: null,
     sessionId: null,
@@ -193,8 +193,8 @@ export function createExtension(context: Context) {
     {
       name: "sdksessions.open",
       title: "Open the SDK sessions viewer",
-      description: "Open the tab that shows hosts running marshal-sdk (local folders and linked hosts), their runs, sessions, transcripts, telemetry and files. hostId, runId, sessionId and tab preselect.",
-      input: obj({ hostId, runId: str, sessionId: str, tab: { type: "string", enum: ["transcript", "telemetry", "files", "pages", "questions"] }, filesRoot: str, filesPath: str, placement: str, roots }),
+      description: "Open the tab that shows hosts running marshal-sdk (local folders and linked hosts), their runs, sessions, transcripts, telemetry and files. hostId, runId, sessionId and tab preselect; query opens it on that search (every host, plus sessions shared to the org index).",
+      input: obj({ hostId, runId: str, sessionId: str, query: str, tab: { type: "string", enum: ["transcript", "telemetry", "files", "pages", "questions"] }, filesRoot: str, filesPath: str, placement: str, roots }),
       read: false,
       handler: async (input, invocation) => {
         if (!context.execute) throw new Error("This Marshal doesn't let extensions open views.");
@@ -204,6 +204,7 @@ export function createExtension(context: Context) {
           sessionId: typeof input.sessionId === "string" ? input.sessionId : null,
           tab: typeof input.tab === "string" ? input.tab : null,
           ...(typeof input.filesRoot === "string" ? { filesRoot: input.filesRoot, filesPath: typeof input.filesPath === "string" ? input.filesPath : "" } : {}),
+          ...(typeof input.query === "string" && input.query.trim() ? { query: input.query.trim() } : {}),
         };
         const response = await context.execute(
           {
