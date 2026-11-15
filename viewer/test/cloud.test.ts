@@ -174,6 +174,8 @@ test("agent-sandbox's runner layout (host/sessions, page-studio/, page-run.json,
   const found = (await host.cloudRuns(true)).find((run) => run.outputRoot === "gs://dev-bucket/runs/sandbox-902");
   assert.equal(found?.marshal, true);
   assert.equal(found?.run?.runId, "run-902");
+  // No title in the runner's records: the run is named after its page.
+  assert.equal(found?.run?.title, "SaffPro");
   const [only] = await host.sessions("run-902");
   assert.equal((await host.native(only!.id)).ok, true);
   assert.deepEqual((await host.pages("run-902")).pages.map((page) => page.id), ["saffpro--sandbox"]);
