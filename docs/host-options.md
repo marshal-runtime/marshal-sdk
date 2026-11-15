@@ -52,6 +52,14 @@ const host = await createMarshalHost({
 });
 ```
 
+## Session engine
+
+Turns on a provider client run on the desktop's session engine (`LocalBackend`, see docs/north-star.md). The options
+above reach it per session: `permissions.canUseTool` becomes the engine's approval callback (a reject with feedback
+reaches the model as the desktop's policy deny with feedback), `directTools` and the runtime tools become the session's
+exclusive tools, and the browser becomes its MCP server. An embedder that already configured the engine's ports
+(`configureEngineHost`, as the desktop does) keeps its own; otherwise the host configures headless ones.
+
 ## Not ported in this pass
 
 - **Extension secrets** (the desktop's `extensionSecrets` module) and **extension admission hooks** (`admitExtension`,

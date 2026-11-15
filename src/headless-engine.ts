@@ -39,7 +39,7 @@ function formatNow(now: Date, timeZone: string): string {
 }
 
 /** The engine's LocalBackend ports for a headless host (SessionManager's ports stay unset: the agent port drives sessions), with its app data (session config traces, browser output) under `appDataDir`. */
-export function headlessEngineHost(appDataDir: string, version = SDK_VERSION): EngineHostServices {
+export function headlessEngineHost(appDataDir: string, version = SDK_VERSION): Partial<EngineHostServices> {
   const mkdir = (dir: string, mode?: number) => fs.mkdirSync(dir, { recursive: true, ...(mode ? { mode } : {}) });
   return {
     app: { getVersion: () => version, isPackaged: false },
