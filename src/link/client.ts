@@ -46,48 +46,65 @@ export class LinkClient {
     return url;
   }
 
-  request<T = any>(method: "GET" | "POST", path: string, query: Query = {}, body?: unknown, timeoutMs?: number): Promise<T> {
+  private raw(method: "GET" | "POST", path: string, query: Query, body: unknown, timeoutMs: number | undefined, accept: string): Promise<{ status: number; bytes: Buffer }> {
     const url = this.target(path, query);
     const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
     const transport = url.protocol === "https:" ? https : http;
-    return new Promise<T>((resolve, reject) => {
+    const timeout = timeoutMs ?? this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    return new Promise((resolve, reject) => {
       const request = transport.request(
         url,
         {
           method,
           headers: {
             authorization: `Bearer ${this.options.token}`,
-            accept: "application/json",
+            accept,
             ...(payload ? { "content-type": "application/json", "content-length": String(payload.length) } : {}),
           },
-          timeout: timeoutMs ?? this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          timeout,
         },
         (response) => {
           const chunks: Buffer[] = [];
           response.on("data", (chunk: Buffer) => chunks.push(chunk));
-          response.on("end", () => {
-            const text = Buffer.concat(chunks).toString("utf8");
-            let parsed: any;
-            try {
-              parsed = text ? JSON.parse(text) : {};
-            } catch {
-              return reject(new LinkError(response.statusCode ?? 0, "bad-response", `The host answered ${response.statusCode} with something that is not JSON.`));
-            }
-            if ((response.statusCode ?? 0) >= 400) {
-              return reject(new LinkError(response.statusCode ?? 0, parsed?.error?.code ?? "failed", parsed?.error?.message ?? `HTTP ${response.statusCode}`));
-            }
-            resolve(parsed as T);
-          });
+          response.on("end", () => resolve({ status: response.statusCode ?? 0, bytes: Buffer.concat(chunks) }));
           response.on("error", reject);
         },
       );
-      request.on("timeout", () => request.destroy(new LinkError(0, "timeout", `The host did not answer within ${Math.round((timeoutMs ?? this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS) / 1000)}s.`)));
+      request.on("timeout", () => request.destroy(new LinkError(0, "timeout", `The host did not answer within ${Math.round(timeout / 1000)}s.`)));
       request.on("error", (error: Error & { code?: string }) =>
         reject(error instanceof LinkError ? error : new LinkError(0, "unreachable", `Can't reach the host: ${error.code ?? error.message}.`)),
       );
       if (payload) request.write(payload);
       request.end();
     });
+  }
+
+  async request<T = any>(method: "GET" | "POST", path: string, query: Query = {}, body?: unknown, timeoutMs?: number): Promise<T> {
+    const { status, bytes } = await this.raw(method, path, query, body, timeoutMs, "application/json");
+    const text = bytes.toString("utf8");
+    let parsed: any;
+    try {
+      parsed = text ? JSON.parse(text) : {};
+    } catch {
+      throw new LinkError(status, "bad-response", `The host answered ${status} with something that is not JSON.`);
+    }
+    if (status >= 400) throw new LinkError(status, parsed?.error?.code ?? "failed", parsed?.error?.message ?? `HTTP ${status}`);
+    return parsed as T;
+  }
+
+  /** A binary answer (a picture). */
+  async bytes(path: string, timeoutMs = 120_000): Promise<Buffer> {
+    const { status, bytes } = await this.raw("GET", path, {}, undefined, timeoutMs, "*/*");
+    if (status >= 400) {
+      let error: any;
+      try {
+        error = JSON.parse(bytes.toString("utf8"))?.error;
+      } catch {
+        // Not JSON.
+      }
+      throw new LinkError(status, error?.code ?? "failed", error?.message ?? `HTTP ${status}`);
+    }
+    return bytes;
   }
 
   info() {
@@ -160,6 +177,20 @@ export class LinkClient {
   /** The envelope `marshal.sessions.importNative` takes: { format, encoding, data }. */
   native(id: string) {
     return this.request("GET", `sessions/${encodeURIComponent(id)}/native`, {}, undefined, 120_000);
+  }
+
+  /** Pages the host's Page Studio holds (runId: the ones that run made). */
+  pages(runId?: string) {
+    return this.request("GET", "pages", { runId });
+  }
+
+  /** One page with the pictures it shows (src/link/pages.ts PageManifest). */
+  page(id: string) {
+    return this.request("GET", `pages/${encodeURIComponent(id)}`, {}, undefined, 60_000);
+  }
+
+  pagePicture(id: string, brand: string, name: string) {
+    return this.bytes(`pages/${encodeURIComponent(id)}/pictures/${encodeURIComponent(brand)}/${encodeURIComponent(name)}`);
   }
 
   /** Server-sent events of a session (`sessions/<id>/stream`) or a run (`runs/<id>/stream`). */

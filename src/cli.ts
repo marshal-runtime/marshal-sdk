@@ -19,6 +19,7 @@ const USAGE = `marshal-sdk <command> [options]
               Store-only (a finished run, no runtime): --store <state dir> [--native-root <claude dir>]...
               --token-file <file> or $MARSHAL_SDK_LINK_TOKEN (required, 16+ chars)
               [--bind <address>] (default 127.0.0.1) [--port <n>] (default 7781) [--files name=<dir>]...
+              [--page-studio-dir <dir>] serves the pages a run made there (default: $PAGE_STUDIO_DIR on a live host)
 
 Host options (exec, agent):
   --workspace <dir>          where sessions work (required)
@@ -185,6 +186,7 @@ async function serve(args: Arguments): Promise<void> {
       host: { id: one(args, "host-id") ?? "marshal-sdk", kind: one(args, "host-kind") ?? "local" },
       files: namedFolders(args),
       nativeRoots,
+      ...(one(args, "page-studio-dir") ? { pageStudioDir: path.resolve(one(args, "page-studio-dir")!) } : {}),
       log,
     });
     log(`store-only link serving ${sessionsRoot} on ${server.url}`);
@@ -193,7 +195,11 @@ async function serve(args: Arguments): Promise<void> {
     const options = hostOptions(args);
     // Loaded only for a live host: store-only serving needs no runtime or model SDK installed.
     const { createMarshalHost } = await import("./host.js");
-    const host = await createMarshalHost({ ...options, link: { token, bind, port, files: namedFolders(args), nativeRoots } });
+    const pageStudioDir = one(args, "page-studio-dir");
+    const host = await createMarshalHost({
+      ...options,
+      link: { token, bind, port, files: namedFolders(args), nativeRoots, ...(pageStudioDir ? { pageStudioDir: path.resolve(pageStudioDir) } : {}) },
+    });
     const task = one(args, "task");
     if (task) {
       const agent = host.agents.launch({

@@ -9,6 +9,7 @@ import { gzipSync } from "node:zlib";
 
 import type { SessionFilter, SessionRecord, SessionState, TranscriptMessage } from "../session-store.js";
 import { DEFAULT_MAX_FILE_BYTES, FileAccessError, FileRoots } from "./files.js";
+import { PageStore } from "./pages.js";
 import { readLinesFrom, SESSION_ID, StoreReader } from "./store-reader.js";
 import { activityOf, combineTelemetry, type EventLine } from "./telemetry.js";
 
@@ -45,6 +46,8 @@ export interface LinkServerOptions {
   files?: Record<string, string>;
   /** Claude config dirs to look for conversation files in when a session's own config dir is not on this machine. */
   nativeRoots?: string[];
+  /** The host's Page Studio data folder (its PAGE_STUDIO_DIR): pages a run made, served for import elsewhere. */
+  pageStudioDir?: string;
   live?: LinkLivePort;
   maxFileBytes?: number;
   log?: (line: string) => void;
@@ -112,6 +115,7 @@ export async function startLinkServer(options: LinkServerOptions): Promise<LinkS
   const expected = digest(options.token);
   const reader = new StoreReader(options.sessionsRoot, options.nativeRoots ?? []);
   const files = new FileRoots(options.files ?? {});
+  const pages = options.pageStudioDir ? new PageStore(options.pageStudioDir) : undefined;
   const live = options.live;
   const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const log = options.log ?? (() => undefined);
@@ -311,6 +315,7 @@ export async function startLinkServer(options: LinkServerOptions): Promise<LinkS
         extensions: live?.extensions() ?? [],
         capabilities: live ? await live.capabilities() : [],
         files: files.names(),
+        pages: !!pages,
       };
     }
     if (method === "GET" && resource === "runs" && !id) return { runs: reader.runs() };
@@ -436,6 +441,27 @@ export async function startLinkServer(options: LinkServerOptions): Promise<LinkS
       const body = await readBody(request);
       if (typeof body.capability !== "string" || !body.capability) throw new HttpError(400, "invalid-request", "capability is required.");
       return { capability: body.capability, output: await port.invoke(body.capability, body.input ?? {}) };
+    }
+    if (method === "GET" && resource === "pages") {
+      if (!id) {
+        const runId = query.get("runId");
+        const all = pages?.list(reader.runs()) ?? [];
+        return { pageStudio: !!pages, pages: runId ? all.filter((page) => page.runId === runId) : all };
+      }
+      if (!pages) throw new HttpError(404, "no-pages", "This host serves no Page Studio folder.");
+      if (!action) {
+        const manifest = pages.manifest(id);
+        if (!manifest) throw new HttpError(404, "not-found", `No page ${id} on this host.`);
+        return manifest;
+      }
+      const [, , , , brand, name] = parts;
+      if (action === "pictures" && brand && name && parts.length === 6) {
+        const picture = pages.picture(id, brand, name);
+        if (!picture) throw new HttpError(404, "not-found", "That page shows no such picture here.");
+        response.writeHead(200, { "content-type": picture.type, "content-length": picture.bytes.length, "cache-control": "no-store" });
+        response.end(picture.bytes);
+        return undefined;
+      }
     }
     if (method === "GET" && resource === "files") {
       const root = query.get("root") ?? "";

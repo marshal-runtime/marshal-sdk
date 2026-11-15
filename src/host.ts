@@ -75,6 +75,8 @@ export interface MarshalHostLinkOptions {
   /** Folders clients may list and read besides the workspace, for example { output: "<dir>" }. */
   files?: Record<string, string>;
   nativeRoots?: string[];
+  /** Page Studio's data folder, to serve the pages runs make. Default: PAGE_STUDIO_DIR from the host's env. */
+  pageStudioDir?: string;
 }
 
 export interface MarshalHostBrowser {
@@ -315,6 +317,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   let link: LinkServer | undefined;
   let names: Promise<string[]> | undefined;
   if (options.link) {
+    const pageStudioDir = options.link.pageStudioDir ?? options.env?.PAGE_STUDIO_DIR ?? process.env.PAGE_STUDIO_DIR;
     try {
       link = await startLinkServer({
         token: options.link.token,
@@ -324,6 +327,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         host: options.host ?? { id: HARNESS_ID, kind: "local" },
         files: { workspace: workspacePath, ...options.link.files },
         ...(options.link.nativeRoots ? { nativeRoots: options.link.nativeRoots } : {}),
+        ...(pageStudioDir ? { pageStudioDir } : {}),
         live: {
           send: (sessionId, text, deliveryMode) => agents.send(sessionId, text, deliveryMode),
           cancel: (sessionId) => agents.cancel(sessionId),
