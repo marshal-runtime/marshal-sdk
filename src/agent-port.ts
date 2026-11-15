@@ -32,7 +32,41 @@ export interface AgentSummary {
   reasoningEffort?: string;
   workspaceName?: string;
   sessionId?: string;
-  usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number; costUsd: number };
+  /** modelTurns: the backend's own count of model round trips (the SDK's num_turns), summed over turns. */
+  usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number; costUsd: number; modelTurns?: number };
+}
+
+/**
+ * Claude Agent SDK options one launch passes to every turn of its session, on top of what the host sets. Functions
+ * (hooks, the spawner) live in this process only: a session adopted by a later run of the host runs without them.
+ */
+export interface AgentLaunchOptions {
+  maxTurns?: number;
+  maxBudgetUsd?: number;
+  /** Use only the MCP servers given here and by the host, ignoring the backend's own MCP config. */
+  strictMcpConfig?: boolean;
+  allowedTools?: readonly string[];
+  disallowedTools?: readonly string[];
+  /** Working folder of this session's turns instead of the host's (native history is filed under it). */
+  cwd?: string;
+  /** Environment of this session's backend, merged over the host's; null removes a key (say, ANTHROPIC_API_KEY). */
+  env?: Readonly<Record<string, string | null>>;
+  /** The Claude Code binary to run instead of the SDK's own. */
+  pathToClaudeCodeExecutable?: string;
+  /** Start Claude Code with --disable-slash-commands. */
+  disableSlashCommands?: boolean;
+  /** Extra Claude Code CLI flags (flag name without dashes to value, or null for a bare flag). */
+  extraArgs?: Readonly<Record<string, string | null>>;
+  /** The SDK's hooks: event name to matchers with callbacks. */
+  hooks?: Readonly<Record<string, unknown>>;
+  /** Structured output (`{type: "json_schema", schema}`); the parsed result is the turn's structuredOutput. */
+  outputFormat?: unknown;
+  /** Start the Claude Code process yourself (a remote machine, a sandbox user). */
+  spawnClaudeCodeProcess?: (options: any) => unknown;
+  /** MCP servers of this session, added to the host's (or alone, with hostMcpServers false). */
+  mcpServers?: Readonly<Record<string, unknown>>;
+  /** Give the session the host's MCP servers (the marshal runtime tools, the browser). Default true. */
+  hostMcpServers?: boolean;
 }
 
 export interface AgentLaunchRequest {
@@ -52,8 +86,10 @@ export interface AgentLaunchRequest {
   /** The session id to use (a fork's id is written into the conversation it continues). Default: a new id. */
   sessionId?: string;
   /** Where the conversation starts: a native session to resume, or one the first turn forks (resume + forkSession). */
-  native?: { sessionId?: string; forkOf?: string };
+  native?: { sessionId?: string; forkOf?: string; forkAt?: string };
   fork?: SessionFork;
+  /** SDK options for every turn of this session. */
+  options?: AgentLaunchOptions;
 }
 
 export interface AgentTranscript {
@@ -105,6 +141,11 @@ interface LiveAgent {
   lastReply?: string;
   systemPrompt?: string;
   idle: Promise<void>;
+  launchOptions?: AgentLaunchOptions;
+  /** The message uuid the first (forking) turn resumes at: resumeSessionAt. */
+  forkAt?: string;
+  /** The last turn's structured output (outputFormat). */
+  structuredOutput?: unknown;
 }
 
 const IMAGE_TYPES: Record<string, string> = {
@@ -183,6 +224,8 @@ export class ClaudeAgentPort {
         kind: "claude",
         cwd: this.options.cwd,
         ...(this.options.env.CLAUDE_CONFIG_DIR ? { configDir: this.options.env.CLAUDE_CONFIG_DIR } : {}),
+        ...(request.options?.cwd ? { cwd: request.options.cwd } : {}),
+        ...(request.options?.env?.CLAUDE_CONFIG_DIR ? { configDir: request.options.env.CLAUDE_CONFIG_DIR } : {}),
         ...(request.native?.sessionId ? { sessionId: request.native.sessionId } : {}),
         ...(request.native?.forkOf && !request.native.sessionId ? { forkOf: request.native.forkOf } : {}),
       },
@@ -198,6 +241,8 @@ export class ClaudeAgentPort {
       running: false,
       idle: Promise.resolve(),
       ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
+      ...(request.options ? { launchOptions: request.options } : {}),
+      ...(request.native?.forkAt ? { forkAt: request.native.forkAt } : {}),
     };
     this.live.set(session.id, agent);
     this.launches.set(request.idempotencyKey, session.id);
@@ -313,7 +358,10 @@ export class ClaudeAgentPort {
     return this.summary(agentId);
   }
 
-  async wait(agentId: string, timeoutMs = 300_000): Promise<{ state: "completed" | "timeout"; agent: AgentSummary; result?: string }> {
+  async wait(
+    agentId: string,
+    timeoutMs = 300_000,
+  ): Promise<{ state: "completed" | "timeout"; agent: AgentSummary; result?: string; structuredOutput?: unknown }> {
     const agent = this.agent(agentId);
     let timer: NodeJS.Timeout | undefined;
     const timedOut = new Promise<"timeout">((resolve) => {
@@ -325,6 +373,7 @@ export class ClaudeAgentPort {
       state: outcome,
       agent: this.summary(agentId),
       ...(outcome === "completed" && agent.lastResult !== undefined ? { result: agent.lastResult } : {}),
+      ...(outcome === "completed" && agent.structuredOutput !== undefined ? { structuredOutput: agent.structuredOutput } : {}),
     };
   }
 
@@ -419,23 +468,36 @@ export class ClaudeAgentPort {
     const abort = new AbortController();
     agent.abort = abort;
     const systemPrompt = agent.systemPrompt ?? this.options.systemPrompt(session);
+    const launch = agent.launchOptions ?? {};
+    agent.structuredOutput = undefined;
+    const extraArgs = { ...launch.extraArgs, ...(launch.disableSlashCommands ? { "disable-slash-commands": null } : {}) };
     const options: Record<string, unknown> = {
       model: session.model,
       ...(session.reasoningEffort ? { effort: session.reasoningEffort } : {}),
-      cwd: this.options.cwd,
-      env: this.options.env,
+      cwd: launch.cwd ?? this.options.cwd,
+      env: launch.env ? mergeEnv(this.options.env, launch.env) : this.options.env,
       abortController: abort,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       settingSources: [],
-      mcpServers: this.options.mcpServers(session),
+      mcpServers: { ...(launch.hostMcpServers === false ? {} : this.options.mcpServers(session)), ...launch.mcpServers },
       systemPrompt: systemPrompt ?? { type: "preset", preset: "claude_code" },
       ...(this.options.tools ? { tools: [...this.options.tools] } : {}),
       ...(session.native.sessionId
         ? { resume: session.native.sessionId }
         : session.native.forkOf
-          ? { resume: session.native.forkOf, forkSession: true }
+          ? { resume: session.native.forkOf, forkSession: true, ...(agent.forkAt ? { resumeSessionAt: agent.forkAt } : {}) }
           : {}),
+      ...(launch.maxTurns !== undefined ? { maxTurns: launch.maxTurns } : {}),
+      ...(launch.maxBudgetUsd !== undefined ? { maxBudgetUsd: launch.maxBudgetUsd } : {}),
+      ...(launch.strictMcpConfig !== undefined ? { strictMcpConfig: launch.strictMcpConfig } : {}),
+      ...(launch.allowedTools ? { allowedTools: [...launch.allowedTools] } : {}),
+      ...(launch.disallowedTools ? { disallowedTools: [...launch.disallowedTools] } : {}),
+      ...(launch.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: launch.pathToClaudeCodeExecutable } : {}),
+      ...(Object.keys(extraArgs).length ? { extraArgs } : {}),
+      ...(launch.hooks ? { hooks: launch.hooks } : {}),
+      ...(launch.outputFormat !== undefined ? { outputFormat: launch.outputFormat } : {}),
+      ...(launch.spawnClaudeCodeProcess ? { spawnClaudeCodeProcess: launch.spawnClaudeCodeProcess } : {}),
       stderr: (data: string) => this.options.log?.(`agent ${agent.id} stderr: ${data.trimEnd().slice(0, 500)}`),
     };
     let lastText = "";
@@ -452,6 +514,7 @@ export class ClaudeAgentPort {
         } else if (event.type === "result") {
           final = typeof event.result === "string" && event.result ? event.result : lastText;
           if (event.is_error) failed = final || String(event.subtype ?? "error");
+          if (event.structured_output !== undefined) agent.structuredOutput = event.structured_output;
           store.addUsage(agent.id, {
             inputTokens: num(event.usage?.input_tokens),
             outputTokens: num(event.usage?.output_tokens),
@@ -459,6 +522,7 @@ export class ClaudeAgentPort {
             cacheWriteTokens: num(event.usage?.cache_creation_input_tokens),
             costUsd: num(event.total_cost_usd),
             turns: 1,
+            modelTurns: num(event.num_turns),
           });
         }
       }
@@ -503,6 +567,7 @@ export class ClaudeAgentPort {
         outputTokens: session.usage.outputTokens,
         cachedInputTokens: session.usage.cacheReadTokens,
         costUsd: session.usage.costUsd,
+        ...(session.usage.modelTurns ? { modelTurns: session.usage.modelTurns } : {}),
       },
     };
   }
@@ -534,6 +599,16 @@ function dropQueue(agent: LiveAgent): void {
 
 function senderKey(from: MessageSender): string {
   return `${from.kind}:${from.host ?? ""}:${from.sessionId ?? from.personId ?? from.name ?? ""}`;
+}
+
+/** The host's environment with a launch's on top; a null value removes the key. */
+function mergeEnv(base: Record<string, string>, over: Readonly<Record<string, string | null>>): Record<string, string> {
+  const merged: Record<string, string> = { ...base };
+  for (const [key, value] of Object.entries(over)) {
+    if (value === null) delete merged[key];
+    else merged[key] = value;
+  }
+  return merged;
 }
 
 /** A plain string, or one user message with the pictures as image blocks ahead of the text. */

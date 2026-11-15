@@ -79,7 +79,7 @@ test("a launch is a Marshal session: one user and one assistant message, idle, w
   assert.equal(record.native.configDir, "/accounts/test");
   assert.equal(record.runId, "run-1");
   assert.equal(record.labels.extension, "@zyg/page-studio");
-  assert.deepEqual(record.usage, { inputTokens: 10, outputTokens: 5, cacheReadTokens: 100, cacheWriteTokens: 7, costUsd: 0.01, turns: 1 });
+  assert.deepEqual(record.usage, { inputTokens: 10, outputTokens: 5, cacheReadTokens: 100, cacheWriteTokens: 7, costUsd: 0.01, turns: 1, modelTurns: 0 });
   assert.equal(backend.calls[0]!.options.systemPrompt, "You are a Marshal agent.");
   assert.equal(backend.calls[0]!.options.permissionMode, "bypassPermissions");
 });

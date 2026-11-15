@@ -1,6 +1,7 @@
 export { createMarshalHost, type MarshalHost, type MarshalHostExtension, type MarshalHostLinkOptions, type MarshalHostOrgOptions, type MarshalHostOptions } from "./host.js";
 export {
   ClaudeAgentPort,
+  type AgentLaunchOptions,
   type AgentLaunchRequest,
   type AgentPortOptions,
   type AgentSummary,

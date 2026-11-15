@@ -13,6 +13,8 @@ export interface SessionUsage {
   cacheWriteTokens: number;
   costUsd: number;
   turns: number;
+  /** Model round trips the backend counted (the SDK's num_turns), summed over turns; absent in older records. */
+  modelTurns?: number;
 }
 
 /** Where the backend keeps its own copy of the conversation, so another Marshal host can resume it. */
@@ -184,6 +186,7 @@ export class FileSessionStore {
         cacheWriteTokens: current.cacheWriteTokens + (usage.cacheWriteTokens ?? 0),
         costUsd: current.costUsd + (usage.costUsd ?? 0),
         turns: current.turns + (usage.turns ?? 0),
+        modelTurns: (current.modelTurns ?? 0) + (usage.modelTurns ?? 0),
       },
     });
   }

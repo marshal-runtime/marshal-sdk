@@ -420,3 +420,40 @@ Tests: `test/decisions.test.ts`:
   the refusals: answered twice, not a question, a bad option, an unknown route;
 - the file route's outbox, inbox, done round trip;
 - an open question answered after a host restart through `marshal.decisions.answer`.
+
+## Launch options (what Marley's hook used to add)
+
+`agents.launch({..., options})` passes Claude Agent SDK options to every turn of that session, on top of what the host
+sets:
+
+- `maxTurns` and `maxBudgetUsd`;
+- `strictMcpConfig`, `allowedTools` and `disallowedTools`;
+- `cwd`: a working folder per launch; the session's native history is filed under it too;
+- `env`: merged over the host's; `null` removes a key, for example the host's `ANTHROPIC_API_KEY` behind a proxy;
+- `pathToClaudeCodeExecutable`, and `disableSlashCommands` (Claude Code's `--disable-slash-commands`, through
+  `extraArgs`, which also passes any other CLI flag);
+- `hooks`, `outputFormat` (the turn's `structured_output` comes back as `wait(...).structuredOutput`) and
+  `spawnClaudeCodeProcess` (start the process on a remote machine or as a sandbox user);
+- `mcpServers`, added to the host's; `hostMcpServers: false` drops the host's own servers.
+
+Without `options` a launch sends exactly what it sent before.
+
+**Fork point.** `native: {forkOf, forkAt}` makes the first turn resume the source native session at that message
+(`resume` + `forkSession` + `resumeSessionAt`). Later turns resume the fork.
+
+**Turns.** `usage.turns` counts Marshal turns. `usage.modelTurns` sums the SDK's own `num_turns` (model round trips),
+and summaries show it.
+
+Hooks and the spawner are functions: they live in the launching process only. A session that a later run of the host
+adopts runs without any launch options; the port does not store them.
+
+**Not built:** warm live processes (one Claude Code process per session across turns, in streaming-input mode). Every
+turn still starts its own process.
+
+Tests: `test/launch-options.test.ts`, with a fake backend:
+
+- every option on every turn, and the env merge and removal;
+- `usage.modelTurns`;
+- an unchanged plain launch, and `hostMcpServers: false`;
+- the fork point on the first turn only;
+- `structuredOutput`.
