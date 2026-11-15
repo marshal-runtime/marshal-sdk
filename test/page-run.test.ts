@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { fakeAnswer, finishPage, markSections, readSandboxInput, runPage } from "../src/page-run.js";
+import { fakeAnswer, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -156,4 +156,24 @@ test("page-run's dry path writes the whole run contract from an input folder, wi
   for (const file of ["shots/mobile.png", "shots/desktop.png"]) assert.ok(fs.existsSync(path.join(out, file)), file);
   assert.deepEqual(summary.skills_missing, ["lp-design"]);
   assert.ok(summary.results.length >= 2, "the whole-page writer and the critic ran as sessions");
+});
+
+test("page-edit reopens a finished run's state and edits its page through Page Studio's ask, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 120_000 }, async () => {
+  const input = inputFolder();
+  const work = path.dirname(input);
+  const root = path.dirname(work);
+  const state = path.join(root, "state");
+  const built = await runPage({ input, out: path.join(work, "out"), logs: path.join(root, "page-agent-logs"), state, extension: PAGE_STUDIO, fake: true, offline: true, quickModel: "haiku" });
+  assert.equal(built.error, "", built.error);
+  const record = readPageRunRecord(state);
+  assert.ok(record?.pageId, "page-run keeps the page it made in the state folder");
+  assert.equal(record?.settings.quickModel, "haiku");
+  const editOut = path.join(root, "edit-1", "out");
+  const editLogs = path.join(root, "edit-1", "logs");
+  const edited = await runPageEdit({ state, out: editOut, logs: editLogs, request: "Make the hero title shorter.", extension: PAGE_STUDIO, fake: true });
+  assert.equal(edited.error, "", edited.error);
+  assert.match(fs.readFileSync(path.join(editOut, "index.html"), "utf8"), /A page written without a model/);
+  for (const file of ["summary.json", "run.jsonl", "query/task.md"]) assert.ok(fs.existsSync(path.join(editLogs, file)), file);
+  assert.equal((edited.marshal as { job: string }).job, "edit");
+  assert.equal(readPageRunRecord(state)?.edits?.length, 1, "the edit is recorded on the run");
 });
