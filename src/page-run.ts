@@ -346,18 +346,51 @@ function sectionKey(raw: string): string {
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Chrome or Chromium: $MARSHAL_SDK_CHROME, $PAGE_STUDIO_CHROME, Playwright's installed Chromium, else the Mac's Chrome. */
+/**
+ * The first Chrome that answers Page Studio's DevTools pipe. Found 2026-11-15: Playwright's "Google Chrome for
+ * Testing" on macOS starts but never answers the pipe, so every Page Studio look and polish waited out its 90-120 s
+ * kill timer; a given path is trusted, the others are probed.
+ */
 async function resolveChrome(): Promise<string | undefined> {
   const given = process.env.MARSHAL_SDK_CHROME || process.env.PAGE_STUDIO_CHROME;
   if (given) return given;
+  const candidates: string[] = [];
   try {
     const { chromium } = await import("playwright-core");
-    const bundled = chromium.executablePath();
-    if (bundled && fs.existsSync(bundled)) return bundled;
+    candidates.push(chromium.executablePath());
   } catch {
     // Playwright has no Chromium installed for this platform.
   }
-  const mac = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  return process.platform === "darwin" && fs.existsSync(mac) ? mac : undefined;
+  if (process.platform === "darwin") candidates.unshift("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+  const present = candidates.filter((candidate) => candidate && fs.existsSync(candidate));
+  for (const candidate of present) if (await answersPipe(candidate)) return candidate;
+  return present[0];
+}
+
+async function answersPipe(chrome: string, timeoutMs = 10_000): Promise<boolean> {
+  const { spawn } = await import("node:child_process");
+  const os = await import("node:os");
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-chrome-"));
+  const flags = ["--headless=new", "--remote-debugging-pipe", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "about:blank"];
+  if (process.env.MARSHAL_SDK_CHROME_NO_SANDBOX === "1") flags.unshift("--no-sandbox");
+  const child = spawn(chrome, flags, { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"], windowsHide: true });
+  const [toChrome, fromChrome] = [child.stdio[3], child.stdio[4]] as [NodeJS.WritableStream, NodeJS.ReadableStream];
+  try {
+    return await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      child.once("error", () => resolve(false));
+      child.once("exit", () => resolve(false));
+      fromChrome.once("data", () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+      toChrome.write(`${JSON.stringify({ id: 1, method: "Browser.getVersion" })}\0`);
+    });
+  } finally {
+    child.kill("SIGKILL");
+    await new Promise((resolve) => (child.exitCode === null && child.signalCode === null ? child.once("exit", resolve) : resolve(undefined)));
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+  }
 }
 
 /**

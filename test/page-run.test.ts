@@ -136,7 +136,7 @@ test("writeRunLogs keeps agent-sandbox's RunSummary fields and counts Skill call
   assert.ok(rows.every((row) => typeof row.type === "string" && typeof row.at === "number" && row.session === session.id));
 });
 
-test("page-run's dry path writes the whole run contract from an input folder, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 300_000 }, async () => {
+test("page-run's dry path writes the whole run contract from an input folder, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 90_000 }, async () => {
   const input = inputFolder();
   const work = path.dirname(input);
   const root = path.dirname(work);
