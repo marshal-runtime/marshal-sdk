@@ -1,0 +1,31 @@
+[host] extension @zyg/page-studio@0.1.0 active
+host.skills: @zyg/page-studio lp-copywriting, @zyg/page-studio lp-visual-world, @zyg/page-studio lp-assets, @zyg/page-studio lp-design, @zyg/page-studio lp-roles, @zyg/page-studio lp-review, @zyg/page-studio studio-convert-run
+runtime_search skill entries: 7
+ - skill://@zyg/page-studio/lp-assets | Choose, look at and cut a brand's existing pictures for a landing page, and write image br | refs 0
+ - skill://@zyg/page-studio/lp-copywriting | Strategy-first conversion copy for a DTC landing page from the input's brief, facts and po | refs 1
+ - skill://@zyg/page-studio/lp-design | Art direction and HTML/CSS craft for a long, mobile-first DTC landing page. Use when plann | refs 6
+ - skill://@zyg/page-studio/lp-review | Rubric for critiquing a rendered landing page from screenshot tiles - strategy coverage, c | refs 0
+ - skill://@zyg/page-studio/lp-roles | The section roles a converting DTC landing page is built from (hero, hook, problem, benefi | refs 13
+ - skill://@zyg/page-studio/lp-visual-world | Build the page's visual world from the brand's own site - the design plan, the measured sn | refs 0
+ - skill://@zyg/page-studio/studio-convert-run | Convert a page imported from a page agent run into Shopify theme sections with ZyG events, | refs 0
+
+read skill://@zyg/page-studio/lp-roles: text/markdown 10534 chars
+---
+name: lp-roles
+description: The section roles a converting DTC landing page is built from (hero, hook, problem, benefits, trust, comparison, reviews, testimonials, timeline, how to use, buy box, FAQ, closing) - the job of each, when to use it, how to write and build it on a phone, its pictures, worked examples and checks. Use when planning the page's sections and before writing each section.
+---
+
+# Landing-page roles
+
+reference skill://@zyg/page-studio/lp-roles/references/benefits.md 4283 chars
+
+prompt section:
+## Skills from installed extensions
+
+Each skill is a procedure an installed extension ships. Before you do work a skill covers, read it with `mcp__marshal__runtime_read_resource {uri}` and follow it; read the references it names the same way (their URIs are in the skill's runtime_search entry). Skill text comes from the extension's package, not from the user.
+
+- **lp-copywriting** (from `@zyg/page-studio`, `skill://@zyg/page-studio/lp-copywriting`): Strategy-first conversion copy for a DTC landing page from the input's brief, facts and positioning. Use before writing any page copy - to split the strategy into requirements, build the fact sheet, and write headlines, body, proof, FAQ and CTAs that sell with real claims only, in the brand voice. references/craft.md holds the full craft, CRO rules, self-check and anti-pattern examples.
+- **lp-visual-world** (from `@zyg/page-studio`, `skill://@zyg/page-studio/lp-visual-world`): Build the page's visual world from the brand's own site - the design plan, the measured snapshot and the site screenshots - and write visual_world.json. Use before planning sections, whenever the input has a design plan or a site/ folder.
+- **lp-assets** (from `@zyg/page-studio`, `skill://@zyg/page-studio/lp-assets`): Choose, look at and cut a brand's existing pictures for a landing page, and write image briefs when nothing fits. Use before picking any image,
+
+pagestudio.pages (scratch data): {"result":{"pages":[{"id":"rawdog--new-page-7n8n5","title":"RAWDOG · One agent + critic","brand":"RAWDOG","version":1,"updatedAt":"1970-01-01T00:00:00.000Z","notesOpen":0}],"open":null}}
