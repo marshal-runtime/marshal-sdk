@@ -18,7 +18,7 @@ writeFileSync(
 const loaderBuiltins = {
   name: "loader-builtins",
   setup(context) {
-    context.onResolve({ filter: /^node:(fs|path|os|zlib)$/ }, (args) => ({ path: args.path.slice(5), external: true }));
+    context.onResolve({ filter: /^node:(fs|path|os|zlib|http|https)$/ }, (args) => ({ path: args.path.slice(5), external: true }));
     context.onResolve({ filter: /^(crypto)$/ }, (args) => ({ path: `node:${args.path}`, external: true }));
   },
 };

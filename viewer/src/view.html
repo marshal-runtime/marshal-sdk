@@ -13,83 +13,102 @@
     font-size: 13px; line-height: 1.45;
     background: var(--background, Canvas); color: var(--foreground, CanvasText);
   }
-  button { font: inherit; color: inherit; }
+  button, textarea { font: inherit; color: inherit; }
   .app { display: flex; flex-direction: column; height: 100%; }
-  header {
-    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
-    border-bottom: 1px solid var(--border, #8884);
-  }
-  header h1 { font-size: 14px; margin: 0; font-weight: 600; white-space: nowrap; }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border, #8884); }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
   header .back { display: none; }
   input[type=search] {
     flex: 1; min-width: 0; padding: 7px 10px; border-radius: var(--radius, 8px);
     border: 1px solid var(--input, var(--border, #8886)); background: var(--card, transparent); color: inherit; font: inherit;
   }
-  .panes { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.3fr) minmax(320px, 2.2fr); }
-  .pane { min-height: 0; overflow: auto; border-right: 1px solid var(--border, #8884); }
+  .panes { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(230px, 1fr) minmax(260px, 1.2fr) minmax(340px, 2.3fr); }
+  .pane { min-height: 0; overflow: auto; border-right: 1px solid var(--border, #8884); display: flex; flex-direction: column; }
   .pane:last-child { border-right: 0; }
+  .pane > .scroll { flex: 1; min-height: 0; overflow: auto; }
   .pane h2 {
     position: sticky; top: 0; z-index: 1; margin: 0; padding: 8px 12px; font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground, GrayText);
     background: var(--background, Canvas); border-bottom: 1px solid var(--border, #8884);
   }
-  .item {
-    display: block; width: 100%; text-align: left; padding: 10px 12px; border: 0; background: none; cursor: pointer;
-    border-bottom: 1px solid var(--border, #8882);
-  }
+  .item { display: block; width: 100%; text-align: left; padding: 9px 12px; border: 0; background: none; cursor: pointer; border-bottom: 1px solid var(--border, #8882); }
   .item:hover { background: var(--hover, var(--accent, #8881)); }
   .item[aria-current=true] { background: var(--accent, #8882); }
-  .item .title { font-weight: 600; overflow-wrap: anywhere; }
+  .item .title { font-weight: 600; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .meta { color: var(--muted-foreground, GrayText); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-  .chip {
-    font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border, #8886);
-    color: var(--muted-foreground, GrayText);
-  }
+  .chip { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border, #8886); color: var(--muted-foreground, GrayText); }
   .state { font-size: 11px; padding: 1px 6px; border-radius: 999px; font-weight: 600; }
-  .state.idle { background: var(--success-bg, #2a62); color: var(--success-fg, var(--success, green)); }
-  .state.running { background: var(--warning-bg, #c802); color: var(--warning-fg, var(--warning, darkorange)); }
-  .state.failed { background: var(--destructive-bg, #d002); color: var(--destructive, red); }
-  .child { padding-left: 28px; }
-  .empty { padding: 16px 12px; color: var(--muted-foreground, GrayText); }
+  .state.idle, .state.online, .state.live { background: var(--success-bg, #2a62); color: var(--success-fg, var(--success, green)); }
+  .state.running, .state.store { background: var(--warning-bg, #c802); color: var(--warning-fg, var(--warning, darkorange)); }
+  .state.failed, .state.offline { background: var(--destructive-bg, #d002); color: var(--destructive, red); }
+  .state.folder, .state.local { background: var(--muted, #8882); color: var(--muted-foreground, GrayText); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; background: var(--muted-foreground, GrayText); }
+  .dot.online { background: var(--success, green); }
+  .dot.offline { background: var(--destructive, red); }
+  .dot.pulse { background: var(--warning, darkorange); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .dot.pulse { animation: none; } }
+  .child { padding-left: 26px; }
+  .empty { padding: 14px 12px; color: var(--muted-foreground, GrayText); }
   .detail { padding: 10px 12px; border-bottom: 1px solid var(--border, #8884); }
-  .detail .title { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+  .detail .title { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .live { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--muted-foreground, GrayText); overflow-wrap: anywhere; }
   .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin-top: 6px; font-size: 12px; }
   .kv dt { color: var(--muted-foreground, GrayText); }
   .kv dd { margin: 0; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
-  .msg { padding: 10px 12px; border-bottom: 1px solid var(--border, #8882); }
+  .tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--border, #8884); }
+  .tab { border: 0; background: none; padding: 8px 10px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted-foreground, GrayText); min-height: 36px; }
+  .tab[aria-selected=true] { color: var(--foreground, CanvasText); border-bottom-color: var(--primary, LinkText); font-weight: 600; }
+  .msg { padding: 9px 12px; border-bottom: 1px solid var(--border, #8882); }
   .msg .who { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground, GrayText); }
   .msg.assistant .who { color: var(--primary, var(--link, LinkText)); }
   .msg.error .who { color: var(--destructive, red); }
-  .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
-  .msg .body.clip { max-height: 16em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .msg.fresh { animation: fresh 2s ease-out; }
+  @keyframes fresh { from { background: var(--accent, #8883); } }
+  .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 3px; }
+  .msg .body.clip { max-height: 14em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
   .more { margin-top: 4px; border: 0; background: none; color: var(--link, LinkText); cursor: pointer; padding: 4px 0; }
-  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
-  .primary {
-    border: 0; border-radius: var(--radius, 8px); padding: 7px 12px; min-height: 32px; cursor: pointer; font-weight: 600;
-    background: var(--primary, LinkText); color: var(--primary-foreground, Canvas);
-  }
-  .primary:disabled { opacity: .6; cursor: default; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+  .primary { border: 0; border-radius: var(--radius, 8px); padding: 7px 12px; min-height: 32px; cursor: pointer; font-weight: 600; background: var(--primary, LinkText); color: var(--primary-foreground, Canvas); }
+  .primary:disabled, .ghost:disabled { opacity: .55; cursor: default; }
+  .ghost { border: 1px solid var(--border, #8886); background: var(--card, transparent); border-radius: var(--radius, 8px); padding: 6px 10px; cursor: pointer; min-height: 32px; }
   .notice { font-size: 12px; overflow-wrap: anywhere; color: var(--muted-foreground, GrayText); }
   .notice.ok { color: var(--success-fg, var(--success, green)); }
   .notice.warn { color: var(--warning-fg, var(--warning, darkorange)); }
-  .ghost {
-    border: 1px solid var(--border, #8886); background: var(--card, transparent); border-radius: var(--radius, 8px);
-    padding: 6px 10px; cursor: pointer; min-height: 32px;
-  }
-  .error-box { margin: 12px; padding: 10px; border-radius: var(--radius, 8px); background: var(--destructive-bg, #d001); color: var(--destructive, red); }
+  .error-box { margin: 12px; padding: 10px; border-radius: var(--radius, 8px); background: var(--destructive-bg, #d001); color: var(--destructive, red); overflow-wrap: anywhere; }
+  .composer { border-top: 1px solid var(--border, #8884); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; background: var(--background, Canvas); }
+  .composer textarea { width: 100%; min-height: 54px; max-height: 160px; resize: vertical; padding: 7px 10px; border-radius: var(--radius, 8px); border: 1px solid var(--input, var(--border, #8886)); background: var(--card, transparent); }
+  .composer .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; padding: 10px 12px; }
+  .stat { border: 1px solid var(--border, #8884); border-radius: var(--radius, 8px); padding: 8px 10px; background: var(--card, transparent); }
+  .stat .label { font-size: 11px; color: var(--muted-foreground, GrayText); text-transform: uppercase; letter-spacing: .03em; }
+  .stat .value { font-size: 16px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .stat .sub { font-size: 11px; color: var(--muted-foreground, GrayText); }
+  .section { padding: 4px 12px 10px; }
+  .section h3 { font-size: 12px; margin: 8px 0 6px; }
+  .bar { display: grid; grid-template-columns: minmax(80px, 30%) 1fr max-content; gap: 8px; align-items: center; font-size: 12px; margin: 3px 0; }
+  .bar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+  .bar .track { height: 8px; border-radius: 4px; background: var(--muted, #8882); overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--chart-1, var(--primary, LinkText)); }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 48px; }
+  .spark span { flex: 1; min-width: 3px; background: var(--chart-2, var(--primary, LinkText)); border-radius: 2px 2px 0 0; }
+  .crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border, #8882); font-size: 12px; }
+  .crumbs button { border: 0; background: none; color: var(--link, LinkText); cursor: pointer; padding: 2px 0; }
+  .file-row { display: grid; grid-template-columns: 1fr max-content; gap: 8px; }
+  pre.preview { margin: 0; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
 
   /* Phone: one pane at a time, drill in and back. */
   .mobile .panes { display: block; }
   .mobile .pane { display: none; height: 100%; border-right: 0; }
-  .mobile[data-view=runs] .pane.runs,
-  .mobile[data-view=sessions] .pane.sessions,
-  .mobile[data-view=transcript] .pane.transcript { display: block; }
-  .mobile[data-view=sessions] header .back,
-  .mobile[data-view=transcript] header .back { display: inline-block; }
-  .mobile .item { padding: 12px 14px; min-height: 48px; }
+  .mobile[data-view=runs] .pane.runs, .mobile[data-view=sessions] .pane.sessions, .mobile[data-view=detail] .pane.detail-pane { display: flex; }
+  .mobile[data-view=sessions] header .back, .mobile[data-view=detail] header .back { display: inline-block; }
+  .mobile header h1 { max-width: 55%; }
+  .mobile[data-view=sessions] input[type=search], .mobile[data-view=detail] input[type=search] { display: none; }
+  .mobile .item { padding: 11px 14px; min-height: 48px; }
   .mobile input[type=search] { min-height: 40px; font-size: 16px; }
-  .mobile .ghost, .mobile .primary { min-height: 44px; }
+  .mobile .ghost, .mobile .primary, .mobile .tab { min-height: 44px; }
+  .mobile .composer textarea { font-size: 16px; }
 </style>
 </head>
 <body>
@@ -97,12 +116,26 @@
   <header>
     <button class="ghost back" id="back" type="button" aria-label="Back">‹ Back</button>
     <h1 id="heading">SDK sessions</h1>
-    <input type="search" id="search" placeholder="Search sessions" aria-label="Search sessions" />
+    <input type="search" id="search" placeholder="Search sessions on every host" aria-label="Search sessions" />
   </header>
   <div class="panes">
-    <section class="pane runs" aria-label="Runs"><h2>Runs</h2><div id="runs"><div class="empty">Loading…</div></div></section>
-    <section class="pane sessions" aria-label="Sessions"><h2 id="sessions-heading">Sessions</h2><div id="sessions"><div class="empty">Pick a run.</div></div></section>
-    <section class="pane transcript" aria-label="Transcript"><h2>Transcript</h2><div id="transcript"><div class="empty">Pick a session.</div></div></section>
+    <section class="pane runs" aria-label="Hosts and runs">
+      <div class="scroll">
+        <h2>Hosts</h2><div id="hosts"><div class="empty">Loading…</div></div>
+        <h2 id="runs-heading">Runs</h2><div id="runs"></div>
+      </div>
+    </section>
+    <section class="pane sessions" aria-label="Sessions"><div class="scroll"><h2 id="sessions-heading">Sessions</h2><div id="sessions"><div class="empty">Pick a run.</div></div></div></section>
+    <section class="pane detail-pane" aria-label="Session">
+      <div id="detail-head"></div>
+      <div class="tabs" role="tablist" id="tabs">
+        <button class="tab" role="tab" type="button" data-tab="transcript" aria-selected="true">Transcript</button>
+        <button class="tab" role="tab" type="button" data-tab="telemetry" aria-selected="false">Telemetry</button>
+        <button class="tab" role="tab" type="button" data-tab="files" aria-selected="false">Files</button>
+      </div>
+      <div class="scroll" id="detail-body"><div class="empty">Pick a session.</div></div>
+      <div id="composer"></div>
+    </section>
   </div>
 </div>
 <script>
@@ -113,7 +146,14 @@
   const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random());
   const app = document.getElementById("app");
   const $ = (id) => document.getElementById(id);
-  const state = { runs: [], runId: null, sessions: [], sessionId: null, query: "", hits: null };
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const state = {
+    hosts: [], hostId: "local", runs: [], runId: null, sessions: [], sessionId: null,
+    query: "", hits: null, tab: "transcript",
+    detail: null, // { session, messages: [], cursor, eventCursor, activity }
+    files: { root: null, path: "", preview: null },
+  };
+  let watchGeneration = 0;
 
   function applyContext(next) {
     hostContext = { ...hostContext, ...(next || {}) };
@@ -127,11 +167,11 @@
     addEventListener("message", (event) => {
       if (event.source !== parent || !event.data || event.data.jsonrpc !== "2.0") return;
       const message = event.data;
-      const call = message.id !== undefined ? pending.get(message.id) : undefined;
-      if (call) {
+      const pendingCall = message.id !== undefined ? pending.get(message.id) : undefined;
+      if (pendingCall) {
         pending.delete(message.id);
-        if (message.error) call.reject(new Error(message.error.message || "Request failed."));
-        else call.resolve(message.result);
+        if (message.error) pendingCall.reject(new Error(message.error.message || "Request failed."));
+        else pendingCall.resolve(message.result);
         return;
       }
       if (message.method === "ui/notifications/host-context-changed") applyContext(message.params);
@@ -149,7 +189,7 @@
 
   const ready = request("ui/initialize", {
     protocolVersion: "2026-01-26",
-    appInfo: { name: "SDK sessions", version: "0.1.0" },
+    appInfo: { name: "SDK sessions", version: "0.2.0" },
     hostChrome: "compact",
   }).then((result) => {
     applyContext(result && result.hostContext);
@@ -167,7 +207,7 @@
     let out = result && result.structuredContent;
     if (out && "output" in out) out = out.output;
     if (out && typeof out === "object" && "result" in out) out = out.result;
-    if (out && out.ok === false && out.error) throw new Error(out.error);
+    if (out && out.ok === false && out.error) throw new Error(out.message || out.error);
     return out;
   }
 
@@ -177,46 +217,104 @@
       if (value === undefined || value === null || value === false) continue;
       if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
       else if (key === "class") node.className = value;
+      else if (key === "style") node.setAttribute("style", value);
       else node.setAttribute(key, value === true ? "" : String(value));
     }
     for (const child of children.flat()) if (child !== null && child !== undefined && child !== false) node.append(child.nodeType ? child : String(child));
     return node;
   };
-  const money = (value) => "$" + (value || 0).toFixed(2);
-  const count = (value) => (value >= 1000 ? (value / 1000).toFixed(1) + "k" : String(value || 0));
+  const money = (value) => "$" + (value || 0).toFixed((value || 0) < 1 ? 3 : 2);
+  const count = (value) => (value >= 1e6 ? (value / 1e6).toFixed(1) + "M" : value >= 1000 ? (value / 1000).toFixed(1) + "k" : String(value || 0));
+  const ms = (value) => (value >= 60000 ? (value / 60000).toFixed(1) + " min" : value >= 1000 ? (value / 1000).toFixed(1) + " s" : Math.round(value || 0) + " ms");
   const when = (iso) => {
     const date = new Date(iso);
     return isNaN(date) ? "" : date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   };
+  const clock = (iso) => {
+    const date = new Date(iso);
+    return isNaN(date) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  };
   const seconds = (from, to) => Math.max(0, Math.round((new Date(to) - new Date(from)) / 1000));
   const shortId = (id) => String(id || "").slice(0, 8);
-  const stateBadge = (value) => el("span", { class: "state " + value }, value);
+  const badge = (value, text) => el("span", { class: "state " + value }, text || value);
   const showError = (target, error) => target.replaceChildren(el("div", { class: "error-box" }, error.message || String(error)));
+  const host = () => state.hosts.find((entry) => entry.id === state.hostId) || { id: state.hostId, kind: "folder", mode: "folder" };
+  const isLive = () => host().mode === "live" && host().status === "online";
+  const currentSession = () => (state.detail && state.detail.session) || state.sessions.find((session) => session.id === state.sessionId);
 
   function setView(view) {
     app.dataset.view = view;
+    const session = currentSession();
     $("heading").textContent = view === "runs" ? "SDK sessions"
-      : view === "sessions" ? "Run " + shortId(state.runId)
-      : (state.sessions.find((session) => session.id === state.sessionId) || {}).title || "Transcript";
+      : view === "sessions" ? (host().name || state.hostId) + " · run " + shortId(state.runId)
+      : (session && session.title) || "Session";
+  }
+
+  // ---------- hosts and runs ----------
+  function renderHosts() {
+    const box = $("hosts");
+    if (!state.hosts.length) return box.replaceChildren(el("div", { class: "empty" }, "No hosts."));
+    box.replaceChildren(...state.hosts.map((entry) => {
+      const status = entry.kind === "folder" ? "local" : entry.status;
+      const mode = entry.kind === "folder" ? "folder" : entry.status === "online" ? entry.mode : "offline";
+      const runs = Array.isArray(entry.runs) ? entry.runs.length : entry.runs;
+      return el("button", { class: "item", type: "button", "aria-current": entry.id === state.hostId, onclick: () => openHost(entry.id) },
+        el("div", { class: "title" }, el("span", { class: "dot " + (status === "online" ? "online" : status === "offline" ? "offline" : "") }), entry.name || entry.id, badge(mode, mode === "store" ? "store-only" : mode)),
+        el("div", { class: "meta" }, entry.kind === "folder"
+          ? (entry.stores ? entry.stores.length : 0) + " stores · " + (runs || 0) + " runs"
+          : entry.status === "online"
+            ? (entry.remote ? entry.remote.id + " (" + entry.remote.kind + ")" : "") + " · sdk " + entry.sdkVersion + " · " + (runs || 0) + " runs · " + (entry.capabilities || []).length + " capabilities"
+            : (entry.message || "unreachable")),
+        entry.kind === "link" ? el("div", { class: "meta" }, entry.url + " · token " + entry.token) : null,
+        entry.kind === "link" && entry.extensions && entry.extensions.length
+          ? el("div", { class: "chips" }, ...entry.extensions.map((extension) => el("span", { class: "chip" }, extension.identity + "@" + extension.version)))
+          : null);
+    }));
   }
 
   function renderRuns() {
     const box = $("runs");
-    if (!state.runs.length) return box.replaceChildren(el("div", { class: "empty" }, "No runs found in the configured stores."));
+    $("runs-heading").textContent = "Runs · " + (host().name || state.hostId);
+    if (host().kind === "link" && host().status !== "online") return box.replaceChildren(el("div", { class: "empty" }, "This host is offline: " + (host().message || "unreachable") + "."));
+    if (!state.runs.length) return box.replaceChildren(el("div", { class: "empty" }, "No runs on this host."));
     box.replaceChildren(...state.runs.map((run) =>
       el("button", { class: "item", type: "button", "aria-current": run.runId === state.runId, onclick: () => openRun(run.runId) },
-        el("div", { class: "title" }, run.firstTitle.replace(/ · .*$/, "") + " · " + shortId(run.runId)),
+        el("div", { class: "title" }, String(run.firstTitle || "").replace(/ · .*$/, "") + " · " + shortId(run.runId), run.running ? el("span", { class: "dot pulse", title: "running" }) : null),
         el("div", { class: "meta" }, when(run.startedAt) + " · " + seconds(run.startedAt, run.updatedAt) + "s · " + run.sessions + " sessions · " + money(run.costUsd)),
         el("div", { class: "chips" },
-          el("span", { class: "chip" }, "host " + run.host.id + " (" + run.host.kind + ")"),
-          ...run.models.map((model) => el("span", { class: "chip" }, model)),
-          run.running ? el("span", { class: "state running" }, run.running + " running") : null,
-          run.failed ? el("span", { class: "state failed" }, run.failed + " failed") : null))));
+          el("span", { class: "chip" }, run.host.id + " (" + run.host.kind + ")"),
+          ...(run.models || []).map((model) => el("span", { class: "chip" }, model)),
+          run.running ? badge("running", run.running + " running") : null,
+          run.failed ? badge("failed", run.failed + " failed") : null))));
   }
 
+  async function loadHosts() {
+    const out = await call("sdksessions.hosts", {});
+    state.hosts = out.hosts || [];
+    renderHosts();
+    return out;
+  }
+
+  async function openHost(hostId, keep) {
+    stopWatch();
+    state.hostId = hostId;
+    if (!keep) { state.runId = null; state.sessionId = null; state.sessions = []; state.detail = null; }
+    renderHosts();
+    $("runs").replaceChildren(el("div", { class: "empty" }, "Loading…"));
+    try {
+      const out = await call("sdksessions.runs", { hostId });
+      state.runs = out.runs || [];
+      renderRuns();
+      if (!keep) { renderSessions(); renderDetail(); }
+    } catch (error) {
+      showError($("runs"), error);
+    }
+  }
+
+  // ---------- sessions ----------
   function sessionItem(session, child) {
     return el("button", { class: "item" + (child ? " child" : ""), type: "button", "aria-current": session.id === state.sessionId, onclick: () => openSession(session.id) },
-      el("div", { class: "title" }, session.title, " ", stateBadge(session.state)),
+      el("div", { class: "title" }, session.title, badge(session.state), session.state === "running" ? el("span", { class: "dot pulse" }) : null),
       el("div", { class: "meta" }, [session.model, session.reasoningEffort].filter(Boolean).join(" · ") + " · " + session.messageCount + " msgs · " + count(session.usage.outputTokens) + " out · " + money(session.usage.costUsd)),
       Object.keys(session.labels || {}).length
         ? el("div", { class: "chips" }, ...Object.entries(session.labels).map(([key, value]) => el("span", { class: "chip" }, key + "=" + value)))
@@ -229,9 +327,9 @@
     if (state.hits) {
       if (!state.hits.length) return box.replaceChildren(el("div", { class: "empty" }, "Nothing matches “" + state.query + "”."));
       return box.replaceChildren(...state.hits.map((hit) =>
-        el("button", { class: "item", type: "button", "aria-current": hit.sessionId === state.sessionId, onclick: () => openSession(hit.sessionId, hit.runId) },
-          el("div", { class: "title" }, hit.title, " ", stateBadge(hit.state)),
-          el("div", { class: "meta" }, "run " + shortId(hit.runId) + " · " + hit.snippet))));
+        el("button", { class: "item", type: "button", "aria-current": hit.sessionId === state.sessionId, onclick: () => openHit(hit) },
+          el("div", { class: "title" }, hit.title, badge(hit.state)),
+          el("div", { class: "meta" }, hit.hostId + " · run " + shortId(hit.runId) + " · " + hit.snippet))));
     }
     if (!state.sessions.length) return box.replaceChildren(el("div", { class: "empty" }, state.runId ? "No sessions." : "Pick a run."));
     const ids = new Set(state.sessions.map((session) => session.id));
@@ -245,18 +343,101 @@
     box.replaceChildren(...items);
   }
 
+  async function loadSessions() {
+    const out = await call("sdksessions.sessions", { hostId: state.hostId, runId: state.runId });
+    state.sessions = out.sessions || [];
+    renderSessions();
+  }
+
+  async function openRun(runId, keepSession) {
+    state.runId = runId;
+    state.hits = null;
+    if (!keepSession) { stopWatch(); state.sessionId = null; state.detail = null; }
+    renderRuns();
+    $("sessions").replaceChildren(el("div", { class: "empty" }, "Loading…"));
+    setView("sessions");
+    try {
+      await loadSessions();
+      if (!keepSession) renderDetail();
+    } catch (error) {
+      showError($("sessions"), error);
+    }
+  }
+
+  async function openHit(hit) {
+    if (hit.hostId !== state.hostId) await openHost(hit.hostId, true);
+    if (hit.runId !== state.runId) { state.runId = hit.runId; renderRuns(); try { await loadSessions(); } catch {} }
+    state.hits = null;
+    renderSessions();
+    openSession(hit.sessionId);
+  }
+
+  // ---------- detail ----------
+  function stopWatch() { watchGeneration += 1; }
+
+  async function openSession(sessionId) {
+    stopWatch();
+    state.sessionId = sessionId;
+    state.detail = null;
+    state.files = { root: null, path: "", preview: null };
+    renderSessions();
+    setView("detail");
+    $("detail-head").replaceChildren();
+    $("detail-body").replaceChildren(el("div", { class: "empty" }, "Loading…"));
+    $("composer").replaceChildren();
+    try {
+      const out = await call("sdksessions.transcript", { hostId: state.hostId, sessionId, tail: 200 });
+      if (!out || !out.found) return $("detail-body").replaceChildren(el("div", { class: "empty" }, "This session is not on this host any more."));
+      state.detail = { session: out.session, messages: out.messages || [], cursor: out.cursor, eventCursor: 0, activity: null, firstIndex: (out.messages[0] || { index: 0 }).index };
+      setView("detail");
+      renderDetail();
+      watch(watchGeneration, sessionId);
+    } catch (error) {
+      showError($("detail-body"), error);
+    }
+  }
+
+  function liveLine(session) {
+    const h = host();
+    const running = session.state === "running";
+    const activity = state.detail && state.detail.activity;
+    let text;
+    if (h.kind === "folder") text = (running ? "running · " : "") + "folder on this Mac (read-only) · updates as the run writes";
+    else if (h.status !== "online") text = "host offline";
+    else if (h.mode === "store") text = "finished run · store-only host";
+    else text = running ? "live · running" + (activity ? " · " + activity : "") : "live · idle, waiting for a message";
+    return el("div", { class: "live", "aria-live": "polite" }, el("span", { class: "dot " + (running ? "pulse" : h.status === "online" || h.kind === "folder" ? "online" : "offline") }), text);
+  }
+
+  function renderHead() {
+    const session = currentSession();
+    if (!session) return $("detail-head").replaceChildren();
+    const usage = session.usage || {};
+    $("detail-head").replaceChildren(el("div", { class: "detail" },
+      el("div", { class: "title" }, session.title, badge(session.state)),
+      liveLine(session),
+      el("dl", { class: "kv" },
+        el("dt", {}, "host"), el("dd", {}, (host().name || state.hostId) + " · " + session.host.id + " (" + session.host.kind + ")"),
+        el("dt", {}, "run"), el("dd", {}, session.runId),
+        el("dt", {}, "model"), el("dd", {}, [session.model, session.reasoningEffort].filter(Boolean).join(" · ") || "default"),
+        el("dt", {}, "usage"), el("dd", {}, count(usage.inputTokens) + " in · " + count(usage.outputTokens) + " out · " + usage.turns + " turns · " + money(usage.costUsd)),
+        session.lastError ? [el("dt", {}, "error"), el("dd", {}, session.lastError)] : null),
+      continueRow(session)));
+  }
+
   function continueRow(session) {
+    const canContinue = !!(session.native && session.native.sessionId) && session.state !== "running";
     const notice = el("div", { class: "notice", role: "status", "aria-live": "polite" },
-      session.native && session.native.sessionId ? "Opens a copy here that picks up the conversation where it stopped." : "No conversation file yet.");
+      !(session.native && session.native.sessionId) ? "No conversation file yet." : session.state === "running" ? "Continue once it is idle." : "Opens a local copy that picks up where it stopped.");
     const button = el("button", {
-      class: "primary", type: "button", disabled: !(session.native && session.native.sessionId) || session.state === "running",
+      class: "ghost", type: "button", disabled: !canContinue,
       onclick: async () => {
         button.disabled = true;
         button.textContent = "Continuing…";
         notice.className = "notice";
         notice.textContent = "";
         try {
-          const out = await call("sdksessions.continue", { sessionId: session.id });
+          const out = await call("sdksessions.continue", { hostId: state.hostId, sessionId: session.id });
           notice.className = "notice " + (out && out.ok ? "ok" : "warn");
           notice.textContent = (out && out.message) || (out && out.ok ? "Opened." : "Couldn't continue this session.");
         } catch (error) {
@@ -271,74 +452,229 @@
     return el("div", { class: "actions" }, button, notice);
   }
 
-  async function renderTranscript() {
-    const box = $("transcript");
-    if (!state.sessionId) return box.replaceChildren(el("div", { class: "empty" }, "Pick a session."));
-    box.replaceChildren(el("div", { class: "empty" }, "Loading…"));
+  function messageNode(message, fresh) {
+    const long = message.content.length > 900;
+    const body = el("div", { class: "body" + (long ? " clip" : "") }, message.content);
+    const more = long ? el("button", { class: "more", type: "button", onclick: (event) => {
+      const clipped = body.classList.toggle("clip");
+      event.currentTarget.textContent = clipped ? "Show all (" + count(message.content.length) + " chars)" : "Show less";
+    } }, "Show all (" + count(message.content.length) + " chars)") : null;
+    return el("div", { class: "msg " + message.role + (message.error ? " error" : "") + (fresh ? " fresh" : ""), "data-index": message.index },
+      el("div", { class: "who" }, message.role + " · " + clock(message.timestamp)),
+      body, more);
+  }
+
+  function renderTranscript() {
+    const detail = state.detail;
+    const box = $("detail-body");
+    const nodes = detail.messages.map((message) => messageNode(message, false));
+    if (detail.firstIndex > 0) nodes.unshift(el("div", { class: "empty" }, detail.firstIndex + " earlier messages not shown."));
+    box.replaceChildren(...(nodes.length ? nodes : [el("div", { class: "empty" }, "No messages yet.")]));
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function renderComposer() {
+    const box = $("composer");
+    const session = currentSession();
+    if (!session || state.tab !== "transcript") return box.replaceChildren();
+    if (!isLive()) {
+      const why = host().kind === "folder" ? "Read-only: nothing runs this folder. Serve it with marshal-sdk serve and link the host to talk to it."
+        : host().status !== "online" ? "The host is offline." : "This host serves a finished run; there is nobody to answer.";
+      return box.replaceChildren(el("div", { class: "composer" }, el("div", { class: "notice" }, why)));
+    }
+    const input = el("textarea", { placeholder: session.state === "running" ? "Queue a message for after this turn…" : "Message this session…", "aria-label": "Message" });
+    const notice = el("div", { class: "notice", role: "status", "aria-live": "polite" });
+    const send = el("button", { class: "primary", type: "button", onclick: async () => {
+      const text = input.value.trim();
+      if (!text) return input.focus();
+      send.disabled = true;
+      notice.className = "notice";
+      notice.textContent = "Sending…";
+      try {
+        const out = await call("sdksessions.send", { hostId: state.hostId, sessionId: session.id, text });
+        if (out && out.ok === false) { notice.className = "notice warn"; notice.textContent = out.message; return; }
+        input.value = "";
+        notice.className = "notice ok";
+        notice.textContent = "Sent. The answer appears here as the host writes it.";
+      } catch (error) {
+        notice.className = "notice warn";
+        notice.textContent = error.message || String(error);
+      } finally {
+        send.disabled = false;
+      }
+    } }, "Send");
+    const stop = session.state === "running" ? el("button", { class: "ghost", type: "button", onclick: async () => {
+      stop.disabled = true;
+      try {
+        const out = await call("sdksessions.send", { hostId: state.hostId, sessionId: session.id, cancel: true });
+        notice.className = "notice " + (out && out.ok === false ? "warn" : "ok");
+        notice.textContent = out && out.ok === false ? out.message : "Stopping the turn…";
+      } catch (error) { notice.textContent = error.message || String(error); }
+    } }, "Stop turn") : null;
+    input.addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) send.click(); });
+    box.replaceChildren(el("div", { class: "composer" }, input, el("div", { class: "row" }, send, stop, notice)));
+  }
+
+  function stat(label, value, sub) {
+    return el("div", { class: "stat" }, el("div", { class: "label" }, label), el("div", { class: "value" }, value), sub ? el("div", { class: "sub" }, sub) : null);
+  }
+
+  function telemetryBlock(telemetry, title) {
+    const tools = Object.entries(telemetry.toolCalls || {}).sort((left, right) => right[1] - left[1]);
+    const top = tools.length ? tools[0][1] : 1;
+    const durations = (telemetry.turnDurations && telemetry.turnDurations.lastMs) || [];
+    const longest = Math.max(1, ...durations);
+    const models = Object.entries(telemetry.models || {});
+    return el("div", {},
+      title ? el("div", { class: "section" }, el("h3", {}, title)) : null,
+      el("div", { class: "grid" },
+        stat("Cost", money(telemetry.costUsd), models.length ? models.map(([model]) => model.replace(/^claude-/, "")).join(", ") : null),
+        stat("Tokens out", count(telemetry.tokens.output), count(telemetry.tokens.input) + " in · " + count(telemetry.tokens.cacheRead) + " cache read"),
+        stat("Turns", String(telemetry.turns), telemetry.modelRoundTrips + " model round trips"),
+        stat("Tool calls", String(telemetry.toolCallTotal), telemetry.toolErrors + " failed"),
+        stat("Turn time", ms(telemetry.turnDurations.medianMs), "median · max " + ms(telemetry.turnDurations.maxMs)),
+        stat("Errors", String(telemetry.errors.count), telemetry.sessions ? telemetry.sessions + " sessions" : telemetry.events + " events")),
+      tools.length ? el("div", { class: "section" }, el("h3", {}, "Tool calls by name"),
+        ...tools.slice(0, 15).map(([name, value]) => el("div", { class: "bar" }, el("span", { class: "name", title: name }, name),
+          el("span", { class: "track" }, el("span", { class: "fill", style: "display:block;width:" + Math.max(3, (value / top) * 100) + "%" })), el("span", {}, String(value))))) : null,
+      durations.length ? el("div", { class: "section" }, el("h3", {}, "Turn durations (latest " + durations.length + ")"),
+        el("div", { class: "spark", role: "img", "aria-label": "Turn durations" }, ...durations.map((value) => el("span", { title: ms(value), style: "height:" + Math.max(4, (value / longest) * 100) + "%" })))) : null,
+      telemetry.errors.last && telemetry.errors.last.length ? el("div", { class: "section" }, el("h3", {}, "Latest errors"),
+        ...telemetry.errors.last.slice().reverse().map((error) => el("div", { class: "meta" }, clock(error.at) + " · " + error.text))) : null);
+  }
+
+  async function renderTelemetry() {
+    const box = $("detail-body");
+    box.replaceChildren(el("div", { class: "empty" }, "Computing from the host's events…"));
     try {
-      const out = await call("sdksessions.transcript", { sessionId: state.sessionId });
-      if (!out || !out.found) return box.replaceChildren(el("div", { class: "empty" }, "This session is not in the stores any more."));
-      const session = out.session;
-      const usage = session.usage || {};
-      const detail = el("div", { class: "detail" },
-        el("div", { class: "title" }, session.title, " ", stateBadge(session.state)),
-        el("dl", { class: "kv" },
-          el("dt", {}, "session"), el("dd", {}, session.id),
-          el("dt", {}, "run"), el("dd", {}, session.runId),
-          el("dt", {}, "host"), el("dd", {}, session.host.id + " (" + session.host.kind + ")"),
-          el("dt", {}, "model"), el("dd", {}, [session.model, session.reasoningEffort].filter(Boolean).join(" · ") || "default"),
-          el("dt", {}, "usage"), el("dd", {}, count(usage.inputTokens) + " in · " + count(usage.outputTokens) + " out · " + count(usage.cacheReadTokens) + " cache read · " + usage.turns + " turns · " + money(usage.costUsd)),
-          session.parentId ? [el("dt", {}, "parent"), el("dd", {}, session.parentId)] : null,
-          el("dt", {}, "native"), el("dd", {}, session.native.kind + " " + (session.native.sessionId || "(none yet)")),
-          session.lastError ? [el("dt", {}, "error"), el("dd", {}, session.lastError)] : null),
-        continueRow(session));
-      const messages = out.messages.map((message) => {
-        const long = message.content.length > 900;
-        const body = el("div", { class: "body" + (long ? " clip" : "") }, message.content);
-        const more = long ? el("button", { class: "more", type: "button", onclick: (event) => {
-          const clipped = body.classList.toggle("clip");
-          event.currentTarget.textContent = clipped ? "Show all (" + count(message.content.length) + " chars)" : "Show less";
-        } }, "Show all (" + count(message.content.length) + " chars)") : null;
-        return el("div", { class: "msg " + message.role + (message.error ? " error" : "") },
-          el("div", { class: "who" }, message.role + " · " + when(message.timestamp)),
-          body, more);
-      });
-      box.replaceChildren(detail, ...(messages.length ? messages : [el("div", { class: "empty" }, "No messages yet.")]));
+      const [session, run] = await Promise.all([
+        call("sdksessions.telemetry", { hostId: state.hostId, sessionId: state.sessionId }),
+        call("sdksessions.telemetry", { hostId: state.hostId, runId: state.runId }),
+      ]);
+      if (state.tab !== "telemetry") return;
+      box.replaceChildren(
+        session && session.found !== false ? telemetryBlock(session.telemetry, "This session") : el("div", { class: "empty" }, "No telemetry for this session."),
+        run && run.found !== false ? telemetryBlock(run.telemetry, "Whole run · " + (run.telemetry.sessions || 0) + " sessions") : null);
     } catch (error) {
       showError(box, error);
     }
   }
 
-  async function openRun(runId, keepSession) {
-    state.runId = runId;
-    state.hits = null;
-    if (!keepSession) state.sessionId = null;
-    renderRuns();
-    $("sessions").replaceChildren(el("div", { class: "empty" }, "Loading…"));
-    setView("sessions");
+  let filesRender = 0;
+  async function renderFiles() {
+    const box = $("detail-body");
+    const files = state.files;
+    const token = ++filesRender;
+    box.replaceChildren(el("div", { class: "empty" }, "Loading…"));
     try {
-      const out = await call("sdksessions.sessions", { runId });
-      state.sessions = out.sessions || [];
-      renderSessions();
-      if (!keepSession) renderTranscript();
+      if (files.preview) {
+        const out = await call("sdksessions.files", { hostId: state.hostId, runId: state.runId, root: files.root, path: files.preview, read: true });
+        if (state.tab !== "files" || token !== filesRender) return;
+        const body = out.encoding === "base64"
+          ? el("div", { class: "empty" }, "Binary file, " + count(out.size) + " bytes.")
+          : el("pre", { class: "preview" }, out.content);
+        return box.replaceChildren(crumbs(files.root, files.preview, true),
+          out.truncated ? el("div", { class: "notice warn", style: "padding:6px 12px" }, "Showing the first " + count(out.content.length) + " of " + count(out.size) + " bytes.") : null, body);
+      }
+      const out = await call("sdksessions.files", { hostId: state.hostId, runId: state.runId, ...(files.root ? { root: files.root, path: files.path } : {}) });
+      if (state.tab !== "files" || token !== filesRender) return;
+      if (!files.root) {
+        if (!out.roots || !out.roots.length) return box.replaceChildren(el("div", { class: "empty" }, "This host shares no folders for this run."));
+        return box.replaceChildren(...out.roots.map((root) => el("button", { class: "item", type: "button", onclick: () => { state.files = { root, path: "", preview: null }; renderFiles(); } },
+          el("div", { class: "title" }, "📁 " + root))));
+      }
+      const rows = (out.entries || []).map((entry) => el("button", { class: "item", type: "button", onclick: () => {
+        const next = files.path ? files.path + "/" + entry.name : entry.name;
+        if (entry.type === "directory") state.files = { root: files.root, path: next, preview: null };
+        else state.files = { root: files.root, path: files.path, preview: next };
+        renderFiles();
+      } }, el("div", { class: "file-row" }, el("span", { class: "title" }, (entry.type === "directory" ? "📁 " : "📄 ") + entry.name), el("span", { class: "meta" }, entry.type === "directory" ? "" : count(entry.size) + "B")),
+        el("div", { class: "meta" }, when(entry.modifiedAt))));
+      box.replaceChildren(crumbs(files.root, files.path, false), ...(rows.length ? rows : [el("div", { class: "empty" }, "Empty folder.")]));
     } catch (error) {
-      showError($("sessions"), error);
+      showError(box, error);
     }
   }
 
-  async function openSession(sessionId, runId) {
-    state.sessionId = sessionId;
-    if (runId && runId !== state.runId) {
-      state.runId = runId;
-      renderRuns();
-      try { state.sessions = (await call("sdksessions.sessions", { runId })).sessions || []; } catch {}
-    }
-    renderSessions();
-    setView("transcript");
-    renderTranscript();
+  function crumbs(root, relative, isFile) {
+    const parts = String(relative || "").split("/").filter(Boolean);
+    const nodes = [el("button", { type: "button", onclick: () => { state.files = { root: null, path: "", preview: null }; renderFiles(); } }, "folders"), " / ",
+      el("button", { type: "button", onclick: () => { state.files = { root, path: "", preview: null }; renderFiles(); } }, root)];
+    parts.forEach((part, index) => {
+      const target = parts.slice(0, index + 1).join("/");
+      const last = index === parts.length - 1;
+      nodes.push(" / ", last && isFile ? el("span", {}, part) : el("button", { type: "button", onclick: () => { state.files = { root, path: target, preview: null }; renderFiles(); } }, part));
+    });
+    return el("div", { class: "crumbs" }, ...nodes);
   }
 
-  $("back").addEventListener("click", () => setView(app.dataset.view === "transcript" ? "sessions" : "runs"));
+  function renderDetail() {
+    for (const tab of document.querySelectorAll(".tab")) tab.setAttribute("aria-selected", String(tab.dataset.tab === state.tab));
+    if (!state.sessionId || !state.detail) {
+      $("detail-head").replaceChildren();
+      $("composer").replaceChildren();
+      if (!state.sessionId) $("detail-body").replaceChildren(el("div", { class: "empty" }, "Pick a session."));
+      return;
+    }
+    renderHead();
+    renderComposer();
+    if (state.tab === "transcript") renderTranscript();
+    else if (state.tab === "telemetry") renderTelemetry();
+    else renderFiles();
+  }
+
+  async function watch(generation, sessionId) {
+    let first = true;
+    while (generation === watchGeneration && state.sessionId === sessionId) {
+      const detail = state.detail;
+      if (!detail) return;
+      try {
+        const out = await call("sdksessions.watch", {
+          hostId: state.hostId, sessionId, since: detail.cursor, eventCursor: detail.eventCursor,
+          state: detail.session.state, updatedAt: detail.session.updatedAt, waitMs: first ? 0 : 12000,
+        });
+        first = false;
+        if (generation !== watchGeneration || !out || !out.found) return;
+        const stateChanged = out.session.state !== detail.session.state || out.session.updatedAt !== detail.session.updatedAt;
+        detail.session = out.session;
+        detail.eventCursor = out.eventCursor;
+        const latest = (out.activity || []).filter((activity) => activity.kind === "tool" || activity.kind === "text").at(-1);
+        if (latest) detail.activity = latest.kind === "tool" ? "calling " + latest.name : "writing";
+        if (out.session.state !== "running") detail.activity = null;
+        const fresh = (out.messages || []).filter((message) => message.index >= detail.cursor);
+        detail.cursor = Math.max(detail.cursor, out.cursor);
+        if (fresh.length) {
+          detail.messages.push(...fresh);
+          if (state.tab === "transcript") {
+            const box = $("detail-body");
+            if (detail.messages.length === fresh.length) box.replaceChildren();
+            const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+            for (const message of fresh) box.append(messageNode(message, true));
+            if (nearBottom) box.scrollTop = box.scrollHeight;
+          }
+        }
+        if (stateChanged || fresh.length || latest) {
+          renderHead();
+          if (stateChanged) {
+            renderComposer();
+            const index = state.sessions.findIndex((session) => session.id === sessionId);
+            if (index >= 0) { state.sessions[index] = out.session; renderSessions(); }
+            if (state.tab === "telemetry") renderTelemetry();
+          }
+        }
+      } catch (error) {
+        await sleep(3000);
+      }
+    }
+  }
+
+  for (const tab of document.querySelectorAll(".tab")) {
+    tab.addEventListener("click", () => {
+      state.tab = tab.dataset.tab;
+      renderDetail();
+    });
+  }
+  $("back").addEventListener("click", () => setView(app.dataset.view === "detail" ? "sessions" : "runs"));
   let searchTimer = 0;
   $("search").addEventListener("input", (event) => {
     clearTimeout(searchTimer);
@@ -356,26 +692,43 @@
     }, 250);
   });
 
+  // Refresh hosts and the open run's sessions while the tab is open, so new runs and state changes show up.
+  setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      await loadHosts();
+      const out = await call("sdksessions.runs", { hostId: state.hostId });
+      state.runs = out.runs || [];
+      renderRuns();
+      if (state.runId && !state.hits) await loadSessions();
+    } catch {}
+  }, 10000);
+
   (async () => {
     try {
       await ready;
-      const out = await call("sdksessions.runs", {});
+      const out = await loadHosts();
       const opened = hostContext.toolInput || {};
-      const wanted = opened.runId || opened.sessionId ? opened : out.focus || {};
-      state.runs = out.runs || [];
-      renderRuns();
+      const wanted = opened.hostId || opened.runId || opened.sessionId ? opened : out.focus || {};
+      const hostId = wanted.hostId && state.hosts.some((entry) => entry.id === wanted.hostId) ? wanted.hostId : "local";
+      if (["transcript", "telemetry", "files"].includes(wanted.tab)) state.tab = wanted.tab;
+      await openHost(hostId);
       const runId = wanted.runId || (state.runs[0] && state.runs[0].runId);
       if (runId) {
+        await openRun(runId, !!wanted.sessionId);
         if (wanted.sessionId) {
-          await openRun(runId, true);
           await openSession(wanted.sessionId);
-        } else {
-          await openRun(runId);
+          if (wanted.filesRoot) {
+            state.files = { root: wanted.filesRoot, path: wanted.filesPath || "", preview: null };
+            if (state.tab === "files") renderFiles();
+          }
         }
-        if (!wanted.runId && !wanted.sessionId) setView("runs");
+        else if (!wanted.runId) setView("runs");
+      } else {
+        setView("runs");
       }
     } catch (error) {
-      showError($("runs"), error);
+      showError($("hosts"), error);
     }
   })();
 })();

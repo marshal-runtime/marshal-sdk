@@ -123,3 +123,134 @@ test("continue explains refusals, approvals, running sessions and missing files 
   assert.equal((await missing.run()).reason, "no-native-state");
   assert.equal(running.requests.length + missing.requests.length, 0);
 });
+
+const LINK_TOKEN = "viewer-link-token-0123456789";
+
+/** The fixture's cloud store served over a real link (store-only), with an output folder, and the extension pointed at it. */
+async function linkedRig() {
+  const { startLinkServer } = await import("../../src/link/server");
+  const root = fixture();
+  const out = path.join(root, "cloud", "out");
+  fs.mkdirSync(out, { recursive: true });
+  fs.writeFileSync(path.join(out, "page.html"), "<h1>Rawdog</h1>");
+  const nativeRoot = path.join(root, "claude");
+  const nativeFile = path.join(nativeRoot, "projects", "-ws", "n1.jsonl");
+  fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
+  fs.writeFileSync(nativeFile, '{"type":"user","sessionId":"n1"}\n');
+  const server = await startLinkServer({
+    token: LINK_TOKEN,
+    sessionsRoot: path.join(root, "cloud", "state", "sessions"),
+    host: { id: "e2b-1", kind: "e2b" },
+    files: { output: out },
+    nativeRoots: [nativeRoot],
+  });
+  const requests: Record<string, any>[] = [];
+  const pullRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-pulled-"));
+  const extension = createExtension({
+    configuration: {
+      roots: [path.join(root, "local")],
+      pullRoot,
+      hosts: [
+        { id: "cloud", name: "Cloud sandbox", url: server.url, token: LINK_TOKEN },
+        { id: "gone", url: "http://127.0.0.1:9", token: "unreachable-host-token-000" },
+        { id: "Bad Id", url: server.url, token: LINK_TOKEN },
+      ],
+    },
+    execute: async (request) => {
+      requests.push(request);
+      return { status: "success", result: { output: { ok: true, sessionId: "local-9" } } };
+    },
+  });
+  const call = async (name: string, input: Record<string, unknown>) =>
+    ((await extension.capabilityProviders[0]!.invoke(name, input, {})) as { output: { result: any } }).output.result;
+  return { root, server, call, requests, pullRoot, nativeFile };
+}
+
+test("linked hosts: listed with a redacted token, browsed like folders, and offline hosts say so", async () => {
+  const rig = await linkedRig();
+  try {
+    const listed = await rig.call("sdksessions.hosts", {});
+    assert.ok(!JSON.stringify(listed).includes(LINK_TOKEN), "the token never leaves the extension");
+    const cloud = listed.hosts.find((host: any) => host.id === "cloud");
+    assert.equal(cloud.status, "online");
+    assert.equal(cloud.mode, "store");
+    assert.equal(cloud.token, "••••6789");
+    assert.deepEqual(cloud.remote, { id: "e2b-1", kind: "e2b" });
+    assert.equal(listed.hosts.find((host: any) => host.id === "gone").status, "offline");
+    assert.equal(listed.hosts[0].id, "local");
+    assert.equal(listed.problems.length, 1);
+
+    const runs = await rig.call("sdksessions.runs", { hostId: "cloud" });
+    assert.deepEqual(runs.runs.map((run: any) => [run.hostId, run.runId]), [["cloud", "run-a"]]);
+    const everywhere = await rig.call("sdksessions.runs", {});
+    assert.deepEqual(everywhere.runs.map((run: any) => run.hostId).sort(), ["cloud", "local"]);
+    assert.equal(everywhere.problems[0].hostId, "gone");
+    const sessions = await rig.call("sdksessions.sessions", { hostId: "cloud", runId: "run-a" });
+    const plan = sessions.sessions.find((session: any) => !session.parentId);
+    const transcript = await rig.call("sdksessions.transcript", { hostId: "cloud", sessionId: plan.id, since: 1 });
+    assert.deepEqual(transcript.messages.map((message: any) => message.content), ["Hero, proof, buy box"]);
+    const telemetry = await rig.call("sdksessions.telemetry", { hostId: "cloud", runId: "run-a" });
+    assert.equal(telemetry.telemetry.sessions, 2);
+    const files = await rig.call("sdksessions.files", { hostId: "cloud", root: "output" });
+    assert.deepEqual(files.entries.map((entry: any) => entry.name), ["page.html"]);
+    assert.equal((await rig.call("sdksessions.files", { hostId: "cloud", root: "output", path: "page.html", read: true })).content, "<h1>Rawdog</h1>");
+    const escaped = await rig.call("sdksessions.files", { hostId: "cloud", root: "output", path: "../state/sessions/index.json", read: true });
+    assert.equal(escaped.ok, false);
+    const sent = await rig.call("sdksessions.send", { hostId: "cloud", sessionId: plan.id, text: "more" });
+    assert.deepEqual([sent.ok, sent.reason], [false, "store-only"]);
+    const unknown = await rig.call("sdksessions.runs", { hostId: "nope" });
+    assert.match(unknown.error, /No host "nope"/);
+    const hits = await rig.call("sdksessions.search", { query: "rawdog" });
+    assert.ok(hits.hits.some((hit: any) => hit.hostId === "cloud"));
+  } finally {
+    await rig.server.close();
+  }
+});
+
+test("a linked session continues in Marshal from the host's conversation file, and pulls to this Mac", async () => {
+  const rig = await linkedRig();
+  try {
+    const sessions = await rig.call("sdksessions.sessions", { hostId: "cloud", runId: "run-a" });
+    const plan = sessions.sessions.find((session: any) => !session.parentId);
+    const continued = await rig.call("sdksessions.continue", { hostId: "cloud", sessionId: plan.id });
+    assert.deepEqual(continued, { ok: true, sessionId: "local-9", message: "Opened as a new session in Marshal." });
+    const state = rig.requests[0]!.input.state;
+    assert.equal(zlib.gunzipSync(Buffer.from(state.data, "base64")).toString("utf8"), fs.readFileSync(rig.nativeFile, "utf8"));
+    const writer = sessions.sessions.find((session: any) => session.parentId);
+    assert.equal((await rig.call("sdksessions.continue", { hostId: "cloud", sessionId: writer.id })).reason, "running");
+
+    const pulled = await rig.call("sdksessions.pull", { hostId: "cloud", runId: "run-a" });
+    assert.equal(pulled.ok, true);
+    assert.deepEqual([pulled.sessions, pulled.messages, pulled.native], [2, 3, 1]);
+    const localRuns = (await rig.call("sdksessions.runs", { hostId: "local", roots: [rig.pullRoot] })).runs;
+    assert.deepEqual(localRuns.map((run: any) => run.runId), ["run-a"]);
+    const local = (await rig.call("sdksessions.sessions", { hostId: "local", runId: "run-a", roots: [rig.pullRoot] })).sessions;
+    assert.equal(local.find((session: any) => session.id === plan.id).labels.pulledFrom, "cloud");
+    const offline = await rig.call("sdksessions.continue", { hostId: "local", sessionId: plan.id, roots: [rig.pullRoot] });
+    assert.equal(offline.ok, true, "the pulled copy carries its conversation file");
+  } finally {
+    await rig.server.close();
+  }
+});
+
+test("watch returns as soon as a linked session writes, with what the backend did", async () => {
+  const rig = await linkedRig();
+  try {
+    const sessions = await rig.call("sdksessions.sessions", { hostId: "cloud", runId: "run-a" });
+    const writer = sessions.sessions.find((session: any) => session.parentId);
+    const store = new FileSessionStore(path.join(rig.root, "cloud", "state", "sessions"), { runId: "run-a", host: { id: "e2b-1", kind: "e2b" } });
+    const started = Date.now();
+    const waiting = rig.call("sdksessions.watch", { hostId: "cloud", sessionId: writer.id, since: 1, eventCursor: 0, waitMs: 8000 });
+    setTimeout(() => {
+      store.appendEvent(writer.id, { type: "assistant", message: { content: [{ type: "tool_use", name: "Write", id: "t", input: {} }] } });
+      store.appendMessage(writer.id, { role: "assistant", content: "hero.html written" });
+    }, 300);
+    const out = await waiting;
+    assert.ok(Date.now() - started < 6000);
+    assert.deepEqual(out.messages.map((message: any) => message.content), ["hero.html written"]);
+    assert.ok(out.activity.some((activity: any) => activity.kind === "tool" && activity.name === "Write"));
+    assert.ok(out.eventCursor > 0);
+  } finally {
+    await rig.server.close();
+  }
+});
