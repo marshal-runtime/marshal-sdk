@@ -1,6 +1,3 @@
-// The approval vocabulary and the policy's ports, moved from the desktop's electron/backend/types.ts and
-// electron/backend/ports.ts (which re-export them).
-import type { PermissionAction } from "../common/marshal-constants";
 import type {
   ReviewerValidationAuthorizationResult,
   ReviewerValidationCommandSpec,
@@ -8,11 +5,13 @@ import type {
   ReviewerValidationReceipt,
   ReviewerValidationRequest,
 } from "../common/goal-infrastructure-contract";
+// The approval vocabulary and the policy's ports, moved from the desktop's electron/backend/types.ts and
+// electron/backend/ports.ts (which re-export them).
+import type { PermissionAction } from "../common/marshal-constants";
 import type { PermissionDecision, PolicyEvaluation } from "./permission-policy";
 import type { NormalizedPermissionRequest } from "./permission-request-types";
 
 // ── Approval ────────────────────────────────────────────────────────────
-
 
 /**
  * A fully-typed permission request: the normalized discriminated union plus

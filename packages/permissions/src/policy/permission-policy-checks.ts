@@ -1,13 +1,13 @@
-import type { PermissionsConfig } from "../common/permission-contract";
 import { CONFIG_KEY_TO_DISPLAY_NAME } from "../common/marshal-permission-servers";
 import { getServerForSdkTool } from "../common/marshal-sdk-builtin-tools";
+import type { PermissionsConfig } from "../common/permission-contract";
 import type { AuditDecisionSource } from "./audit-contract";
+import type { TenantPolicyProvider } from "./host-contract";
 import { LOCAL_FILE_TOOL_DEFINITIONS } from "./marshal-fs/shared";
 import {
   getBarePlaywrightToolName,
   PLAYWRIGHT_EXPLICIT_WRITE_TOOLS,
 } from "./platform/security/browser-tools/names";
-import type { TenantPolicyProvider } from "./host-contract";
 
 /**
  * Capability gating a tool — the SDK builtins (view/grep/glob/edit/create) plus
