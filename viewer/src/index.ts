@@ -7,7 +7,7 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 
 import { VIEW_HTML } from "./generated/view";
-import { cloudHost, configuredClouds, listEdits, previewHtml, pushToCloud, readLinks, readRunJson, writeLink } from "./cloud";
+import { cloudHost, configuredClouds, consoleUrl, listEdits, previewHtml, pushToCloud, readLinks, readRunJson, writeLink } from "./cloud";
 import { configuredLinks, folderHost, linkedHost, linkProblem, LOCAL_HOST_ID, type Host } from "./hosts";
 import { expandHome } from "./store";
 
@@ -366,6 +366,25 @@ export function createExtension(context: Context) {
       handler: async (input, invocation) => {
         const host = hostFor(input);
         const folder = await host.pageFolder(String(input.pageId), typeof input.runId === "string" ? input.runId : undefined, pullRoot());
+        if (cloud().get(host.summary.id) && typeof input.runId === "string") {
+          // A cloud page already brought in here: open that copy, unless the cloud page changed after we last linked or
+          // pushed it (someone else pushed), in which case bring the newer one in.
+          const outputRoot = await cloud().get(host.summary.id)!.rootOfRun(input.runId);
+          let cloudUpdatedAt = "";
+          try {
+            cloudUpdatedAt = String((JSON.parse(fs.readFileSync(path.join(folder.dataDir, "pages", `${folder.pageId}.json`), "utf8")) as Row).updatedAt ?? "");
+          } catch {
+            // No record to compare: bring it in.
+          }
+          for (const [localId, link] of Object.entries(readLinks(pullRoot()))) {
+            if (link.outputRoot !== outputRoot || link.cloudPageId !== String(input.pageId)) continue;
+            if (!cloudUpdatedAt || cloudUpdatedAt > (link.pushedAt ?? link.linkedAt)) continue;
+            const existing = await pageStudio("pagestudio.page.get", { pageId: localId }, invocation);
+            if (!existing.ok) continue;
+            const opened = input.open !== false ? (await pageStudio("pagestudio.open", { pageId: localId }, invocation)).ok : false;
+            return { ok: true, pageId: localId, title: existing.value.title, reused: true, opened, cloud: link, message: `Already in Page Studio as ${localId} (the cloud copy has nothing newer)${opened ? "; the Page Studio tab is open on it" : ""}.` };
+          }
+        }
         const imported = await pageStudio(
           IMPORT_PAGE_CAPABILITY,
           { dataDir: folder.dataDir, pageId: folder.pageId, origin: folder.origin, ...(typeof input.title === "string" && input.title ? { title: input.title } : {}) },
@@ -467,6 +486,17 @@ export function createExtension(context: Context) {
       handler: async (input) => ({ outputRoot: String(input.outputRoot), run: await readRunJson(String(input.outputRoot)), edits: await listEdits(String(input.outputRoot)) }),
     },
     {
+      name: "sdksessions.cloudLink",
+      title: "The cloud run a Page Studio page came from",
+      description: "For a page in this Marshal's Page Studio: the cloud run it was opened from (hostId, outputRoot, cloudPageId, runId, preview link), or linked:false. A linked page can be pushed back with sdksessions.pushToCloud.",
+      input: obj({ pageId: str }, ["pageId"]),
+      read: true,
+      handler: async (input) => {
+        const link = readLinks(pullRoot())[String(input.pageId)];
+        return link ? { linked: true, ...link, previewUrl: consoleUrl(`${link.outputRoot}/preview/index.html`) } : { linked: false };
+      },
+    },
+    {
       name: "sdksessions.pushToCloud",
       title: "Push a page edit back to its cloud run",
       description:
@@ -495,7 +525,7 @@ export function createExtension(context: Context) {
           ...(typeof input.summary === "string" ? { summary: input.summary } : {}),
           workDir: path.join(expandHome(pullRoot()), ".push"),
         });
-        if (link) writeLink(pullRoot(), pageId, { ...link, linkedAt: link.linkedAt });
+        if (link) writeLink(pullRoot(), pageId, { ...link, pushedAt: new Date().toISOString() });
         for (const host of cloud().values()) void host.cloudRuns(true).catch(() => undefined);
         return { ...pushed, outputRoot, pageId, cloudPageId, message: `Pushed version ${pushed.version} of the page to ${outputRoot}; their page generator shows it at preview/index.html.` };
       },
@@ -749,6 +779,7 @@ export const CAPABILITY_NAMES = [
   "sdksessions.answer",
   "sdksessions.cloudRuns",
   "sdksessions.cloudEdits",
+  "sdksessions.cloudLink",
   "sdksessions.pushToCloud",
   "sdksessions.importCloudPage",
 ];

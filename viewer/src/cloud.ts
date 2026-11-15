@@ -267,6 +267,8 @@ export interface CloudLink {
   cloudPageId: string;
   runId?: string;
   linkedAt: string;
+  /** When this Mac last pushed the page back; the cloud copy is ours up to then. */
+  pushedAt?: string;
 }
 
 const linksFile = (pullRoot: string) => path.join(home(pullRoot), "cloud-links.json");
