@@ -16,8 +16,11 @@
 // or point MARSHAL_SDK_CHROME at one.
 //
 // The extension list: --manifest <marshal-sdk.json>, resolved by the onboarding resolver (docs/onboarding.md: path,
-// archive + sha256, and registry id entries, archives unpacked under --cache) and/or --extension <packageRoot>
+// archive + sha256 and organization id entries, archives unpacked under --cache) and/or --extension <packageRoot>
 // (repeatable); with neither, Page Studio's built package. Configuration stays in the manifest of the run.
+// A manifest also brings the SDK's default extensions it does not opt out of (the Brain always, through
+// $MARSHAL_SDK_BRAIN_PACKAGE; the org and Zyg tools where they apply); "defaults": {"brain": false} leaves the Brain out.
+// The Brain needs Node 24 (FTS5) where it runs.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -33,10 +36,17 @@ for (let index = 2; index < process.argv.length; index += 2) {
   else args[key] = path.resolve(value);
 }
 execFileSync(process.execPath, [path.join(root, "build.mjs")], { cwd: root, stdio: "inherit" });
+// A default extension (docs/onboarding.md "Default extensions") goes where the SDK looks for its bundled copy.
+const bundledAt = new Map();
 if (args.manifest) {
-  const { resolveManifest } = await import(path.join(root, "dist", "src", "onboarding.js"));
+  const { resolveManifest, DEFAULT_EXTENSIONS } = await import(path.join(root, "dist", "src", "onboarding.js"));
   const resolved = await resolveManifest(args.manifest, args.cache ? { cacheDir: args.cache } : {});
-  for (const extension of resolved.extensions) args.extension.push(extension.packageRoot);
+  // `extensions` leaves out the Brain (it loads through the kit); `defaults` has every default, the Brain included.
+  args.extension.push(...new Set([...resolved.defaults, ...resolved.extensions].map((extension) => extension.packageRoot)));
+  for (const extension of resolved.defaults) {
+    const spec = DEFAULT_EXTENSIONS.find((candidate) => candidate.identity === extension.identity);
+    if (spec?.bundled) bundledAt.set(extension.packageRoot, spec.bundled);
+  }
 }
 if (!args.extension.length) args.extension.push("/Users/omer/marshal-tracking/page-studio/out/package");
 
@@ -85,9 +95,10 @@ for (const [name, ranges] of Object.entries(registry)) {
   else throw new Error(`Packs disagree on ${name}: ${[...ranges].join(", ")}; add the agreed range to AGREED.`);
 }
 
+const unshippable = (name) => name === "node_modules" || name === ".git" || /(^|\.)env($|\.)|^(auth|credentials)\.json$/i.test(name);
 const copyTree = (from, to) => {
   for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || /(^|\.)env($|\.)|^(auth|credentials)\.json$/i.test(entry.name)) continue;
+    if (unshippable(entry.name)) continue;
     const source = path.join(from, entry.name);
     const target = path.join(to, entry.name);
     if (entry.isDirectory()) {
@@ -104,13 +115,26 @@ const copyTree = (from, to) => {
 fs.mkdirSync(path.join(staging, "dist", "src"), { recursive: true });
 copyTree(path.join(root, "dist", "src"), path.join(staging, "dist", "src"));
 
+// An extension with a package.json ships what npm would publish from it (a source checkout such as the Brain's
+// carries its .git and tests otherwise); a built folder without one is copied whole.
+const copyExtension = (packageRoot, target) => {
+  if (!fs.existsSync(path.join(packageRoot, "package.json"))) return copyTree(packageRoot, target);
+  const listed = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: packageRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  const [{ files }] = JSON.parse(listed);
+  for (const file of new Set([...files.map((entry) => entry.path), "package.json", "runtime-extension.json"])) {
+    if (file.split("/").some(unshippable)) continue;
+    fs.mkdirSync(path.dirname(path.join(target, file)), { recursive: true });
+    fs.copyFileSync(path.join(packageRoot, file), path.join(target, file));
+  }
+};
+
 const extensions = [];
 for (const packageRoot of args.extension) {
   const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "runtime-extension.json"), "utf8"));
-  const name = manifest.identity.replace(/^@[^/]+\//, "");
-  fs.mkdirSync(path.join(staging, "extensions", name), { recursive: true });
-  copyTree(packageRoot, path.join(staging, "extensions", name));
-  extensions.push({ identity: manifest.identity, version: manifest.version, path: `extensions/${name}` });
+  const at = bundledAt.get(packageRoot) ?? `extensions/${manifest.identity.replace(/^@[^/]+\//, "")}`;
+  fs.mkdirSync(path.join(staging, at), { recursive: true });
+  copyExtension(packageRoot, path.join(staging, at));
+  extensions.push({ identity: manifest.identity, version: manifest.version, path: at });
 }
 
 const dependencies = Object.fromEntries(
