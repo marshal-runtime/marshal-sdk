@@ -1,4 +1,4 @@
-import type { ApprovalRequest } from "./backend/types";
+import type { ApprovalRequest } from "./approval-contract";
 import {
   getShellMode,
   normalizeTokenForMatching,

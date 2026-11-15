@@ -15,7 +15,7 @@
     "pack": "node image/pack.mjs",
     "vendor:packs": "node scripts/vendor-packs.mjs",
     "check:packs": "node build.mjs && node scripts/check-packs.mjs",
-    "typecheck": "tsc -p tsconfig.json && tsc -p packages/host/tsconfig.json && tsc -p packages/org/tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && node scripts/typecheck-host.mjs",
     "vendor:host": "node scripts/vendor-desktop-host.mjs sync"
   },
   "dependencies": {

@@ -1,4 +1,4 @@
-import type { ReasoningEffort } from "./marshal-ipc-contract";
+import type { ReasoningEffort } from "../../host/engine-host-types";
 
 export interface AgentModelDefault {
   model: string;
