@@ -5,16 +5,26 @@
  * Pure logic class with no IPC or Electron dependencies.
  */
 
+import type {
+  AssistantContentBlock,
+  MessageQuestion,
+  MessageToolCall,
+  SessionMessage,
+  ToolProvenanceRecord,
+  TurnEvent,
+  TurnState,
+  TurnToolCompletedEvent,
+  TurnToolsUpdatedEvent,
+} from "../../host/engine-host-types";
+import type { BackendEvent } from "../backend/types";
 import { formatToolDescription } from "../common/marshal-format-tool-description";
-import type { AssistantContentBlock, MessageQuestion, MessageToolCall, SessionMessage, ToolProvenanceRecord, TurnEvent, TurnState, TurnToolCompletedEvent, TurnToolsUpdatedEvent } from "../../host/engine-host-types";
 import { createLogger } from "../common/marshal-logger";
 import { classifyToolActivityKind, isCancelledToolError } from "../common/tool-activity";
-import type { BackendEvent } from "../backend/types";
+import { coerceErrorText } from "../support/error-formatting";
 import {
   normalizeToolProvenance,
   type ToolProvenanceDraft,
 } from "./command-center/tool-provenance-normalizer";
-import { coerceErrorText } from "../support/error-formatting";
 
 const log = createLogger("TurnAccumulator");
 

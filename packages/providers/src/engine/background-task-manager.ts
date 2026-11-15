@@ -1,3 +1,4 @@
+import type { BackendEvent } from "../backend/types";
 /**
  * BackgroundTaskManager — tracks runtime tasks that outlive the turn that
  * started them (a backgrounded Bash command, a backgrounded Agent subagent,
@@ -25,7 +26,6 @@ import type {
   BackgroundWorkWakeup,
   SessionBackgroundWork,
 } from "../common/background-work";
-import type { BackendEvent } from "../backend/types";
 
 export interface BackgroundTaskUpdate {
   sessionId: string;

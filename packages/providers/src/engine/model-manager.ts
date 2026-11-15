@@ -6,13 +6,13 @@
  * ModelManager decoupled from session orchestration.
  */
 
-import { APP_AGENT_DEFAULTS, normalizeModelIdForMatch } from "../common/agent-defaults";
 import type { ContextTier, ModelInfo, ReasoningEffort } from "../../host/engine-host-types";
+import type { ISessionStore } from "../../host/engine-host-types";
+import type { TierModelDefaults } from "../backend/types";
+import { APP_AGENT_DEFAULTS, normalizeModelIdForMatch } from "../common/agent-defaults";
 import { createLogger } from "../common/marshal-logger";
 import { parseOrgAgentDefaults } from "../common/org-onboarding-agent-defaults";
 import { parseRuntimeQualifiedModel } from "../common/runtime-qualified-model";
-import type { TierModelDefaults } from "../backend/types";
-import type { ISessionStore } from "../../host/engine-host-types";
 
 const log = createLogger("ModelManager");
 

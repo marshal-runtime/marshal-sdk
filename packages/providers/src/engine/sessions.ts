@@ -11,15 +11,190 @@ import {
   rewriteClaudeSessionId,
 } from "@marshal/agent-runtime-claude";
 
+import type { CommandCenterSafeBackendEvent } from "../../host/engine-host-types";
+import type {
+  GoalContextPatch,
+  GoalDefinitionPatch,
+  GoalFence,
+  GoalRecord,
+  GoalRuntimeSnapshot,
+  GoalState,
+  GoalTransitionProposal,
+} from "../../host/engine-host-types";
+import type {
+  AgentMessageApiResult,
+  AgentMessageQueueCancellationResult,
+  CustomMcpServer,
+  GoalTimelineEvent,
+  MainSessionContextSelection,
+  MainSessionWorkspaceBinding,
+  MessageQuestion,
+  ModelInfo,
+  ModelRuntimeInfo,
+  PermissionCardData,
+  ContextTier,
+  ReasoningEffort,
+  CreateFromNativeStateError,
+  SessionListOptions,
+  SessionListPage,
+  SessionMetadata,
+  SessionAgentMessageMetadata,
+  SessionInternalControlMetadata,
+  SessionMessage,
+  MessageToolCall,
+  ReviewerSessionPermissionScope,
+  SessionPermissionMode,
+  SessionSandboxConfig,
+  SessionRepositoryAgent,
+  SessionRuntimeAgentRole,
+  SessionSearchResult,
+  SessionSource,
+  SessionView,
+  SessionViewEvent,
+  TurnEvent,
+  WorkspaceInstanceIdentity,
+  Skill,
+} from "../../host/engine-host-types";
+import type { RequestOrigin } from "../../host/engine-host-types";
+import type {
+  AgentMessageDeliveryContext,
+  AgentMessageDeliveryMode,
+  AgentMessageDeliveryResult,
+  AgentMessageKind,
+  AgentMessageOutbox,
+  AgentMessageRecord,
+} from "../../host/engine-host-types";
+import type {
+  BackgroundToolCancellationRequest,
+  BackgroundToolCancellationRequestToken,
+  BackgroundToolDispatchClaim,
+  BackgroundToolDispatchClaimRequest,
+  BackgroundToolDispatchClaimResult,
+  BackgroundToolInvocationCompletion,
+  BackgroundToolInvocationRegistrationResult,
+  BackgroundToolInvocationStart,
+  BackgroundToolProcessAttachment,
+  ICommandClassifier,
+  IGoalToolsManager,
+  ForkSubagentTask,
+  IMemoryManager,
+  ISelfToolsSessionManager,
+  RunningToolCallInfo,
+  RunningToolCancelResult,
+  RunningToolCancellationScope,
+  RunningToolInspectResult,
+} from "../../host/engine-host-types";
+import type { TranscriptHandoffReason } from "../../host/engine-host-types";
+import type { CommandCenterSessionObserver } from "../../host/engine-host-types";
+import type { KnowledgeAvailability } from "../../host/engine-host-types";
+import type { McpStore } from "../../host/engine-host-types";
+import type { CommandClassification } from "../../host/engine-host-types";
+import type { PermissionPolicy } from "../../host/engine-host-types";
+import type { ExtensionPromptContribution } from "../../host/engine-host-types";
+import type { RequestSessionSnapshot, RequestStoredMessage } from "../../host/engine-host-types";
+import type { LiveSessionInfo } from "../../host/engine-host-types";
+import type { SelfToolDeps } from "../../host/engine-host-types";
+import type {
+  ISessionStore,
+  Message,
+  PendingModelSwitch,
+  PersistedSession,
+  ReadonlySessionsIndex,
+  SessionForkRecord,
+  SessionProgressRecord,
+  SessionsIndex,
+} from "../../host/engine-host-types";
+import type { RuntimeTranscriptRequest, RuntimeTranscriptPage } from "../../host/engine-host-types";
+import type { SkillCatalog } from "../../host/engine-host-types";
+import type { TenantPolicyProvider } from "../../host/engine-host-types";
+import { CLAUDE_NATIVE_STATE_FORMAT, MAX_NATIVE_STATE_BYTES } from "../backend/claude/native-state";
+import { claudeJsonlToSessionMessages } from "../backend/claude/native-state-history";
+import { stripHostTurnDecorations, validateConversationState } from "../backend/conversation-state";
+import {
+  DEFAULT_SESSION_NAME,
+  isHiddenInternalControlMessage,
+  isToolFreeRuntimeAgentRole,
+  resolveSessionToolAllowlist,
+  isVisibleInternalControlResponse,
+} from "../backend/engine-host";
+import {
+  describeAgentMessageSendTime,
+  isAgentMessageDeliveryControlError,
+} from "../backend/engine-host";
+import { getAppDataDir } from "../backend/engine-host";
+import { clearAvatarCache } from "../backend/engine-host";
+import {
+  buildImportedConversationState,
+  buildTranscriptConversationState,
+  reconcileWithTranscript,
+} from "../backend/engine-host";
+import { BusySessionTracker } from "../backend/engine-host";
+import { getMcpStatus as getMcpStatusStandalone } from "../backend/engine-host";
+import { assembleMarshalSystemPrompt } from "../backend/engine-host";
+import {
+  isAgentPromptV2Session,
+  isLeanCoreSession,
+  isLeanPromptSession,
+  isLeanRepoRulesSession,
+  LEAN_PROMPT_DISABLED_NATIVE_TOOLS,
+  resolveAgentPromptV2ForNewSession,
+  resolveLeanCoreForNewSession,
+  resolveLeanPromptForNewSession,
+  resolveLeanRepoRulesForNewSession,
+} from "../backend/engine-host";
+import { SPAWN_ONLY_SKILL_NAMES } from "../backend/engine-host";
+import {
+  assembleMarshalSystemPromptV2,
+  V2_DISABLED_NATIVE_TOOLS,
+  V2_DEFERRED_HOST_TOOLS,
+  V2_EXPOSED_HOST_TOOLS,
+  V2_NATIVE_SUBAGENT_ALLOWLIST,
+} from "../backend/engine-host";
+import { getSelfTools } from "../backend/engine-host";
+import {
+  searchSessions as searchSessionsFn,
+  isSessionHiddenFromList,
+  isSessionHiddenFromSearchAndDelete,
+} from "../backend/engine-host";
+import { LocalSessionStore } from "../backend/engine-host";
+import { readRuntimeTranscript } from "../backend/engine-host";
+import { STUCK_TIMEOUT_MS } from "../backend/engine-host";
+import { createSkillCatalog, getSkillsForSystemPrompt } from "../backend/engine-host";
+import { ViewEmissionManager } from "../backend/engine-host";
+import {
+  getWorkspaceRegistry,
+  getWorkspaceRoot,
+  listRegisteredWorkspaces,
+  normalizePathForCompare,
+  registerExistingWorkspace,
+  registerManagedWorkspace,
+  resolveRegisteredWorkspace,
+  validateWorkspaceName,
+  workspaceDisplayName,
+} from "../backend/engine-host";
+import type { RuntimeNativeSessionState } from "../backend/runtime-contract";
+import type { RuntimeTool } from "../backend/runtime-contract";
+import { SessionIndexWriter } from "../backend/types";
+import type {
+  BackendCapabilities,
+  BackendEvent,
+  ClientFactory,
+  CreateSessionOpts,
+  IBackendProvider,
+  IndexOperations,
+  LoginResult,
+  NativeSessionSource,
+  RemoteSessionEvent,
+  RepositoryAgentDefinition,
+  SessionHandle,
+  SessionHydrationEvent,
+  StoredSession,
+} from "../backend/types";
 import {
   describeBackgroundWorkLines,
   summarizeBackgroundWork,
   type SessionBackgroundWork,
 } from "../common/background-work";
-import type { CommandCenterSafeBackendEvent } from "../../host/engine-host-types";
-import type { GoalContextPatch, GoalDefinitionPatch, GoalFence, GoalRecord, GoalRuntimeSnapshot, GoalState, GoalTransitionProposal } from "../../host/engine-host-types";
-import type { AgentMessageApiResult, AgentMessageQueueCancellationResult, CustomMcpServer, GoalTimelineEvent, MainSessionContextSelection, MainSessionWorkspaceBinding, MessageQuestion, ModelInfo, ModelRuntimeInfo, PermissionCardData, ContextTier, ReasoningEffort, CreateFromNativeStateError, SessionListOptions, SessionListPage, SessionMetadata, SessionAgentMessageMetadata, SessionInternalControlMetadata, SessionMessage, MessageToolCall, ReviewerSessionPermissionScope, SessionPermissionMode, SessionSandboxConfig, SessionRepositoryAgent, SessionRuntimeAgentRole, SessionSearchResult, SessionSource, SessionView, SessionViewEvent, TurnEvent, WorkspaceInstanceIdentity, Skill } from "../../host/engine-host-types";
-import { DEFAULT_SESSION_NAME, isHiddenInternalControlMessage, isToolFreeRuntimeAgentRole, resolveSessionToolAllowlist, isVisibleInternalControlResponse } from "../backend/engine-host";
 import { createLogger } from "../common/marshal-logger";
 import { makeIntentTitleFallback, makeQuickTitle } from "../common/marshal-quick-title";
 import {
@@ -34,7 +209,6 @@ import {
   parseRelayProviderId,
   type RelayAddress,
 } from "../common/relay-contract";
-import type { RequestOrigin } from "../../host/engine-host-types";
 import {
   DEFAULT_RUNTIME_ACCOUNT_ID,
   defaultRuntimeAccountId,
@@ -75,42 +249,12 @@ import {
   workspaceBindingsEqual,
   workspaceInstanceIdentitiesEqual,
 } from "../common/workspace-role-identity";
-import type { AgentMessageDeliveryContext, AgentMessageDeliveryMode, AgentMessageDeliveryResult, AgentMessageKind, AgentMessageOutbox, AgentMessageRecord } from "../../host/engine-host-types";
-import { describeAgentMessageSendTime, isAgentMessageDeliveryControlError } from "../backend/engine-host";
-import { getAppDataDir } from "../backend/engine-host";
-import { clearAvatarCache } from "../backend/engine-host";
-import { CLAUDE_NATIVE_STATE_FORMAT, MAX_NATIVE_STATE_BYTES } from "../backend/claude/native-state";
-import { claudeJsonlToSessionMessages } from "../backend/claude/native-state-history";
-import { stripHostTurnDecorations, validateConversationState } from "../backend/conversation-state";
-import type { BackgroundToolCancellationRequest, BackgroundToolCancellationRequestToken, BackgroundToolDispatchClaim, BackgroundToolDispatchClaimRequest, BackgroundToolDispatchClaimResult, BackgroundToolInvocationCompletion, BackgroundToolInvocationRegistrationResult, BackgroundToolInvocationStart, BackgroundToolProcessAttachment, ICommandClassifier, IGoalToolsManager, ForkSubagentTask, IMemoryManager, ISelfToolsSessionManager, RunningToolCallInfo, RunningToolCancelResult, RunningToolCancellationScope, RunningToolInspectResult } from "../../host/engine-host-types";
-import type { RuntimeNativeSessionState } from "../backend/runtime-contract";
-import type { RuntimeTool } from "../backend/runtime-contract";
-import type { TranscriptHandoffReason } from "../../host/engine-host-types";
-import { buildImportedConversationState, buildTranscriptConversationState, reconcileWithTranscript } from "../backend/engine-host";
-import { SessionIndexWriter } from "../backend/types";
-import type {
-  BackendCapabilities,
-  BackendEvent,
-  ClientFactory,
-  CreateSessionOpts,
-  IBackendProvider,
-  IndexOperations,
-  LoginResult,
-  NativeSessionSource,
-  RemoteSessionEvent,
-  RepositoryAgentDefinition,
-  SessionHandle,
-  SessionHydrationEvent,
-  StoredSession,
-} from "../backend/types";
+import { escapeXmlLikeClosingTag } from "../foundation/prompt/prompt-boundary";
+import { formatUserFacingError, isBadAttachmentUploadError } from "../support/error-formatting";
+import { captureWorkspaceBinding } from "../support/workspace-role-identity";
 import { BackgroundTaskManager, type BackgroundTaskUpdate } from "./background-task-manager";
 import { isBuiltInAgentType } from "./built-in-agent-types";
-import { BusySessionTracker } from "../backend/engine-host";
-import type { CommandCenterSessionObserver } from "../../host/engine-host-types";
-import { formatUserFacingError, isBadAttachmentUploadError } from "../support/error-formatting";
-import { escapeXmlLikeClosingTag } from "../foundation/prompt/prompt-boundary";
 import { getNetFetch } from "./marshal-net-fetch";
-import type { KnowledgeAvailability } from "../../host/engine-host-types";
 import { MemoryProjectResolver } from "./marshal-runtime/memory/memory-project";
 import {
   recordSessionExecutionUsage,
@@ -122,19 +266,8 @@ import {
   type McpServerStatusEntry,
   type ScopedLogger,
 } from "./mcp-status-manager";
-import type { McpStore } from "../../host/engine-host-types";
-import { getMcpStatus as getMcpStatusStandalone } from "../backend/engine-host";
 import { ModelManager, type SessionTier } from "./model-manager";
-import type { CommandClassification } from "../../host/engine-host-types";
-import type { PermissionPolicy } from "../../host/engine-host-types";
 import { toMcpServerKey } from "./platform/extensions/mcp-server-key";
-import { assembleMarshalSystemPrompt } from "../backend/engine-host";
-import type { ExtensionPromptContribution } from "../../host/engine-host-types";
-import { isAgentPromptV2Session, isLeanCoreSession, isLeanPromptSession, isLeanRepoRulesSession, LEAN_PROMPT_DISABLED_NATIVE_TOOLS, resolveAgentPromptV2ForNewSession, resolveLeanCoreForNewSession, resolveLeanPromptForNewSession, resolveLeanRepoRulesForNewSession } from "../backend/engine-host";
-import { SPAWN_ONLY_SKILL_NAMES } from "../backend/engine-host";
-import { assembleMarshalSystemPromptV2, V2_DISABLED_NATIVE_TOOLS, V2_DEFERRED_HOST_TOOLS, V2_EXPOSED_HOST_TOOLS, V2_NATIVE_SUBAGENT_ALLOWLIST } from "../backend/engine-host";
-import type { RequestSessionSnapshot, RequestStoredMessage } from "../../host/engine-host-types";
-import type { LiveSessionInfo } from "../../host/engine-host-types";
 import {
   assertRuntimeAccountUsable,
   pickRuntimeAccountWithMostUsage,
@@ -143,8 +276,6 @@ import {
 import { RuntimeContinuations } from "./runtime-continuations";
 import { activeRuntimeGroup, RuntimeModelCatalog } from "./runtime-model-catalog";
 import { RuntimeSubagentMirrors } from "./runtime-subagent-mirrors";
-import type { SelfToolDeps } from "../../host/engine-host-types";
-import { getSelfTools } from "../backend/engine-host";
 import { isProjectFolder, uniqueWorkspaceName } from "./session-import/placement";
 import {
   launchFileAttachments,
@@ -165,27 +296,15 @@ import {
   type SessionMetadataSnapshot,
   type SessionScope,
 } from "./session-scope-cache";
-import { searchSessions as searchSessionsFn, isSessionHiddenFromList, isSessionHiddenFromSearchAndDelete } from "../backend/engine-host";
 import {
   SessionStartCoordinator,
   SessionStartCoordinatorStoppedError,
   StaleSessionStartError,
   type SessionStartContext,
 } from "./session-start-coordinator";
-import { LocalSessionStore } from "../backend/engine-host";
-import type { ISessionStore, Message, PendingModelSwitch, PersistedSession, ReadonlySessionsIndex, SessionForkRecord, SessionProgressRecord, SessionsIndex } from "../../host/engine-host-types";
-import type { RuntimeTranscriptRequest, RuntimeTranscriptPage } from "../../host/engine-host-types";
-import { readRuntimeTranscript } from "../backend/engine-host";
-import { STUCK_TIMEOUT_MS } from "../backend/engine-host";
-import type { SkillCatalog } from "../../host/engine-host-types";
-import { createSkillCatalog, getSkillsForSystemPrompt } from "../backend/engine-host";
 import { markTelemetry, sendErrorTelemetry } from "./telemetry-errors";
-import type { TenantPolicyProvider } from "../../host/engine-host-types";
 import { finalizeInterruptedCheckpoint, TurnAccumulator } from "./turn-accumulator";
 import { wrapUntrusted } from "./untrusted-wrap";
-import { ViewEmissionManager } from "../backend/engine-host";
-import { captureWorkspaceBinding } from "../support/workspace-role-identity";
-import { getWorkspaceRegistry, getWorkspaceRoot, listRegisteredWorkspaces, normalizePathForCompare, registerExistingWorkspace, registerManagedWorkspace, resolveRegisteredWorkspace, validateWorkspaceName, workspaceDisplayName } from "../backend/engine-host";
 import { classifyWorktreeCreationError } from "./worktree-creation-error";
 import { collectWorktreeWorkspaceNames, isWorktreeRepoPath } from "./worktree-path";
 import { resolveWorktreeRoot } from "./worktree-root";
@@ -867,8 +986,16 @@ function classifyError(value: unknown): string {
 import { isAuthError } from "../common/foundation/auth/auth-errors";
 export { isAuthError };
 
+import {
+  applyRuntimeAgentStrategy,
+  buildSdkDefaultSubagentSystemContent,
+  buildSystemMessage as buildSystemMessageFn,
+  getSoulGreeting as getSoulGreetingFn,
+  buildRelayAttentionSection,
+  buildSoulPrompt,
+  formatBundledWorkspaceFile,
+} from "../backend/engine-host";
 import { coerceToKnownSoul } from "./souls";
-import { applyRuntimeAgentStrategy, buildSdkDefaultSubagentSystemContent, buildSystemMessage as buildSystemMessageFn, getSoulGreeting as getSoulGreetingFn, buildRelayAttentionSection, buildSoulPrompt, formatBundledWorkspaceFile } from "../backend/engine-host";
 import { getSystemTimezone } from "./system-timezone";
 
 export { SOUL_PRESETS } from "./souls";

@@ -16,13 +16,20 @@ export function configureEngineHost(next: Partial<EngineHostServices>): void {
   // Descriptors, not values: a host may pass getters that resolve its modules on first use.
   Object.defineProperties(services, Object.getOwnPropertyDescriptors(next));
   if (Object.hasOwn(next, "APP_NAME")) APP_NAME = next.APP_NAME as EngineHostServices["APP_NAME"];
-  if (Object.hasOwn(next, "DEFAULT_PERMISSIONS")) DEFAULT_PERMISSIONS = next.DEFAULT_PERMISSIONS as EngineHostServices["DEFAULT_PERMISSIONS"];
-  if (Object.hasOwn(next, "sessionErrors")) sessionErrors = next.sessionErrors as EngineHostServices["sessionErrors"];
-  if (Object.hasOwn(next, "AskUserToolResultSchema")) AskUserToolResultSchema = next.AskUserToolResultSchema as EngineHostServices["AskUserToolResultSchema"];
-  if (Object.hasOwn(next, "NEVER_BACKGROUND_TOOL_NAMES")) NEVER_BACKGROUND_TOOL_NAMES = next.NEVER_BACKGROUND_TOOL_NAMES as EngineHostServices["NEVER_BACKGROUND_TOOL_NAMES"];
+  if (Object.hasOwn(next, "DEFAULT_PERMISSIONS"))
+    DEFAULT_PERMISSIONS = next.DEFAULT_PERMISSIONS as EngineHostServices["DEFAULT_PERMISSIONS"];
+  if (Object.hasOwn(next, "sessionErrors"))
+    sessionErrors = next.sessionErrors as EngineHostServices["sessionErrors"];
+  if (Object.hasOwn(next, "AskUserToolResultSchema"))
+    AskUserToolResultSchema =
+      next.AskUserToolResultSchema as EngineHostServices["AskUserToolResultSchema"];
+  if (Object.hasOwn(next, "NEVER_BACKGROUND_TOOL_NAMES"))
+    NEVER_BACKGROUND_TOOL_NAMES =
+      next.NEVER_BACKGROUND_TOOL_NAMES as EngineHostServices["NEVER_BACKGROUND_TOOL_NAMES"];
   if (Object.hasOwn(next, "DEFAULT_SESSION_NAME")) {
     try {
-      DEFAULT_SESSION_NAME = next.DEFAULT_SESSION_NAME as EngineHostServices["DEFAULT_SESSION_NAME"];
+      DEFAULT_SESSION_NAME =
+        next.DEFAULT_SESSION_NAME as EngineHostServices["DEFAULT_SESSION_NAME"];
     } catch {
       // A host test double without this export; the port stays unset until supplied.
     }
@@ -36,42 +43,48 @@ export function configureEngineHost(next: Partial<EngineHostServices>): void {
   }
   if (Object.hasOwn(next, "LEAN_PROMPT_DISABLED_NATIVE_TOOLS")) {
     try {
-      LEAN_PROMPT_DISABLED_NATIVE_TOOLS = next.LEAN_PROMPT_DISABLED_NATIVE_TOOLS as EngineHostServices["LEAN_PROMPT_DISABLED_NATIVE_TOOLS"];
+      LEAN_PROMPT_DISABLED_NATIVE_TOOLS =
+        next.LEAN_PROMPT_DISABLED_NATIVE_TOOLS as EngineHostServices["LEAN_PROMPT_DISABLED_NATIVE_TOOLS"];
     } catch {
       // A host test double without this export; the port stays unset until supplied.
     }
   }
   if (Object.hasOwn(next, "SPAWN_ONLY_SKILL_NAMES")) {
     try {
-      SPAWN_ONLY_SKILL_NAMES = next.SPAWN_ONLY_SKILL_NAMES as EngineHostServices["SPAWN_ONLY_SKILL_NAMES"];
+      SPAWN_ONLY_SKILL_NAMES =
+        next.SPAWN_ONLY_SKILL_NAMES as EngineHostServices["SPAWN_ONLY_SKILL_NAMES"];
     } catch {
       // A host test double without this export; the port stays unset until supplied.
     }
   }
   if (Object.hasOwn(next, "V2_DISABLED_NATIVE_TOOLS")) {
     try {
-      V2_DISABLED_NATIVE_TOOLS = next.V2_DISABLED_NATIVE_TOOLS as EngineHostServices["V2_DISABLED_NATIVE_TOOLS"];
+      V2_DISABLED_NATIVE_TOOLS =
+        next.V2_DISABLED_NATIVE_TOOLS as EngineHostServices["V2_DISABLED_NATIVE_TOOLS"];
     } catch {
       // A host test double without this export; the port stays unset until supplied.
     }
   }
   if (Object.hasOwn(next, "V2_DEFERRED_HOST_TOOLS")) {
     try {
-      V2_DEFERRED_HOST_TOOLS = next.V2_DEFERRED_HOST_TOOLS as EngineHostServices["V2_DEFERRED_HOST_TOOLS"];
+      V2_DEFERRED_HOST_TOOLS =
+        next.V2_DEFERRED_HOST_TOOLS as EngineHostServices["V2_DEFERRED_HOST_TOOLS"];
     } catch {
       // A host test double without this export; the port stays unset until supplied.
     }
   }
   if (Object.hasOwn(next, "V2_EXPOSED_HOST_TOOLS")) {
     try {
-      V2_EXPOSED_HOST_TOOLS = next.V2_EXPOSED_HOST_TOOLS as EngineHostServices["V2_EXPOSED_HOST_TOOLS"];
+      V2_EXPOSED_HOST_TOOLS =
+        next.V2_EXPOSED_HOST_TOOLS as EngineHostServices["V2_EXPOSED_HOST_TOOLS"];
     } catch {
       // A host test double without this export; the port stays unset until supplied.
     }
   }
   if (Object.hasOwn(next, "V2_NATIVE_SUBAGENT_ALLOWLIST")) {
     try {
-      V2_NATIVE_SUBAGENT_ALLOWLIST = next.V2_NATIVE_SUBAGENT_ALLOWLIST as EngineHostServices["V2_NATIVE_SUBAGENT_ALLOWLIST"];
+      V2_NATIVE_SUBAGENT_ALLOWLIST =
+        next.V2_NATIVE_SUBAGENT_ALLOWLIST as EngineHostServices["V2_NATIVE_SUBAGENT_ALLOWLIST"];
     } catch {
       // A host test double without this export; the port stays unset until supplied.
     }
@@ -99,7 +112,8 @@ export function configureEngineHost(next: Partial<EngineHostServices>): void {
   }
   if (Object.hasOwn(next, "workspaceDisplayName")) {
     try {
-      workspaceDisplayName = next.workspaceDisplayName as EngineHostServices["workspaceDisplayName"];
+      workspaceDisplayName =
+        next.workspaceDisplayName as EngineHostServices["workspaceDisplayName"];
     } catch {
       // A host test double without this export; the port stays unset until supplied.
     }
@@ -114,15 +128,22 @@ export function isEngineHostConfigured(): boolean {
 function need<K extends keyof EngineHostServices>(name: K): EngineHostServices[K] {
   const value = services[name];
   if (value === undefined) {
-    throw new Error(`The Marshal session engine has no host port "${String(name)}": call configureEngineHost() first`);
+    throw new Error(
+      `The Marshal session engine has no host port "${String(name)}": call configureEngineHost() first`,
+    );
   }
   return value as EngineHostServices[K];
 }
 
-type FunctionPort = { [K in keyof EngineHostServices]: EngineHostServices[K] extends (...args: never[]) => unknown ? K : never }[keyof EngineHostServices];
+type FunctionPort = {
+  [K in keyof EngineHostServices]: EngineHostServices[K] extends (...args: never[]) => unknown
+    ? K
+    : never;
+}[keyof EngineHostServices];
 
 function port<K extends FunctionPort>(name: K): EngineHostServices[K] {
-  const call = (...args: unknown[]): unknown => (need(name) as unknown as (...a: unknown[]) => unknown)(...args);
+  const call = (...args: unknown[]): unknown =>
+    (need(name) as unknown as (...a: unknown[]) => unknown)(...args);
   return call as unknown as EngineHostServices[K];
 }
 
@@ -133,11 +154,16 @@ export const app = {
   },
 };
 
-export let APP_NAME: EngineHostServices["APP_NAME"] = undefined as unknown as EngineHostServices["APP_NAME"];
-export let DEFAULT_PERMISSIONS: EngineHostServices["DEFAULT_PERMISSIONS"] = undefined as unknown as EngineHostServices["DEFAULT_PERMISSIONS"];
-export let sessionErrors: EngineHostServices["sessionErrors"] = undefined as unknown as EngineHostServices["sessionErrors"];
-export let AskUserToolResultSchema: EngineHostServices["AskUserToolResultSchema"] = undefined as unknown as EngineHostServices["AskUserToolResultSchema"];
-export let NEVER_BACKGROUND_TOOL_NAMES: EngineHostServices["NEVER_BACKGROUND_TOOL_NAMES"] = undefined as unknown as EngineHostServices["NEVER_BACKGROUND_TOOL_NAMES"];
+export let APP_NAME: EngineHostServices["APP_NAME"] =
+  undefined as unknown as EngineHostServices["APP_NAME"];
+export let DEFAULT_PERMISSIONS: EngineHostServices["DEFAULT_PERMISSIONS"] =
+  undefined as unknown as EngineHostServices["DEFAULT_PERMISSIONS"];
+export let sessionErrors: EngineHostServices["sessionErrors"] =
+  undefined as unknown as EngineHostServices["sessionErrors"];
+export let AskUserToolResultSchema: EngineHostServices["AskUserToolResultSchema"] =
+  undefined as unknown as EngineHostServices["AskUserToolResultSchema"];
+export let NEVER_BACKGROUND_TOOL_NAMES: EngineHostServices["NEVER_BACKGROUND_TOOL_NAMES"] =
+  undefined as unknown as EngineHostServices["NEVER_BACKGROUND_TOOL_NAMES"];
 
 export const applyGuardrails = port("applyGuardrails");
 export const backgroundToolObservation = port("backgroundToolObservation");
@@ -169,18 +195,30 @@ export const takeSessionMentionContext = port("takeSessionMentionContext");
 export const takeSharedSessionContext = port("takeSharedSessionContext");
 
 // SessionManager's ports (electron/sessions.ts and the modules that moved with it).
-export let DEFAULT_SESSION_NAME: EngineHostServices["DEFAULT_SESSION_NAME"] = undefined as unknown as EngineHostServices["DEFAULT_SESSION_NAME"];
-export let BusySessionTracker: EngineHostServices["BusySessionTracker"] = undefined as unknown as EngineHostServices["BusySessionTracker"];
-export let LEAN_PROMPT_DISABLED_NATIVE_TOOLS: EngineHostServices["LEAN_PROMPT_DISABLED_NATIVE_TOOLS"] = undefined as unknown as EngineHostServices["LEAN_PROMPT_DISABLED_NATIVE_TOOLS"];
-export let SPAWN_ONLY_SKILL_NAMES: EngineHostServices["SPAWN_ONLY_SKILL_NAMES"] = undefined as unknown as EngineHostServices["SPAWN_ONLY_SKILL_NAMES"];
-export let V2_DISABLED_NATIVE_TOOLS: EngineHostServices["V2_DISABLED_NATIVE_TOOLS"] = undefined as unknown as EngineHostServices["V2_DISABLED_NATIVE_TOOLS"];
-export let V2_DEFERRED_HOST_TOOLS: EngineHostServices["V2_DEFERRED_HOST_TOOLS"] = undefined as unknown as EngineHostServices["V2_DEFERRED_HOST_TOOLS"];
-export let V2_EXPOSED_HOST_TOOLS: EngineHostServices["V2_EXPOSED_HOST_TOOLS"] = undefined as unknown as EngineHostServices["V2_EXPOSED_HOST_TOOLS"];
-export let V2_NATIVE_SUBAGENT_ALLOWLIST: EngineHostServices["V2_NATIVE_SUBAGENT_ALLOWLIST"] = undefined as unknown as EngineHostServices["V2_NATIVE_SUBAGENT_ALLOWLIST"];
-export let LocalSessionStore: EngineHostServices["LocalSessionStore"] = undefined as unknown as EngineHostServices["LocalSessionStore"];
-export let STUCK_TIMEOUT_MS: EngineHostServices["STUCK_TIMEOUT_MS"] = undefined as unknown as EngineHostServices["STUCK_TIMEOUT_MS"];
-export let ViewEmissionManager: EngineHostServices["ViewEmissionManager"] = undefined as unknown as EngineHostServices["ViewEmissionManager"];
-export let workspaceDisplayName: EngineHostServices["workspaceDisplayName"] = undefined as unknown as EngineHostServices["workspaceDisplayName"];
+export let DEFAULT_SESSION_NAME: EngineHostServices["DEFAULT_SESSION_NAME"] =
+  undefined as unknown as EngineHostServices["DEFAULT_SESSION_NAME"];
+export let BusySessionTracker: EngineHostServices["BusySessionTracker"] =
+  undefined as unknown as EngineHostServices["BusySessionTracker"];
+export let LEAN_PROMPT_DISABLED_NATIVE_TOOLS: EngineHostServices["LEAN_PROMPT_DISABLED_NATIVE_TOOLS"] =
+  undefined as unknown as EngineHostServices["LEAN_PROMPT_DISABLED_NATIVE_TOOLS"];
+export let SPAWN_ONLY_SKILL_NAMES: EngineHostServices["SPAWN_ONLY_SKILL_NAMES"] =
+  undefined as unknown as EngineHostServices["SPAWN_ONLY_SKILL_NAMES"];
+export let V2_DISABLED_NATIVE_TOOLS: EngineHostServices["V2_DISABLED_NATIVE_TOOLS"] =
+  undefined as unknown as EngineHostServices["V2_DISABLED_NATIVE_TOOLS"];
+export let V2_DEFERRED_HOST_TOOLS: EngineHostServices["V2_DEFERRED_HOST_TOOLS"] =
+  undefined as unknown as EngineHostServices["V2_DEFERRED_HOST_TOOLS"];
+export let V2_EXPOSED_HOST_TOOLS: EngineHostServices["V2_EXPOSED_HOST_TOOLS"] =
+  undefined as unknown as EngineHostServices["V2_EXPOSED_HOST_TOOLS"];
+export let V2_NATIVE_SUBAGENT_ALLOWLIST: EngineHostServices["V2_NATIVE_SUBAGENT_ALLOWLIST"] =
+  undefined as unknown as EngineHostServices["V2_NATIVE_SUBAGENT_ALLOWLIST"];
+export let LocalSessionStore: EngineHostServices["LocalSessionStore"] =
+  undefined as unknown as EngineHostServices["LocalSessionStore"];
+export let STUCK_TIMEOUT_MS: EngineHostServices["STUCK_TIMEOUT_MS"] =
+  undefined as unknown as EngineHostServices["STUCK_TIMEOUT_MS"];
+export let ViewEmissionManager: EngineHostServices["ViewEmissionManager"] =
+  undefined as unknown as EngineHostServices["ViewEmissionManager"];
+export let workspaceDisplayName: EngineHostServices["workspaceDisplayName"] =
+  undefined as unknown as EngineHostServices["workspaceDisplayName"];
 
 export const isHiddenInternalControlMessage = port("isHiddenInternalControlMessage");
 export const isToolFreeRuntimeAgentRole = port("isToolFreeRuntimeAgentRole");

@@ -1,12 +1,12 @@
 import type { SessionMessage, SessionMetadata } from "../../host/engine-host-types";
+import type { ISessionStore, PersistedSession } from "../../host/engine-host-types";
+import type { BackendEvent } from "../backend/types";
 import { createLogger } from "../common/marshal-logger";
 import {
   type RuntimeSubagentRef,
   type RuntimeSubagentStatus,
   isRuntimeSubagentRunning,
 } from "../common/runtime-subagent";
-import type { BackendEvent } from "../backend/types";
-import type { ISessionStore, PersistedSession } from "../../host/engine-host-types";
 
 const log = createLogger("RuntimeSubagentMirrors");
 

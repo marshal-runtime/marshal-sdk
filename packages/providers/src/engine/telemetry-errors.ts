@@ -1,6 +1,6 @@
+import type { MidgardError } from "../../host/engine-host-types";
 import type { LogEntry, TelemetryEvent } from "../common/marshal-logger";
 import { addLogSink, createLogger } from "../common/marshal-logger";
-import type { MidgardError } from "../../host/engine-host-types";
 
 /**
  * Subset of `BrowserWindow` that this module actually uses. Defining a

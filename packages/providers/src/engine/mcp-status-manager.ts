@@ -7,8 +7,8 @@
  * {@link SessionManager.connectMcpPipeline}.
  */
 
-import type { BackendEvent } from "../backend/types";
 import type { CustomMcpServer } from "../../host/engine-host-types";
+import type { BackendEvent } from "../backend/types";
 import { toMcpServerKey } from "./platform/extensions/mcp-server-key";
 
 /** Hard upper bound on a single `waitForMcpServerConnection` call. */
