@@ -13,7 +13,8 @@
     "test": "node build.mjs && node --test \"dist/test/*.test.js\"",
     "image": "node image/prepare.mjs",
     "pack": "node image/pack.mjs",
-    "vendor:packs": "node scripts/vendor-packs.mjs"
+    "vendor:packs": "node scripts/vendor-packs.mjs",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.302",
@@ -31,7 +32,9 @@
   },
   "packageManager": "pnpm@10.32.1",
   "devDependencies": {
-    "esbuild": "^0.27.4"
+    "esbuild": "^0.27.4",
+    "@types/node": "^24.19.2",
+    "typescript": "^6.0.2"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
