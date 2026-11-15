@@ -2,15 +2,23 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
 import { createMarshalHost } from "../src/host.js";
 import { withManifest } from "../src/onboarding-cli.js";
-import { entryFromSpec, extractTgz, parseManifest, readManifest, resolveManifest, writeManifest, type SdkManifest } from "../src/onboarding.js";
+import {
+  entryFromSpec,
+  extractTgz,
+  parseManifest,
+  readManifest,
+  resolveManifest,
+  writeManifest,
+  type ExtensionResolver,
+  type ManifestOrg,
+  type SdkManifest,
+} from "../src/onboarding.js";
 
 const SKILL = "---\nname: brief-check\ndescription: Check a brief.\n---\n\n# Brief check\n";
 
@@ -51,44 +59,36 @@ function pack(packageRoot: string, out: string): Buffer {
 
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
-/** The organization registry's routes (desktop format), on localhost, behind a bearer token. */
-async function fakeRegistry(entries: { id: string; version: string; status: string; archive: Buffer; sha256?: string }[], token = "registry-token") {
-  const requests: string[] = [];
-  const server = http.createServer((request, response) => {
-    requests.push(request.url ?? "");
-    if (request.headers.authorization !== `Bearer ${token}`) {
-      response.writeHead(401).end();
-      return;
-    }
-    if (request.url === "/v1/onboarding/catalog") {
-      const items = entries.map((entry) => ({
-        id: entry.id,
-        version: entry.version,
-        tier: "available",
-        title: entry.id,
-        why: "test",
-        status: entry.status,
-        delivery: { kind: "archive", sha256: entry.sha256 ?? sha256(entry.archive), bytes: entry.archive.length },
-      }));
-      response.writeHead(200, { "content-type": "application/json" }).end(
-        JSON.stringify({ version: 1, isAdmin: false, recommended: [], available: items.filter((item) => item.status === "approved"), pending: items.filter((item) => item.status === "pending") }),
-      );
-      return;
-    }
-    const match = /^\/v1\/onboarding\/extensions\/(@[^/]+\/[^/]+)\/([^/]+)\.tgz$/.exec(decodeURIComponent(request.url ?? ""));
-    const entry = match && entries.find((candidate) => candidate.id === match[1] && candidate.version === match[2]);
-    if (!entry) {
-      response.writeHead(404).end();
-      return;
-    }
-    response.writeHead(200, { "content-type": "application/gzip" }).end(entry.archive);
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { url, requests, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+/**
+ * The organization side as the org layer would answer it: the admitted set, and archives with the hash the
+ * organization announced (`announce` overrides it to play a tampered download).
+ */
+function fakeResolver(packages: { id: string; version: string; archive?: Buffer; packageRoot?: string; announce?: string }[], admitted = packages) {
+  const fetched: string[] = [];
+  const orgs: ManifestOrg[] = [];
+  const resolver: ExtensionResolver = {
+    async admitted(org) {
+      orgs.push(org);
+      const latest = new Map<string, string>();
+      for (const item of admitted) latest.set(item.id, item.version);
+      return [...latest].map(([id, version]) => ({ id, version }));
+    },
+    async fetch({ org, id, version }) {
+      orgs.push(org);
+      const matching = packages.filter((item) => item.id === id && (!version || item.version === version));
+      const item = matching.at(-1);
+      if (!item) throw new Error(`${id}${version ? `@${version}` : ""} is not admitted`);
+      fetched.push(`${id}@${item.version}`);
+      if (item.packageRoot) return { id, version: item.version, packageRoot: item.packageRoot };
+      return { id, version: item.version, archive: item.archive!, sha256: item.announce ?? sha256(item.archive!) };
+    },
+  };
+  return { resolver, fetched, orgs };
 }
 
-test("a manifest lists extensions by folder, archive and registry id, and is written back as read", () => {
+const ORG = "https://org.example.com/.well-known/marshal";
+
+test("a manifest lists extensions by folder, archive and organization id, and is written back as read", () => {
   const root = scratch();
   const packageRoot = fixture(root);
   const archive = path.join(root, "onboard.tgz");
@@ -119,6 +119,7 @@ test("resolving: folders as they are, archives unpacked once by sha256, ${env:..
   const file = path.join(root, "marshal-sdk.json");
   writeManifest(file, {
     version: 1,
+    defaults: false,
     extensions: [
       { path: path.relative(root, first), configuration: { apiKey: "${env:ONE_KEY}", nested: { list: ["${env:ONE_KEY}", "plain"] } } },
       { archive: "two.tgz", sha256: sha256(bytes) },
@@ -131,73 +132,122 @@ test("resolving: folders as they are, archives unpacked once by sha256, ${env:..
   assert.ok(resolved.extensions[1]!.packageRoot.startsWith(path.join(root, "cache")));
 
   await assert.rejects(resolveManifest(file, { env: {}, cacheDir: path.join(root, "cache") }), /environment variable ONE_KEY is not set/);
-  writeManifest(file, { version: 1, extensions: [{ archive: "two.tgz", sha256: "0".repeat(64) }] });
+  writeManifest(file, { version: 1, defaults: false, extensions: [{ archive: "two.tgz", sha256: "0".repeat(64) }] });
   await assert.rejects(resolveManifest(file, { env: {} }), /sha256 is [0-9a-f]{64}, the manifest expects 0{64}/);
-  writeManifest(file, { version: 1, extensions: [{ path: path.relative(root, first) }, { path: path.relative(root, first) }] });
+  writeManifest(file, { version: 1, defaults: false, extensions: [{ path: path.relative(root, first) }, { path: path.relative(root, first) }] });
   await assert.rejects(resolveManifest(file, { env: {} }), /@test\/one is listed twice/);
 });
 
-test("the organization registry: latest approved by default, a pinned version, size and sha256 checked, token required", async () => {
+test("ids come from the organization through the resolver: pinned or current, hash and identity checked, unpacked once", async () => {
   const root = scratch();
   const v1 = pack(fixture(root, "@zyg/onboard", "1.0.0"), path.join(root, "v1.tgz"));
   const v2 = pack(fixture(root, "@zyg/onboard", "1.2.0"), path.join(root, "v2.tgz"));
-  const v3 = pack(fixture(root, "@zyg/onboard", "2.0.0"), path.join(root, "v3.tgz"));
   const impostor = pack(fixture(root, "@zyg/other", "1.0.0"), path.join(root, "other.tgz"));
-  const registry = await fakeRegistry([
-    { id: "@zyg/onboard", version: "1.0.0", status: "approved", archive: v1 },
-    { id: "@zyg/onboard", version: "1.2.0", status: "approved", archive: v2 },
-    { id: "@zyg/onboard", version: "2.0.0", status: "pending", archive: v3 },
-    { id: "@zyg/swapped", version: "1.0.0", status: "approved", archive: impostor },
-    { id: "@zyg/tampered", version: "1.0.0", status: "approved", archive: v1, sha256: "f".repeat(64) },
+  const { resolver, fetched, orgs } = fakeResolver([
+    { id: "@zyg/onboard", version: "1.0.0", archive: v1 },
+    { id: "@zyg/onboard", version: "1.2.0", archive: v2 },
+    { id: "@zyg/swapped", version: "1.0.0", archive: impostor },
+    { id: "@zyg/tampered", version: "1.0.0", archive: v1, announce: "f".repeat(64) },
+    { id: "@zyg/folder", version: "3.0.0", packageRoot: fixture(root, "@zyg/folder", "3.0.0") },
+  ], []);
+  const file = path.join(root, "marshal-sdk.json");
+  const cacheDir = path.join(root, "cache");
+  const write = (extensions: SdkManifest["extensions"]) => writeManifest(file, { version: 1, org: { discovery: ORG }, defaults: false, extensions });
+
+  write([{ id: "@zyg/onboard" }, { id: "@zyg/folder" }]);
+  const latest = await resolveManifest(file, { env: {}, cacheDir, resolver });
+  assert.deepEqual(latest.extensions.map((extension) => [extension.identity, extension.version, extension.source, extension.origin]), [
+    ["@zyg/onboard", "1.2.0", "org", "listed"],
+    ["@zyg/folder", "3.0.0", "org", "listed"],
   ]);
-  try {
-    const file = path.join(root, "marshal-sdk.json");
-    const cacheDir = path.join(root, "cache");
-    const env = { ORG_TOKEN: "registry-token" };
-    const write = (extensions: SdkManifest["extensions"]) => writeManifest(file, { version: 1, registry: { url: registry.url, tokenEnv: "ORG_TOKEN" }, extensions });
+  assert.equal(orgs[0]!.discovery, ORG, "the resolver is told which organization");
+  write([{ id: "@zyg/onboard", version: "1.0.0" }]);
+  const pinned = await resolveManifest(file, { env: {}, cacheDir, resolver });
+  assert.equal(pinned.extensions[0]!.version, "1.0.0");
+  const unpacked = fs.statSync(pinned.extensions[0]!.packageRoot).mtimeMs;
+  await resolveManifest(file, { env: {}, cacheDir, resolver });
+  assert.equal(fs.statSync(pinned.extensions[0]!.packageRoot).mtimeMs, unpacked, "an archive already unpacked is reused");
+  assert.ok(fetched.includes("@zyg/onboard@1.0.0"));
 
-    write([{ id: "@zyg/onboard" }]);
-    const latest = await resolveManifest(file, { env, cacheDir });
-    assert.equal(latest.extensions[0]!.version, "1.2.0", "pending 2.0.0 is not installable");
-    assert.equal(latest.extensions[0]!.source, "registry");
-    write([{ id: "@zyg/onboard", version: "1.0.0" }]);
-    assert.equal((await resolveManifest(file, { env, cacheDir })).extensions[0]!.version, "1.0.0");
-    const downloads = registry.requests.filter((url) => url.endsWith(".tgz")).length;
-    await resolveManifest(file, { env, cacheDir });
-    assert.equal(registry.requests.filter((url) => url.endsWith(".tgz")).length, downloads, "a cached archive is not downloaded again");
-
-    write([{ id: "@zyg/onboard", version: "2.0.0" }]);
-    await assert.rejects(resolveManifest(file, { env, cacheDir }), /not in the registry's approved extensions \(approved versions: 1\.0\.0, 1\.2\.0\)/);
-    write([{ id: "@zyg/swapped" }]);
-    await assert.rejects(resolveManifest(file, { env, cacheDir }), /holds @zyg\/other, not @zyg\/swapped/);
-    write([{ id: "@zyg/tampered" }]);
-    await assert.rejects(resolveManifest(file, { env, cacheDir }), /does not match the size and sha256/);
-    write([{ id: "@zyg/onboard" }]);
-    await assert.rejects(resolveManifest(file, { env: {}, cacheDir }), /ORG_TOKEN is not set/);
-    await assert.rejects(resolveManifest(file, { env: { ORG_TOKEN: "wrong" }, cacheDir: path.join(root, "cache2") }), /HTTP 401/);
-    writeManifest(file, { version: 1, extensions: [{ id: "@zyg/onboard" }] });
-    await assert.rejects(resolveManifest(file, { env }), /has no registry/);
-    writeManifest(file, { version: 1, registry: { url: "http://registry.example.com" }, extensions: [{ id: "@zyg/onboard" }] });
-    await assert.rejects(resolveManifest(file, { env }), /must use https/);
-  } finally {
-    await registry.close();
-  }
+  write([{ id: "@zyg/swapped" }]);
+  await assert.rejects(resolveManifest(file, { env: {}, cacheDir, resolver }), /holds @zyg\/other, not @zyg\/swapped/);
+  write([{ id: "@zyg/tampered" }]);
+  await assert.rejects(resolveManifest(file, { env: {}, cacheDir, resolver }), /the archive's sha256 is [0-9a-f]{64}, the organization announced f{64}/);
+  write([{ id: "@zyg/onboard" }]);
+  await assert.rejects(resolveManifest(file, { env: {}, cacheDir }), /needs the org layer \(src\/org\)/);
+  writeManifest(file, { version: 1, defaults: false, extensions: [{ id: "@zyg/onboard" }] });
+  await assert.rejects(resolveManifest(file, { env: {}, resolver }), /has no "org"/);
 });
 
-test("a registry folder with the same layout works offline (an image's mirror)", async () => {
+test("org with a profile loads the organization's admitted extensions, minus deny and outside allow; listed entries win", async () => {
   const root = scratch();
-  const archive = pack(fixture(root, "@zyg/onboard", "1.0.0"), path.join(root, "a.tgz"));
-  const mirror = path.join(root, "mirror");
-  fs.mkdirSync(path.join(mirror, "v1/onboarding/extensions/@zyg/onboard"), { recursive: true });
-  fs.writeFileSync(path.join(mirror, "v1/onboarding/extensions/@zyg/onboard/1.0.0.tgz"), archive);
-  fs.writeFileSync(
-    path.join(mirror, "v1/onboarding/catalog"),
-    JSON.stringify({ version: 1, isAdmin: false, recommended: [{ id: "@zyg/onboard", version: "1.0.0", status: "approved", delivery: { kind: "archive", sha256: sha256(archive), bytes: archive.length } }], available: [], pending: [] }),
+  const archives = Object.fromEntries(
+    ["@zyg/a", "@zyg/b", "@zyg/c", "@zyg/d"].map((id) => [id, pack(fixture(root, id, "1.0.0"), path.join(root, `${id.slice(5)}.tgz`))]),
   );
+  const { resolver } = fakeResolver(Object.entries(archives).map(([id, archive]) => ({ id, version: "1.0.0", archive })));
   const file = path.join(root, "marshal-sdk.json");
-  writeManifest(file, { version: 1, registry: { dir: "mirror" }, extensions: [{ id: "@zyg/onboard" }] });
-  const resolved = await resolveManifest(file, { env: {}, cacheDir: path.join(root, "cache") });
-  assert.equal(resolved.extensions[0]!.identity, "@zyg/onboard");
+  const listedA = fixture(path.join(root, "local"), "@zyg/a", "9.0.0");
+  writeManifest(file, {
+    version: 1,
+    org: { discovery: ORG, profile: { allow: ["@zyg/a", "@zyg/b", "@zyg/c"], deny: ["@zyg/c"] } },
+    defaults: false,
+    extensions: [{ path: path.relative(root, listedA) }],
+  });
+  assert.deepEqual(readManifest(file).org, { discovery: ORG, profile: { allow: ["@zyg/a", "@zyg/b", "@zyg/c"], deny: ["@zyg/c"] } });
+  const resolved = await resolveManifest(file, { env: {}, cacheDir: path.join(root, "cache"), resolver });
+  assert.deepEqual(resolved.extensions.map((extension) => [extension.identity, extension.version, extension.origin]), [
+    ["@zyg/a", "9.0.0", "listed"],
+    ["@zyg/b", "1.0.0", "org-profile"],
+  ]);
+
+  writeManifest(file, { version: 1, org: { discovery: ORG }, defaults: false, extensions: [] });
+  const everything = await resolveManifest(file, { env: {}, cacheDir: path.join(root, "cache"), resolver });
+  assert.deepEqual(everything.extensions.map((extension) => extension.identity), ["@zyg/a", "@zyg/b", "@zyg/c", "@zyg/d"], "no profile: everything admitted");
+  assert.throws(() => parseManifest({ version: 1, org: { discovery: ORG, profile: { deny: ["c"] } }, extensions: [] }), /org\.profile\.deny is a list of identities/);
+  assert.throws(() => parseManifest({ version: 1, org: {}, extensions: [] }), /org needs \{"discovery"/);
+});
+
+test("built-in defaults: the org extension with an org, the kit's Brain, Zyg's tools on a Zyg host; each can be opted out", async () => {
+  const root = scratch();
+  const orgArchive = pack(fixture(root, "@marshal/org", "0.1.0"), path.join(root, "org.tgz"));
+  const brain = fixture(root, "@marshal/brain", "0.4.0");
+  const zygTools = fixture(root, "@zyg/marshal-runtime-extension", "2.1.0");
+  const { resolver } = fakeResolver([{ id: "@marshal/org", version: "0.1.0", archive: orgArchive }], []);
+  const env = { MARSHAL_SDK_BRAIN_PACKAGE: brain, MARSHAL_SDK_ZYG_EXTENSION: zygTools };
+  const file = path.join(root, "marshal-sdk.json");
+  const resolve = (manifest: Omit<SdkManifest, "version">, environment: Record<string, string | undefined> = env) => {
+    writeManifest(file, { version: 1, ...manifest });
+    return resolveManifest(file, { env: environment, cacheDir: path.join(root, "cache"), resolver });
+  };
+
+  const zyg = await resolve({ profile: "zyg", org: { discovery: ORG }, extensions: [] });
+  assert.deepEqual(zyg.defaultExtensions, ["@marshal/org", "@marshal/brain", "@zyg/marshal-runtime-extension"]);
+  assert.deepEqual(zyg.extensions.map((extension) => [extension.identity, extension.origin]), [
+    ["@marshal/org", "default"],
+    ["@zyg/marshal-runtime-extension", "default"],
+  ], "the Brain loads through the kit, not as a listed package");
+  assert.deepEqual(zyg.kit, { parts: ["brain"], brain: { packageRoot: brain } });
+
+  // Marley: a Zyg host that opts out of Zyg's tools.
+  const marley = await resolve({ profile: "zyg", org: { discovery: ORG }, defaults: { zygTools: false }, kit: ["sessions"], extensions: [] });
+  assert.deepEqual(marley.defaultExtensions, ["@marshal/org", "@marshal/brain"]);
+  assert.deepEqual(marley.kit, { parts: ["brain", "sessions"], brain: { packageRoot: brain } });
+
+  const plain = await resolve({ extensions: [] });
+  assert.deepEqual(plain.defaultExtensions, ["@marshal/brain"], "no org, not a Zyg host: only the Brain");
+  const none = await resolve({ profile: "zyg", org: { discovery: ORG }, defaults: false, extensions: [] });
+  assert.deepEqual([none.defaultExtensions, none.extensions, none.kit], [[], [], undefined]);
+
+  const kitAsks = await resolve({ kit: ["memory"], extensions: [] });
+  assert.deepEqual(kitAsks.defaultExtensions, [], "a kit that asks for the Brain loads it itself");
+  const listed = await resolve({ profile: "zyg", defaults: { brain: false }, extensions: [{ path: path.relative(root, zygTools), configuration: { mode: "x" } }] });
+  assert.deepEqual(listed.extensions.map((extension) => [extension.identity, extension.origin]), [["@zyg/marshal-runtime-extension", "listed"]], "a listed default is not loaded twice");
+
+  await assert.rejects(resolve({ extensions: [] }, {}), /default @marshal\/brain is on because every host carries the kit's Brain, but no package was found: set MARSHAL_SDK_BRAIN_PACKAGE .* or opt out with "defaults": \{"brain": false\}/);
+  await assert.rejects(resolve({ profile: "zyg", defaults: { brain: false }, extensions: [] }, {}), /opt out with "defaults": \{"zygTools": false\}/);
+  const wrong = fixture(root, "@zyg/not-brain", "1.0.0");
+  await assert.rejects(resolve({ extensions: [] }, { MARSHAL_SDK_BRAIN_PACKAGE: wrong }), /holds @zyg\/not-brain, not @marshal\/brain/);
+  assert.throws(() => parseManifest({ version: 1, defaults: { brian: false }, extensions: [] }), /defaults is false or/);
 });
 
 test("archives with links or paths leaving the folder are refused", () => {
@@ -213,31 +263,53 @@ test("archives with links or paths leaving the folder are refused", () => {
   assert.equal(fs.existsSync(path.join(root, "link")), false);
 });
 
-test("one manifest gives a host its extensions, kit and model; the host reports each and refuses a missing one by name", async () => {
+test("one manifest gives a host its extensions, defaults, kit and model; the report marks defaults and refuses a missing package by name", async () => {
   const root = scratch();
   const packageRoot = fixture(root, "@test/onboard");
+  const brain = fixture(root, "@marshal/brain", "0.4.0");
+  const zygTools = fixture(root, "@zyg/marshal-runtime-extension", "2.1.0");
   const file = path.join(root, "marshal-sdk.json");
-  writeManifest(file, { version: 1, model: "claude-sonnet-5", reasoningEffort: "medium", extensions: [{ path: path.relative(root, packageRoot) }] });
+  writeManifest(file, { version: 1, profile: "zyg", model: "claude-sonnet-5", reasoningEffort: "medium", extensions: [{ path: path.relative(root, packageRoot) }] });
   fs.mkdirSync(path.join(root, "ws"));
   const lines: string[] = [];
   const options = await withManifest(
-    { workspacePath: path.join(root, "ws"), stateRoot: path.join(root, "state"), browser: false, env: {}, log: (line) => lines.push(line) },
+    {
+      workspacePath: path.join(root, "ws"),
+      stateRoot: path.join(root, "state"),
+      browser: false,
+      env: { MARSHAL_SDK_BRAIN_PACKAGE: brain, MARSHAL_SDK_ZYG_EXTENSION: zygTools },
+      log: (line) => lines.push(line),
+    },
     { manifest: file },
   );
+  assert.deepEqual(options.defaultExtensions, ["@marshal/brain", "@zyg/marshal-runtime-extension"]);
   assert.equal(options.model, "claude-sonnet-5");
   assert.equal(options.reasoningEffort, "medium");
   const host = await createMarshalHost({ ...options, query: (() => (async function* () {})()) as never });
   try {
     assert.deepEqual(
       host.extensions.map((extension) => [extension.identity, extension.status, extension.health, extension.skills]),
-      [["@test/onboard", "enabled", "healthy", ["brief-check"]]],
+      [
+        ["@marshal/brain", "enabled", "healthy", ["brief-check"]],
+        ["@zyg/marshal-runtime-extension", "enabled", "healthy", ["brief-check"]],
+        ["@test/onboard", "enabled", "healthy", ["brief-check"]],
+      ],
     );
+    assert.deepEqual(host.extensions.map((extension) => extension.fromDefaults), [true, true, false]);
+    assert.ok(lines.some((line) => /^extension @marshal\/brain@0\.4\.0 \(default\) enabled, healthy/.test(line)), lines.join("\n"));
+    assert.ok(lines.some((line) => /^extension @zyg\/marshal-runtime-extension@2\.1\.0 \(default\) enabled, healthy/.test(line)), lines.join("\n"));
     assert.ok(lines.some((line) => /^extension @test\/onboard@1\.0\.0 enabled, healthy: 0 capabilities, 1 skills$/.test(line)), lines.join("\n"));
-    assert.ok(lines.some((line) => line.startsWith(`manifest ${file}: @test/onboard@1.0.0`)));
+    assert.ok(
+      lines.includes(`manifest ${file}: @marshal/brain@0.4.0 (default), @zyg/marshal-runtime-extension@2.1.0 (default), @test/onboard@1.0.0`),
+      lines.join("\n"),
+    );
   } finally {
     await host.dispose();
   }
-  const overridden = await withManifest({ workspacePath: root, stateRoot: root, env: {}, model: "claude-opus-5-5" }, { manifest: file, model: "claude-opus-5-5" });
+  const overridden = await withManifest(
+    { workspacePath: root, stateRoot: root, env: { MARSHAL_SDK_BRAIN_PACKAGE: brain, MARSHAL_SDK_ZYG_EXTENSION: zygTools }, model: "claude-opus-5-5" },
+    { manifest: file, model: "claude-opus-5-5" },
+  );
   assert.equal(overridden.model, "claude-opus-5-5", "--model wins over the manifest");
 
   await assert.rejects(

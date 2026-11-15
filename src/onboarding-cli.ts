@@ -3,6 +3,8 @@ import path from "node:path";
 
 import type { MarshalHostOptions } from "./host.js";
 import {
+  BRAIN_EXTENSION,
+  DEFAULT_EXTENSIONS,
   MANIFEST_FILE,
   OnboardingError,
   describeEntry,
@@ -19,17 +21,20 @@ import {
 
 export const ONBOARDING_USAGE = `  init        Write ${MANIFEST_FILE}: the extensions, kit and model every host command here loads.
                 [--manifest <file>] [--force] [--kit brain,memory,sessions] [--model <id>] [--effort <level>]
-                [--registry <https url | folder>] [--registry-token-env <NAME>] [--extension <spec>]...
+                [--org <discovery url>] [--allow <identity>]... [--deny <identity>]... [--profile zyg]
+                [--no-defaults | --no-default org|brain|zygTools]... [--extension <spec>]...
   extensions  Manage the manifest's extensions. <spec> is a package folder, a .tgz, or @scope/name[@version]
-              from the registry.
+              from the organization.
                 add <spec> [--config key=value]... [--config-env key=ENV_NAME]... [--config-json <json>]
                 remove <identity | spec>
-                list [--resolve]      (--resolve fetches registry entries and checks every package)
+                list [--resolve]      (--resolve adds the defaults and the org's admitted extensions, fetches
+                                       and checks every package)
                 fetch                 (resolves and unpacks everything now, e.g. while building an image)
                 all take [--manifest <file>] [--cache <dir>]
 
   Host commands (exec, agent, serve) load ${MANIFEST_FILE} from --manifest, $MARSHAL_SDK_MANIFEST, or the
-  current folder; --extension, --model and --effort add to or override it.
+  current folder; --extension, --model and --effort add to or override it. Built-in defaults (the org
+  extension when an org is named, the kit's Brain, Zyg's tools on a Zyg host) load unless the manifest opts out.
 `;
 
 interface Parsed {
@@ -81,14 +86,21 @@ export async function withManifest(
   const file = manifestPath(explicit.manifest, options.env ?? process.env);
   if (!file) return options;
   const resolved = await resolveManifest(file, { env: options.env ?? process.env, ...(explicit.cache ? { cacheDir: explicit.cache } : {}) });
-  options.log?.(`manifest ${file}: ${resolved.extensions.map((extension) => `${extension.identity}@${extension.version}`).join(", ") || "no extensions"}`);
+  // A kit given in code wins over the manifest's, and with it the Brain default (the kit then decides on the Brain).
+  const kitFromManifest = resolved.kit !== undefined && options.kit === undefined;
+  const defaultExtensions = resolved.defaultExtensions.filter((identity) => kitFromManifest || identity !== BRAIN_EXTENSION);
+  const names = [...resolved.defaults.filter((extension) => defaultExtensions.includes(extension.identity) && extension.identity === BRAIN_EXTENSION), ...resolved.extensions].map(
+    (extension) => `${extension.identity}@${extension.version}${extension.origin === "default" ? " (default)" : extension.origin === "org-profile" ? " (org profile)" : ""}`,
+  );
+  options.log?.(`manifest ${file}: ${names.join(", ") || "no extensions"}`);
   return {
     ...options,
     extensions: [
       ...resolved.extensions.map((extension) => ({ packageRoot: extension.packageRoot, ...(extension.configuration !== undefined ? { configuration: extension.configuration } : {}) })),
       ...(options.extensions ?? []),
     ],
-    ...(resolved.kit !== undefined && options.kit === undefined ? { kit: resolved.kit } : {}),
+    ...(kitFromManifest ? { kit: resolved.kit } : {}),
+    ...(defaultExtensions.length || options.defaultExtensions ? { defaultExtensions: [...(options.defaultExtensions ?? []), ...defaultExtensions] } : {}),
     ...(!explicit.model && resolved.model ? { model: resolved.model } : {}),
     ...(!explicit.effort && resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}),
   };
@@ -128,11 +140,13 @@ export async function onboardingCommand(command: string, argv: readonly string[]
       case "list": {
         if (parsed.flags.has("resolve")) {
           const resolved = await resolveManifest(file, cacheOption(parsed));
-          print({ manifest: file, extensions: resolved.extensions.map(row) });
+          print({ manifest: file, extensions: [...resolved.defaults.filter((extension) => extension.identity === BRAIN_EXTENSION), ...resolved.extensions].map(row) });
         } else {
           print({
             manifest: file,
-            ...(manifest.registry ? { registry: manifest.registry } : {}),
+            ...(manifest.profile ? { profile: manifest.profile } : {}),
+            ...(manifest.org ? { org: manifest.org } : {}),
+            defaults: defaultsOf(manifest),
             ...(manifest.kit !== undefined ? { kit: manifest.kit } : {}),
             ...(manifest.model ? { model: manifest.model } : {}),
             extensions: manifest.extensions.map((entry) => listRow(entry, dir)),
@@ -142,7 +156,7 @@ export async function onboardingCommand(command: string, argv: readonly string[]
       }
       case "fetch": {
         const resolved = await resolveManifest(file, cacheOption(parsed));
-        print({ manifest: file, extensions: resolved.extensions.map(row) });
+        print({ manifest: file, extensions: [...resolved.defaults.filter((extension) => extension.identity === BRAIN_EXTENSION), ...resolved.extensions].map(row) });
         return 0;
       }
       default:
@@ -162,17 +176,23 @@ function init(parsed: Parsed, file: string): number {
   if (fs.existsSync(file) && !parsed.flags.has("force")) {
     throw new OnboardingError("manifest-exists", `${file} already exists (--force replaces it).`);
   }
-  const registry = one(parsed, "registry");
-  const tokenEnv = one(parsed, "registry-token-env");
+  const org = one(parsed, "org");
+  const allow = parsed.values.get("allow");
+  const deny = parsed.values.get("deny");
+  const profile = one(parsed, "profile");
+  if (profile !== undefined && profile !== "zyg") throw new OnboardingError("profile-invalid", `--profile is zyg (a Zyg host), got ${profile}.`);
+  if ((allow || deny) && !org) throw new OnboardingError("org-missing", "--allow and --deny filter an organization's extensions; name it with --org.");
+  const optOut = parsed.values.get("no-default") ?? [];
+  for (const key of optOut) if (!["org", "brain", "zygTools"].includes(key)) throw new OnboardingError("default-invalid", `--no-default takes org, brain or zygTools, got ${key}.`);
   const kit = one(parsed, "kit");
   const manifest: SdkManifest = {
     version: 1,
     ...(one(parsed, "model") ? { model: one(parsed, "model")! } : {}),
     ...(one(parsed, "effort") ? { reasoningEffort: one(parsed, "effort")! } : {}),
     ...(kit ? { kit: kit.split(",").map((part) => part.trim()).filter(Boolean) as never } : {}),
-    ...(registry
-      ? { registry: /^https?:\/\//.test(registry) ? { url: registry, ...(tokenEnv ? { tokenEnv } : {}) } : { dir: path.relative(path.dirname(file), path.resolve(registry)) || "." } }
-      : {}),
+    ...(profile ? { profile: "zyg" as const } : {}),
+    ...(org ? { org: { discovery: org, ...(allow || deny ? { profile: { ...(allow ? { allow } : {}), ...(deny ? { deny } : {}) } } : {}) } } : {}),
+    ...(parsed.flags.has("no-defaults") ? { defaults: false as const } : optOut.length ? { defaults: Object.fromEntries(optOut.map((key) => [key, false])) } : {}),
     extensions: (parsed.values.get("extension") ?? []).map((spec) => entryFromSpec(spec, path.dirname(file))),
   };
   writeManifest(file, manifest);
@@ -207,7 +227,12 @@ function cacheOption(parsed: Parsed): { cacheDir?: string } {
   return cache ? { cacheDir: path.resolve(cache) } : {};
 }
 
-/** The identity a local entry declares (registry entries carry it). */
+/** Which built-in defaults this manifest turns on (before checking that their packages exist). */
+function defaultsOf(manifest: SdkManifest): string[] {
+  return DEFAULT_EXTENSIONS.filter((spec) => manifest.defaults !== false && manifest.defaults?.[spec.key] !== false && spec.applies(manifest)).map((spec) => spec.identity);
+}
+
+/** The identity a local entry declares (organization entries carry it). */
 function identityOf(entry: ManifestExtension, dir: string): string | undefined {
   if (entry.id) return entry.id;
   if (entry.path) return readPackageManifest(path.resolve(dir, entry.path)).identity;
@@ -237,7 +262,7 @@ function matches(entry: ManifestExtension, spec: string, dir: string): boolean {
 function listRow(entry: ManifestExtension, dir: string): Record<string, unknown> {
   const base = {
     entry: describeEntry(entry),
-    source: entry.path ? "path" : entry.archive ? "archive" : "registry",
+    source: entry.path ? "path" : entry.archive ? "archive" : "org",
     ...(entry.configuration ? { configuration: maskConfiguration(entry.configuration) } : {}),
   };
   if (!entry.path) return base;
@@ -255,6 +280,7 @@ function row(extension: ResolvedExtension): Record<string, unknown> {
     identity: extension.identity,
     version: extension.version,
     source: extension.source,
+    origin: extension.origin,
     entry: extension.entry,
     packageRoot: extension.packageRoot,
     capabilities: summary.capabilities.length,

@@ -1,0 +1,178 @@
+$ /Users/omer/marshal/marshal/node-bin/darwin-arm64/node /Users/omer/marshal/marshal-sdk/dist/src/cli.js init --model claude-opus-5-5 --profile zyg --org https://org.example.com --allow @zyg/page-studio --extension /Users/omer/marshal-tracking/page-studio/out/package
+{
+  "written": "/private/tmp/fork-onboard/proof2/marshal-sdk.json",
+  "extensions": [
+    "~/marshal-tracking/page-studio/out/package"
+  ]
+}
+
+$ cat marshal-sdk.json
+{
+  "version": 1,
+  "model": "claude-opus-5-5",
+  "profile": "zyg",
+  "org": {
+    "discovery": "https://org.example.com",
+    "profile": {
+      "allow": [
+        "@zyg/page-studio"
+      ]
+    }
+  },
+  "extensions": [
+    {
+      "path": "~/marshal-tracking/page-studio/out/package"
+    }
+  ]
+}
+
+$ /Users/omer/marshal/marshal/node-bin/darwin-arm64/node /Users/omer/marshal/marshal-sdk/dist/src/cli.js extensions list
+{
+  "manifest": "/private/tmp/fork-onboard/proof2/marshal-sdk.json",
+  "profile": "zyg",
+  "org": {
+    "discovery": "https://org.example.com",
+    "profile": {
+      "allow": [
+        "@zyg/page-studio"
+      ]
+    }
+  },
+  "defaults": [
+    "@marshal/org",
+    "@marshal/brain",
+    "@zyg/marshal-runtime-extension"
+  ],
+  "model": "claude-opus-5-5",
+  "extensions": [
+    {
+      "entry": "~/marshal-tracking/page-studio/out/package",
+      "source": "path",
+      "identity": "@zyg/page-studio",
+      "version": "0.1.0",
+      "capabilities": 37,
+      "skills": [
+        "lp-copywriting",
+        "lp-visual-world",
+        "lp-assets",
+        "lp-design",
+        "lp-roles",
+        "lp-review",
+        "studio-convert-run"
+      ]
+    }
+  ]
+}
+
+# no Brain package, no Zyg tools package, no org layer:
+$ env -u MARSHAL_SDK_BRAIN_PACKAGE /Users/omer/marshal/marshal/node-bin/darwin-arm64/node /Users/omer/marshal/marshal-sdk/dist/src/cli.js extensions list --resolve
+marshal-sdk: org.profile admits extensions from the organization, which needs the org layer (src/org); this SDK build does not have it.
+
+# Brain from the kit default, Zyg tools from zyg-agents; the org default stays off here (no org layer in this build), so the manifest drops the org:
+$ /Users/omer/marshal/marshal/node-bin/darwin-arm64/node /Users/omer/marshal/marshal-sdk/dist/src/cli.js init --force --model claude-opus-5-5 --profile zyg --extension /Users/omer/marshal-tracking/page-studio/out/package
+{
+  "written": "/private/tmp/fork-onboard/proof2/marshal-sdk.json",
+  "extensions": [
+    "~/marshal-tracking/page-studio/out/package"
+  ]
+}
+
+$ env MARSHAL_SDK_BRAIN_PACKAGE=/Users/omer/marshal/marshal-brain-memory MARSHAL_SDK_ZYG_EXTENSION=/Users/omer/zyg-agents/vendor/zyg-extension /Users/omer/marshal/marshal/node-bin/darwin-arm64/node /Users/omer/marshal/marshal-sdk/dist/src/cli.js extensions list --resolve
+{
+  "manifest": "/private/tmp/fork-onboard/proof2/marshal-sdk.json",
+  "extensions": [
+    {
+      "identity": "@marshal/brain",
+      "version": "0.1.0",
+      "source": "path",
+      "origin": "default",
+      "entry": "default @marshal/brain",
+      "packageRoot": "~/marshal/marshal-brain-memory",
+      "capabilities": 3,
+      "skills": []
+    },
+    {
+      "identity": "@zyg/marshal-runtime-extension",
+      "version": "0.4.0",
+      "source": "path",
+      "origin": "default",
+      "entry": "default @zyg/marshal-runtime-extension",
+      "packageRoot": "~/zyg-agents/vendor/zyg-extension",
+      "capabilities": 1,
+      "skills": []
+    },
+    {
+      "identity": "@zyg/page-studio",
+      "version": "0.1.0",
+      "source": "path",
+      "origin": "listed",
+      "entry": "~/marshal-tracking/page-studio/out/package",
+      "packageRoot": "~/marshal-tracking/page-studio/out/package",
+      "capabilities": 37,
+      "skills": [
+        "lp-copywriting",
+        "lp-visual-world",
+        "lp-assets",
+        "lp-design",
+        "lp-roles",
+        "lp-review",
+        "studio-convert-run"
+      ]
+    }
+  ]
+}
+
+$ env MARSHAL_SDK_BRAIN_PACKAGE=/Users/omer/marshal/marshal-brain-memory MARSHAL_SDK_ZYG_EXTENSION=/Users/omer/zyg-agents/vendor/zyg-extension PAGE_STUDIO_DIR=/tmp/fork-onboard/proof2/ps-data /Users/omer/marshal/marshal/node-bin/darwin-arm64/node /Users/omer/marshal/marshal-sdk/dist/src/cli.js exec --workspace ws --state state --capability pagestudio.pages
+[marshal-sdk] manifest /private/tmp/fork-onboard/proof2/marshal-sdk.json: @marshal/brain@0.1.0 (default), @zyg/marshal-runtime-extension@0.4.0 (default), @zyg/page-studio@0.1.0
+(node:68901) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[marshal-sdk] extension @marshal/brain@0.1.0 (default) enabled, healthy: 3 capabilities, 0 skills
+[marshal-sdk] extension @zyg/marshal-runtime-extension@0.4.0 (default) enabled, healthy: 1 capabilities, 0 skills
+[marshal-sdk] extension @zyg/page-studio@0.1.0 enabled, healthy: 37 capabilities, 7 skills
+{
+  "result": {
+    "pages": [
+      {
+        "id": "rawdog--new-page-7n8n5",
+        "title": "RAWDOG · One agent + critic",
+        "brand": "RAWDOG",
+        "version": 1,
+        "updatedAt": "1970-01-01T00:00:00.000Z",
+        "notesOpen": 0
+      }
+    ],
+    "open": null
+  }
+}
+
+# Marley: a Zyg host that opts out of Zyg tools
+$ /Users/omer/marshal/marshal/node-bin/darwin-arm64/node /Users/omer/marshal/marshal-sdk/dist/src/cli.js init --force --profile zyg --no-default zygTools --extension /Users/omer/marshal-tracking/page-studio/out/package
+{
+  "written": "/private/tmp/fork-onboard/proof2/marshal-sdk.json",
+  "extensions": [
+    "~/marshal-tracking/page-studio/out/package"
+  ]
+}
+
+$ env MARSHAL_SDK_BRAIN_PACKAGE=/Users/omer/marshal/marshal-brain-memory PAGE_STUDIO_DIR=/tmp/fork-onboard/proof2/ps-data /Users/omer/marshal/marshal/node-bin/darwin-arm64/node /Users/omer/marshal/marshal-sdk/dist/src/cli.js exec --workspace ws --state state2 --capability pagestudio.pages
+[marshal-sdk] manifest /private/tmp/fork-onboard/proof2/marshal-sdk.json: @marshal/brain@0.1.0 (default), @zyg/page-studio@0.1.0
+(node:68961) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[marshal-sdk] extension @marshal/brain@0.1.0 (default) enabled, healthy: 3 capabilities, 0 skills
+[marshal-sdk] extension @zyg/page-studio@0.1.0 enabled, healthy: 37 capabilities, 7 skills
+{
+  "result": {
+    "pages": [
+      {
+        "id": "rawdog--new-page-7n8n5",
+        "title": "RAWDOG · One agent + critic",
+        "brand": "RAWDOG",
+        "version": 1,
+        "updatedAt": "1970-01-01T00:00:00.000Z",
+        "notesOpen": 0
+      }
+    ],
+    "open": null
+  }
+}
+

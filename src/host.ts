@@ -55,6 +55,8 @@ export interface MarshalHostExtensionState {
   health: string;
   capabilities: string[];
   skills: string[];
+  /** Loaded because it is one of the built-in defaults (marshal-sdk.json), not because it was listed. */
+  fromDefaults: boolean;
 }
 
 export interface MarshalHostOptions {
@@ -63,6 +65,8 @@ export interface MarshalHostOptions {
   /** Host-private folder outside the workspace: runtime state and the session store. */
   stateRoot: string;
   extensions?: readonly MarshalHostExtension[];
+  /** Identities that came from the manifest's built-in defaults; the start-up report marks them (withManifest sets it). */
+  defaultExtensions?: readonly string[];
   /**
    * Zyg's shared knowledge for every session: `["brain", "memory", "sessions"]` (docs/kit.md). Read-only
    * unless the kit options turn a write on.
@@ -289,6 +293,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         throw new Error(`Extension ${declared.identity}@${declared.version} (${extension.packageRoot}) could not be installed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
       }
       const record = lifecycle.get(installed.identity);
+      const fromDefaults = options.defaultExtensions?.includes(installed.identity) ?? false;
       if (record?.health !== "healthy" || record.status !== "enabled") {
         throw new Error(
           `Extension ${installed.identity}@${declared.version} (${extension.packageRoot}) did not activate: status ${record?.status ?? "missing"}, health ${record?.health ?? "unknown"}, reasons ${JSON.stringify(record?.blockReasons ?? [])}`,
@@ -302,8 +307,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         health: String(record.health),
         capabilities: declared.capabilities,
         skills: declared.skills,
+        fromDefaults,
       });
-      log(`extension ${installed.identity}@${record.version} ${record.status}, ${record.health}: ${declared.capabilities.length} capabilities, ${declared.skills.length} skills`);
+      log(`extension ${installed.identity}@${record.version}${fromDefaults ? " (default)" : ""} ${record.status}, ${record.health}: ${declared.capabilities.length} capabilities, ${declared.skills.length} skills`);
       installedExtensions.push({ identity: installed.identity, version: String(record.version) });
       if (record.agentGuidance) guidance.push(`${installed.identity}: ${JSON.stringify(record.agentGuidance)}`);
     }
@@ -467,18 +473,18 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
           invoke: (capability, input) => invoke(capability, input),
           extensions: () => [...installedExtensions],
           capabilities: () => (names ??= capabilityNames(runtime.kernel as never, runId, context)),
+          answer: (input) => decisions.answer({ ...input, route: "link" }),
         },
         log,
       });
       log(`link serving on ${link.url}`);
+      await decisions.addRoute(linkPersonRoute(link.url));
     } catch (error) {
       await agents.dispose().catch(() => undefined);
-          answer: (input) => decisions.answer({ ...input, route: "link" }),
       await runtime.dispose().catch(() => undefined);
       throw error;
     }
   }
-      await decisions.addRoute(linkPersonRoute(link.url));
 
   return {
     runId,

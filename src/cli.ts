@@ -27,7 +27,7 @@ const USAGE = `marshal-sdk <command> [options]
 ${ONBOARDING_USAGE}
 Host options (exec, agent, serve):
   --manifest <file>          the marshal-sdk.json to load (default: $MARSHAL_SDK_MANIFEST, else ./marshal-sdk.json)
-  --cache <dir>              where registry and .tgz extensions are unpacked
+  --cache <dir>              where organization and .tgz extensions are unpacked
   --workspace <dir>          where sessions work (required)
   --state <dir>              host-private folder outside the workspace (required)
   --extension <packageRoot>  a built runtime extension to load; repeatable

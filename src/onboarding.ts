@@ -1,27 +1,24 @@
 /**
  * Onboarding: everything a host needs in one file, `marshal-sdk.json`, so "give the host the extensions I need" is one
- * step. Extensions come from a built package folder, a .tgz, or an organization registry by `identity@version`, the
- * same catalog and archive format the desktop installs from (Plugins > Organization, electron/org/org-extension-catalog.ts
- * and org-onboarding.ts): `GET {registry}/v1/onboarding/catalog`, archives at
- * `{registry}/v1/onboarding/extensions/{id}/{version}.tgz`, checked against the announced size and sha256.
+ * step. Extensions come from a built package folder, a .tgz, or the organization by `identity@version`; `org` with a
+ * profile loads every extension the organization admits for this host. A built-in default set (the org extension, the
+ * kit's Brain, and Zyg's tools on a Zyg host) loads unless the manifest opts out.
  *
- * A registry may also be a folder with the same layout (`v1/onboarding/catalog` as a JSON file and the archives
- * beside it), which serves as an offline mirror inside an image and as the fake registry in tests.
+ * This module does not talk to the organization itself: an `ExtensionResolver` does (the org layer, src/org). It
+ * hands back an archive with the hash the organization announced, or a package folder; this module checks the hash,
+ * unpacks safely and caches.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import http from "node:http";
-import https from "node:https";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
-import type { KitSelection } from "./kit/index.js";
+import type { KitOptions, KitSelection } from "./kit/index.js";
 
 export const MANIFEST_FILE = "marshal-sdk.json";
-const CATALOG_ROUTE = "/v1/onboarding/catalog";
 const EXTENSION_ID = /^@[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9._-]{0,63}$/;
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]{1,64})?$/;
-const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 20_000;
 const ENV_REFERENCE = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/;
@@ -34,7 +31,7 @@ export interface ManifestExtension {
   archive?: string;
   /** Expected sha256 of `archive`; checked when given. */
   sha256?: string;
-  /** An extension from the registry by identity; `version` pins it, else the latest approved one. */
+  /** An extension the organization admits, by identity; `version` pins it, else the organization's current one. */
   id?: string;
   version?: string;
   /**
@@ -44,21 +41,48 @@ export interface ManifestExtension {
   configuration?: Record<string, unknown>;
 }
 
-export interface ManifestRegistry {
-  /** The organization's API base (https), or a folder with the same layout. */
-  url?: string;
-  dir?: string;
-  /** Environment variable holding the bearer token for `url`. */
-  tokenEnv?: string;
+/** The organization this host belongs to. */
+export interface ManifestOrg {
+  /** The organization's discovery URL (what a desktop signs in to). */
+  discovery: string;
+  /**
+   * Which of the organization's admitted extensions this host loads: `allow` (identities, `*` for all; default all)
+   * minus `deny`. Extensions listed in `extensions` load whatever the profile says.
+   */
+  profile?: { allow?: string[]; deny?: string[] };
+}
+
+/** The built-in default set; each is on unless set to false (or `defaults: false` turns all off). */
+export interface ManifestDefaults {
+  /** @marshal/org, when the manifest names an `org`. */
+  org?: boolean;
+  /** The kit's Brain (@marshal/brain). */
+  brain?: boolean;
+  /** Zyg's tools (@zyg/marshal-runtime-extension), on a Zyg host (`profile: "zyg"`). Marley opts out. */
+  zygTools?: boolean;
 }
 
 export interface SdkManifest {
   version: 1;
+  /** `zyg` marks a Zyg host: Zyg's tools join the defaults. */
+  profile?: "zyg";
   model?: string;
   reasoningEffort?: string;
   kit?: KitSelection;
-  registry?: ManifestRegistry;
+  org?: ManifestOrg;
+  defaults?: false | ManifestDefaults;
   extensions: ManifestExtension[];
+}
+
+/** What a resolver hands back for one extension: an archive with the organization's hash, or an unpacked package. */
+export type ResolvedPackage = { id: string; version: string } & ({ archive: Uint8Array; sha256: string } | { packageRoot: string });
+
+/** The organization side of onboarding, implemented by the org layer (src/org); tests pass a fake. */
+export interface ExtensionResolver {
+  /** The extensions the organization admits for this host, before the manifest's profile. */
+  admitted(org: ManifestOrg): Promise<{ id: string; version: string }[]>;
+  /** One admitted extension; without `version`, the organization's current one. */
+  fetch(request: { org: ManifestOrg; id: string; version?: string }): Promise<ResolvedPackage>;
 }
 
 /** An extension ready for createMarshalHost, with where it came from. */
@@ -67,25 +91,32 @@ export interface ResolvedExtension {
   configuration?: unknown;
   identity: string;
   version: string;
-  source: "path" | "archive" | "registry";
-  /** The manifest entry, as written (for messages). */
+  source: "path" | "archive" | "org";
+  /** Listed in the manifest, admitted by the organization's profile, or one of the built-in defaults. */
+  origin: "listed" | "org-profile" | "default";
+  /** The manifest entry or default, as written (for messages). */
   entry: string;
 }
 
 export interface ResolveOptions {
   /** Where unpacked archives are kept. Default: $MARSHAL_SDK_CACHE, else <manifest dir>/.marshal-sdk/extensions. */
   cacheDir?: string;
-  /** Environment for `${env:...}` references and the registry token. Default: process.env. */
+  /** Environment for `${env:...}` references and the default packages' variables. Default: process.env. */
   env?: Record<string, string | undefined>;
-  /** Replaces HTTP(S) GET for the registry (tests). */
-  fetchBytes?: (url: string, headers: Record<string, string>, maxBytes: number) => Promise<Buffer>;
+  /** Reaches the organization; needed for `id` entries and `org`. Default: the one registered with useExtensionResolver. */
+  resolver?: ExtensionResolver;
 }
 
 export interface OnboardingHostOptions {
+  /** What createMarshalHost installs: defaults, then listed entries, then the org profile's (the Brain goes through `kit`). */
   extensions: ResolvedExtension[];
+  /** Every default that loads, the Brain included (an image packs these too). */
+  defaults: ResolvedExtension[];
   kit?: KitSelection;
   model?: string;
   reasoningEffort?: string;
+  /** Identities that came from the built-in defaults (the start-up report marks them). */
+  defaultExtensions: string[];
 }
 
 export class OnboardingError extends Error {
@@ -97,6 +128,42 @@ export class OnboardingError extends Error {
     super(message);
   }
 }
+
+let registeredResolver: ExtensionResolver | undefined;
+
+/** The org layer registers how this process reaches the organization; resolveManifest uses it unless given another. */
+export function useExtensionResolver(resolver: ExtensionResolver | undefined): void {
+  registeredResolver = resolver;
+}
+
+export const ORG_EXTENSION = "@marshal/org";
+export const BRAIN_EXTENSION = "@marshal/brain";
+export const ZYG_TOOLS_EXTENSION = "@zyg/marshal-runtime-extension";
+/** The SDK's own folder (the nearest package.json above this module, from src/ or dist/src/). */
+const SDK_ROOT = (() => {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  while (!fs.existsSync(path.join(dir, "package.json")) && path.dirname(dir) !== dir) dir = path.dirname(dir);
+  return dir;
+})();
+
+export interface DefaultSpec {
+  key: keyof ManifestDefaults;
+  identity: string;
+  /** Whether this default applies to the manifest at all. */
+  applies: (manifest: SdkManifest) => boolean;
+  /** Environment variable naming a built package. */
+  env: string;
+  /** A package that ships inside the SDK, relative to its root. */
+  bundled?: string;
+  why: string;
+}
+
+/** The built-in default set, in load order. */
+export const DEFAULT_EXTENSIONS: readonly DefaultSpec[] = [
+  { key: "org", identity: ORG_EXTENSION, applies: (manifest) => manifest.org !== undefined, env: "MARSHAL_SDK_ORG_PACKAGE", bundled: "extensions/org/out/package", why: "the manifest names an org" },
+  { key: "brain", identity: BRAIN_EXTENSION, applies: () => true, env: "MARSHAL_SDK_BRAIN_PACKAGE", why: "every host carries the kit's Brain" },
+  { key: "zygTools", identity: ZYG_TOOLS_EXTENSION, applies: (manifest) => manifest.profile === "zyg", env: "MARSHAL_SDK_ZYG_EXTENSION", why: "this is a Zyg host (profile zyg)" },
+];
 
 export function readManifest(file: string): SdkManifest {
   let raw: unknown;
@@ -132,22 +199,42 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
       ...(entry.configuration ? { configuration: entry.configuration as Record<string, unknown> } : {}),
     };
   });
-  const registry = record(root.registry);
+  if (root.profile !== undefined && root.profile !== "zyg") throw new OnboardingError("manifest-invalid", `${file}: profile is "zyg" or absent.`);
+  const org = record(root.org);
+  if (root.org !== undefined && (!org || typeof org.discovery !== "string" || !org.discovery)) {
+    throw new OnboardingError("manifest-invalid", `${file}: org needs {"discovery": "<url>"}.`);
+  }
+  const profile = record(org?.profile);
+  const strings = (value: unknown, name: string): string[] | undefined => {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || (item !== "*" && !EXTENSION_ID.test(item)))) {
+      throw new OnboardingError("manifest-invalid", `${file}: org.profile.${name} is a list of identities (or "*").`);
+    }
+    return value as string[];
+  };
+  const allow = strings(profile?.allow, "allow");
+  const deny = strings(profile?.deny, "deny");
+  let defaults: SdkManifest["defaults"];
+  if (root.defaults === false) defaults = false;
+  else if (root.defaults !== undefined) {
+    const value = record(root.defaults);
+    const unknown = Object.keys(value ?? { x: 1 }).filter((key) => !["org", "brain", "zygTools"].includes(key));
+    if (!value || unknown.length || Object.values(value).some((item) => typeof item !== "boolean")) {
+      throw new OnboardingError("manifest-invalid", `${file}: defaults is false or {"org"?, "brain"?, "zygTools"?: boolean}.`);
+    }
+    defaults = value as ManifestDefaults;
+  }
   const kit = root.kit;
   return {
     version: 1,
+    ...(root.profile === "zyg" ? { profile: "zyg" as const } : {}),
     ...(typeof root.model === "string" ? { model: root.model } : {}),
     ...(typeof root.reasoningEffort === "string" ? { reasoningEffort: root.reasoningEffort } : {}),
     ...(kit !== undefined ? { kit: kit as KitSelection } : {}),
-    ...(registry
-      ? {
-          registry: {
-            ...(typeof registry.url === "string" ? { url: registry.url } : {}),
-            ...(typeof registry.dir === "string" ? { dir: registry.dir } : {}),
-            ...(typeof registry.tokenEnv === "string" ? { tokenEnv: registry.tokenEnv } : {}),
-          },
-        }
+    ...(org
+      ? { org: { discovery: org.discovery as string, ...(allow || deny ? { profile: { ...(allow ? { allow } : {}), ...(deny ? { deny } : {}) } } : {}) } }
       : {}),
+    ...(defaults !== undefined ? { defaults } : {}),
     extensions: parsed,
   };
 }
@@ -167,7 +254,7 @@ export function describeEntry(entry: ManifestExtension): string {
 
 /**
  * Turns `add`'s argument into a manifest entry: an extension identity (`@scope/name` or `@scope/name@1.2.3`), a .tgz,
- * or a package folder. Paths are stored relative to the manifest.
+ * or a package folder.
  */
 export function entryFromSpec(spec: string, manifestDir: string): ManifestExtension {
   const pinned = /^(@[^@/\s]+\/[^@\s]+)(?:@([^@\s]+))?$/.exec(spec);
@@ -198,6 +285,13 @@ function manifestPathFor(absolute: string, manifestDir: string): string {
   return relative === "" ? "." : relative.startsWith("..") || path.isAbsolute(relative) ? absolute : relative;
 }
 
+export interface PackageSummary {
+  identity: string;
+  version: string;
+  capabilities: string[];
+  skills: string[];
+}
+
 /** The identity, version, capabilities and declared skills of a built package; throws a clear error when it is not one. */
 export function readPackageManifest(packageRoot: string, label = packageRoot): PackageSummary {
   const file = path.join(packageRoot, "runtime-extension.json");
@@ -222,22 +316,23 @@ export function readPackageManifest(packageRoot: string, label = packageRoot): P
   return { identity: raw.identity, version: raw.version, capabilities, skills };
 }
 
-export interface PackageSummary {
-  identity: string;
-  version: string;
-  capabilities: string[];
-  skills: string[];
-}
-
-/** Resolves every manifest entry to a package folder, fetching and unpacking registry and archive entries. */
+/**
+ * Resolves the manifest to package folders: the built-in defaults first, then the listed entries, then what the
+ * organization's profile admits. An identity loads once; a listed entry replaces a default or a profile one.
+ */
 export async function resolveManifest(file: string, options: ResolveOptions = {}): Promise<OnboardingHostOptions> {
   const manifest = readManifest(file);
   const manifestDir = path.dirname(path.resolve(file));
   const env = options.env ?? process.env;
   const cacheDir = path.resolve(options.cacheDir ?? env.MARSHAL_SDK_CACHE ?? path.join(manifestDir, ".marshal-sdk", "extensions"));
-  const extensions: ResolvedExtension[] = [];
-  const seen = new Map<string, string>();
-  let catalog: Promise<CatalogEntry[]> | undefined;
+  const resolver = options.resolver ?? registeredResolver;
+  const needResolver = (label: string): ExtensionResolver => {
+    if (!manifest.org) throw new OnboardingError("org-missing", `${label}: an extension by id comes from the organization, and ${MANIFEST_FILE} has no "org".`);
+    if (!resolver) throw new OnboardingError("resolver-missing", `${label}: reaching the organization needs the org layer (src/org), which this SDK build does not have.`);
+    return resolver;
+  };
+
+  const listed: ResolvedExtension[] = [];
   for (const entry of manifest.extensions) {
     const label = describeEntry(entry);
     let packageRoot: string;
@@ -249,35 +344,147 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
       const bytes = readFile(path.resolve(manifestDir, entry.archive), label);
       const digest = sha256Hex(bytes);
       if (entry.sha256 && entry.sha256 !== digest) throw new OnboardingError("archive-mismatch", `${label}: sha256 is ${digest}, the manifest expects ${entry.sha256}.`);
-      packageRoot = await unpack(bytes, path.join(cacheDir, `sha256-${digest.slice(0, 32)}`), label);
+      packageRoot = unpack(bytes, path.join(cacheDir, `sha256-${digest.slice(0, 32)}`), label);
       source = "archive";
     } else {
-      catalog ??= readCatalog(manifest.registry, manifestDir, env, options);
-      packageRoot = await fetchFromRegistry(entry, await catalog, manifest.registry!, manifestDir, cacheDir, env, options);
-      source = "registry";
+      const fetched = await needResolver(label).fetch({ org: manifest.org!, id: entry.id!, ...(entry.version ? { version: entry.version } : {}) });
+      packageRoot = materialize(fetched, cacheDir, label);
+      source = "org";
     }
-    const summary = readPackageManifest(packageRoot, label);
-    if (entry.id && summary.identity !== entry.id) {
-      throw new OnboardingError("identity-mismatch", `${label}: the archive holds ${summary.identity}, not ${entry.id}.`);
+    listed.push(finish(packageRoot, entry, label, source, "listed", env));
+  }
+
+  // The organization's admitted extensions, through the manifest's profile, unless listed already.
+  const fromProfile: ResolvedExtension[] = [];
+  if (manifest.org && resolver) {
+    const allow = manifest.org.profile?.allow ?? ["*"];
+    const deny = new Set(manifest.org.profile?.deny ?? []);
+    const listedIds = new Set(listed.map((extension) => extension.identity));
+    for (const admitted of await resolver.admitted(manifest.org)) {
+      if (deny.has(admitted.id) || listedIds.has(admitted.id) || !(allow.includes("*") || allow.includes(admitted.id))) continue;
+      const label = `${admitted.id}@${admitted.version} (org profile)`;
+      const fetched = await resolver.fetch({ org: manifest.org, id: admitted.id, version: admitted.version });
+      fromProfile.push(finish(materialize(fetched, cacheDir, label), { id: admitted.id }, label, "org", "org-profile", env));
     }
-    const earlier = seen.get(summary.identity);
-    if (earlier) throw new OnboardingError("duplicate-extension", `${summary.identity} is listed twice (${earlier} and ${label}).`);
-    seen.set(summary.identity, label);
-    extensions.push({
-      packageRoot: fs.realpathSync(packageRoot),
-      ...(entry.configuration ? { configuration: expandEnv(entry.configuration, env, `${label} configuration`) } : {}),
-      identity: summary.identity,
-      version: summary.version,
-      source,
-      entry: label,
-    });
+  } else if (manifest.org?.profile?.allow?.length && !resolver) {
+    throw new OnboardingError("resolver-missing", `org.profile admits extensions from the organization, which needs the org layer (src/org); this SDK build does not have it.`);
+  }
+
+  // The built-in defaults the manifest does not opt out of and does not already list.
+  const taken = new Set([...listed, ...fromProfile].map((extension) => extension.identity));
+  const defaults: ResolvedExtension[] = [];
+  let kit = manifest.kit;
+  for (const spec of DEFAULT_EXTENSIONS) {
+    if (!defaultOn(manifest, spec) || taken.has(spec.identity)) continue;
+    // A kit that already asks for the Brain (or memory, which needs it) loads it itself: not a default then.
+    if (spec.key === "brain" && kitAsksForBrain(kit)) continue;
+    const label = `default ${spec.identity}`;
+    let packageRoot = (spec.key === "brain" ? brainFromKit(kit) : undefined) ?? envPackage(env[spec.env]);
+    let source: ResolvedExtension["source"] = "path";
+    if (!packageRoot && spec.bundled && fs.existsSync(path.join(SDK_ROOT, spec.bundled, "runtime-extension.json"))) packageRoot = path.join(SDK_ROOT, spec.bundled);
+    if (!packageRoot && manifest.org && resolver) {
+      packageRoot = await fetchDefault(resolver, manifest.org, spec, cacheDir, label);
+      source = "org";
+    }
+    if (!packageRoot) {
+      throw new OnboardingError(
+        "default-missing",
+        `${label} is on because ${spec.why}, but no package was found: set ${spec.env} to a built package${spec.bundled ? `, build ${spec.bundled}` : ""}${manifest.org ? "" : ", or name the org that serves it"}, or opt out with "defaults": {"${spec.key}": false}.`,
+      );
+    }
+    const resolved = finish(packageRoot, { id: spec.identity }, label, source, "default", env);
+    // The kit loads the Brain with its cloud configuration; the default turns that part on, at this package.
+    if (spec.key === "brain") kit = withBrain(kit, resolved.packageRoot);
+    defaults.push(resolved);
+  }
+
+  const all = [...defaults.filter((extension) => extension.identity !== BRAIN_EXTENSION), ...listed, ...fromProfile];
+  const seen = new Map<string, string>();
+  for (const extension of all) {
+    const earlier = seen.get(extension.identity);
+    if (earlier) throw new OnboardingError("duplicate-extension", `${extension.identity} is listed twice (${earlier} and ${extension.entry}).`);
+    seen.set(extension.identity, extension.entry);
   }
   return {
-    extensions,
-    ...(manifest.kit !== undefined ? { kit: manifest.kit } : {}),
+    extensions: all,
+    ...(kit !== undefined ? { kit } : {}),
     ...(manifest.model ? { model: manifest.model } : {}),
     ...(manifest.reasoningEffort ? { reasoningEffort: manifest.reasoningEffort } : {}),
+    defaults,
+    defaultExtensions: defaults.map((extension) => extension.identity),
   };
+}
+
+function defaultOn(manifest: SdkManifest, spec: DefaultSpec): boolean {
+  if (manifest.defaults === false) return false;
+  if (manifest.defaults?.[spec.key] === false) return false;
+  return spec.applies(manifest);
+}
+
+function envPackage(value: string | undefined): string | undefined {
+  return value && fs.existsSync(path.join(value, "runtime-extension.json")) ? path.resolve(value) : undefined;
+}
+
+function kitAsksForBrain(kit: KitSelection | undefined): boolean {
+  const parts = !kit ? [] : Array.isArray(kit) ? kit : (kit as KitOptions).parts;
+  return parts.includes("brain") || parts.includes("memory");
+}
+
+function brainFromKit(kit: KitSelection | undefined): string | undefined {
+  if (!kit || Array.isArray(kit)) return undefined;
+  return envPackage((kit as KitOptions).brain?.packageRoot);
+}
+
+/** The kit with its Brain part on, at this package (memory and sessions stay as the manifest set them). */
+function withBrain(kit: KitSelection | undefined, packageRoot: string): KitSelection {
+  const options: KitOptions = !kit ? { parts: [] } : Array.isArray(kit) ? { parts: kit as KitOptions["parts"] } : (kit as KitOptions);
+  return {
+    ...options,
+    parts: options.parts.includes("brain") ? options.parts : ["brain", ...options.parts],
+    brain: { ...options.brain, packageRoot },
+  };
+}
+
+async function fetchDefault(resolver: ExtensionResolver, org: ManifestOrg, spec: DefaultSpec, cacheDir: string, label: string): Promise<string | undefined> {
+  try {
+    return materialize(await resolver.fetch({ org, id: spec.identity }), cacheDir, label);
+  } catch {
+    return undefined;
+  }
+}
+
+function finish(
+  packageRoot: string,
+  entry: ManifestExtension,
+  label: string,
+  source: ResolvedExtension["source"],
+  origin: ResolvedExtension["origin"],
+  env: Record<string, string | undefined>,
+): ResolvedExtension {
+  const summary = readPackageManifest(packageRoot, label);
+  if (entry.id && summary.identity !== entry.id) {
+    throw new OnboardingError("identity-mismatch", `${label}: the package holds ${summary.identity}, not ${entry.id}.`);
+  }
+  return {
+    packageRoot: fs.realpathSync(packageRoot),
+    ...(entry.configuration ? { configuration: expandEnv(entry.configuration, env, `${label} configuration`) } : {}),
+    identity: summary.identity,
+    version: summary.version,
+    source,
+    origin,
+    entry: label,
+  };
+}
+
+/** A resolver's answer as a package folder: archives are checked against the organization's hash and unpacked once. */
+function materialize(fetched: ResolvedPackage, cacheDir: string, label: string): string {
+  if ("packageRoot" in fetched) return fetched.packageRoot;
+  const bytes = Buffer.from(fetched.archive);
+  const digest = sha256Hex(bytes);
+  if (digest !== fetched.sha256.toLowerCase()) {
+    throw new OnboardingError("archive-mismatch", `${label}: the archive's sha256 is ${digest}, the organization announced ${fetched.sha256}.`);
+  }
+  return unpack(bytes, path.join(cacheDir, `${fetched.id.replace("/", "__")}@${fetched.version}-${digest.slice(0, 16)}`), label);
 }
 
 /** Replaces `${env:NAME}` strings anywhere in a configuration value; a missing variable is an error naming it. */
@@ -307,143 +514,10 @@ export function maskConfiguration(value: unknown, key = ""): unknown {
   return Object.fromEntries(Object.entries(object).map(([name, item]) => [name, maskConfiguration(item, name)]));
 }
 
-interface CatalogEntry {
-  id: string;
-  version: string;
-  status: string;
-  delivery: { kind: string; url?: string; sha256?: string; bytes?: number };
-}
-
-async function readCatalog(
-  registry: ManifestRegistry | undefined,
-  manifestDir: string,
-  env: Record<string, string | undefined>,
-  options: ResolveOptions,
-): Promise<CatalogEntry[]> {
-  if (!registry?.url && !registry?.dir) {
-    throw new OnboardingError("registry-missing", `An extension is listed by id, but ${MANIFEST_FILE} has no registry ({"registry": {"url": ...}} or {"dir": ...}).`);
-  }
-  const bytes = registry.dir
-    ? readFile(path.join(path.resolve(manifestDir, registry.dir), ...CATALOG_ROUTE.slice(1).split("/")), "registry catalog")
-    : await get(registryUrl(registry.url!, CATALOG_ROUTE), registry, env, options, 8 * 1024 * 1024);
-  let raw: unknown;
-  try {
-    raw = JSON.parse(bytes.toString("utf8"));
-  } catch {
-    throw new OnboardingError("registry-invalid", "The registry catalog is not JSON.");
-  }
-  const root = record(raw);
-  if (!root || root.version !== 1) throw new OnboardingError("registry-invalid", "The registry catalog is not a version 1 catalog.");
-  return ["recommended", "available", "pending"].flatMap((tier) =>
-    (Array.isArray(root[tier]) ? (root[tier] as unknown[]) : []).flatMap((item) => {
-      const entry = record(item);
-      const delivery = record(entry?.delivery);
-      if (!entry || typeof entry.id !== "string" || typeof entry.version !== "string" || !delivery || typeof delivery.kind !== "string") return [];
-      return [{ id: entry.id, version: entry.version, status: typeof entry.status === "string" ? entry.status : "approved", delivery: delivery as CatalogEntry["delivery"] }];
-    }),
-  );
-}
-
-async function fetchFromRegistry(
-  entry: ManifestExtension,
-  catalog: CatalogEntry[],
-  registry: ManifestRegistry,
-  manifestDir: string,
-  cacheDir: string,
-  env: Record<string, string | undefined>,
-  options: ResolveOptions,
-): Promise<string> {
-  const label = describeEntry(entry);
-  const approved = catalog.filter((candidate) => candidate.id === entry.id && candidate.status === "approved");
-  const chosen = entry.version
-    ? approved.find((candidate) => candidate.version === entry.version)
-    : approved.sort((left, right) => compareVersions(right.version, left.version))[0];
-  if (!chosen) {
-    const versions = approved.map((candidate) => candidate.version).join(", ");
-    throw new OnboardingError("registry-unknown", `${label}: not in the registry's approved extensions${versions ? ` (approved versions: ${versions})` : ""}.`);
-  }
-  if (chosen.delivery.kind !== "archive" || !chosen.delivery.sha256 || typeof chosen.delivery.bytes !== "number") {
-    throw new OnboardingError("registry-unsupported", `${label}: delivered as "${chosen.delivery.kind}", which only the desktop can install.`);
-  }
-  const target = path.join(cacheDir, `${chosen.id.replace("/", "__")}@${chosen.version}`);
-  if (fs.existsSync(path.join(target, ".sha256")) && fs.readFileSync(path.join(target, ".sha256"), "utf8") === chosen.delivery.sha256.toLowerCase()) {
-    const root = findPackageRoot(target);
-    if (root) return root;
-  }
-  const route = `/v1/onboarding/extensions/${chosen.id}/${chosen.version}.tgz`;
-  let bytes: Buffer;
-  if (registry.dir) {
-    const relative = chosen.delivery.url?.startsWith("/") ? chosen.delivery.url : route;
-    bytes = readFile(path.join(path.resolve(manifestDir, registry.dir), ...relative.slice(1).split("/")), label);
-  } else {
-    const url = chosen.delivery.url && !chosen.delivery.url.startsWith("/") ? new URL(chosen.delivery.url).toString() : registryUrl(registry.url!, chosen.delivery.url ?? route);
-    // The desktop's rule: an archive comes from the registry's own origin.
-    if (new URL(url).origin !== new URL(registry.url!).origin) throw new OnboardingError("registry-untrusted", `${label}: archive host ${new URL(url).origin} is not the registry's.`);
-    bytes = await get(url, registry, env, options, Math.min(chosen.delivery.bytes + 1, MAX_ARCHIVE_BYTES));
-  }
-  if (bytes.length !== chosen.delivery.bytes || sha256Hex(bytes) !== chosen.delivery.sha256.toLowerCase()) {
-    throw new OnboardingError("archive-mismatch", `${label}: the archive does not match the size and sha256 the registry announced.`);
-  }
-  fs.rmSync(target, { recursive: true, force: true });
-  const root = await unpack(bytes, target, label);
-  fs.writeFileSync(path.join(target, ".sha256"), chosen.delivery.sha256.toLowerCase());
-  return root;
-}
-
-function registryUrl(base: string, route: string): string {
-  return `${base.replace(/\/+$/, "")}${route}`;
-}
-
-async function get(url: string, registry: ManifestRegistry, env: Record<string, string | undefined>, options: ResolveOptions, maxBytes: number): Promise<Buffer> {
-  const token = registry.tokenEnv ? env[registry.tokenEnv] : undefined;
-  if (registry.tokenEnv && !token) throw new OnboardingError("env-missing", `The registry token variable ${registry.tokenEnv} is not set.`);
-  const headers: Record<string, string> = token ? { authorization: `Bearer ${token}` } : {};
-  const fetchBytes = options.fetchBytes ?? httpGet;
-  try {
-    return await fetchBytes(url, headers, maxBytes);
-  } catch (error) {
-    if (error instanceof OnboardingError) throw error;
-    throw new OnboardingError("registry-unreachable", `GET ${url}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-function httpGet(url: string, headers: Record<string, string>, maxBytes: number): Promise<Buffer> {
-  const parsed = new URL(url);
-  const client = parsed.protocol === "https:" ? https : parsed.protocol === "http:" ? http : undefined;
-  if (!client) return Promise.reject(new Error(`unsupported protocol ${parsed.protocol}`));
-  // Plain HTTP only to this machine (a local mirror or a test registry); a remote registry needs TLS.
-  if (parsed.protocol === "http:" && !["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)) {
-    return Promise.reject(new OnboardingError("registry-untrusted", `${url}: a remote registry must use https.`));
-  }
-  return new Promise((resolve, reject) => {
-    const request = client.get(parsed, { headers, timeout: 60_000 }, (response) => {
-      if ((response.statusCode ?? 0) >= 300) {
-        response.resume();
-        reject(new Error(`HTTP ${response.statusCode}`));
-        return;
-      }
-      const chunks: Buffer[] = [];
-      let size = 0;
-      response.on("data", (chunk: Buffer) => {
-        size += chunk.length;
-        if (size > maxBytes) {
-          request.destroy(new Error("response larger than announced"));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      response.on("end", () => resolve(Buffer.concat(chunks)));
-      response.on("error", reject);
-    });
-    request.on("timeout", () => request.destroy(new Error("timed out")));
-    request.on("error", reject);
-  });
-}
-
-/** Unpacks into `target` (replacing an earlier unpack) and returns the package folder inside it. */
-async function unpack(bytes: Buffer, target: string, label: string): Promise<string> {
-  const existing = fs.existsSync(target) ? findPackageRoot(target) : undefined;
-  if (existing && fs.existsSync(path.join(target, ".complete"))) return existing;
+/** Unpacks into `target` once (the folder name carries the hash) and returns the package folder inside it. */
+function unpack(bytes: Buffer, target: string, label: string): string {
+  const existing = fs.existsSync(path.join(target, ".complete")) ? findPackageRoot(target) : undefined;
+  if (existing) return existing;
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(target, { recursive: true });
   extractTgz(bytes, target, label);
@@ -537,24 +611,6 @@ function readFile(file: string, label: string): Buffer {
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-/** The desktop's order: 1.2.10 after 1.2.9, a prerelease before its release. */
-function compareVersions(left: string, right: string): number {
-  const split = (version: string) => {
-    const [core = "", pre] = version.split("+")[0]!.split(/-(.*)/su);
-    return { parts: core.split(".").map((part) => Number.parseInt(part, 10) || 0), pre };
-  };
-  const a = split(left);
-  const b = split(right);
-  for (let index = 0; index < Math.max(a.parts.length, b.parts.length); index += 1) {
-    const diff = (a.parts[index] ?? 0) - (b.parts[index] ?? 0);
-    if (diff !== 0) return diff < 0 ? -1 : 1;
-  }
-  if (a.pre === b.pre) return 0;
-  if (a.pre === undefined) return 1;
-  if (b.pre === undefined) return -1;
-  return a.pre < b.pre ? -1 : 1;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
