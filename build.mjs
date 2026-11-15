@@ -17,13 +17,19 @@ const sharedLogger = {
     context.onResolve({ filter: /providers\/src\/common\/marshal-logger$/ }, () => ({ path: "./providers.js", external: true }));
   },
 };
+// The organization layer (packages/org, the same source the desktop vendors as packages/marshal-org): bundled the
+// same way into dist/src/org-package.js, with narrow bundles of its rooms client (org-rooms.js) and sanitizer
+// (org-scrub.js) for code that should not load the whole layer. They share providers.js's logger too.
+const orgEntry = path.join(root, "src", "org-package.ts");
+const orgRoomsEntry = path.join(root, "src", "org-rooms.ts");
+const orgScrubEntry = path.join(root, "src", "org-scrub.ts");
 const sources = ["src", "test", "packages/prompt/src"]
   .flatMap((directory) =>
     readdirSync(path.join(root, directory), { recursive: true })
       .filter((name) => name.endsWith(".ts") && !name.endsWith(".d.ts"))
       .map((name) => path.join(root, directory, name)),
   )
-  .filter((source) => source !== providersEntry && source !== permissionsEntry);
+  .filter((source) => ![providersEntry, permissionsEntry, orgEntry, orgRoomsEntry, orgScrubEntry].includes(source));
 
 const common = { outbase: root, format: "esm", platform: "node", target: "node22", sourcemap: true, logLevel: "warning" };
 rmSync(path.join(root, "dist"), { recursive: true, force: true });
@@ -37,7 +43,7 @@ await build({
 });
 await build({
   ...common,
-  entryPoints: [permissionsEntry],
+  entryPoints: [permissionsEntry, orgEntry, orgRoomsEntry, orgScrubEntry],
   outdir: path.join(root, "dist"),
   bundle: true,
   packages: "external",

@@ -1,6 +1,6 @@
 /**
  * The rooms client of an SDK host: the socket, the replica and the HTTP routes of the organization's rooms service,
- * lifted from the desktop (electron/org/rooms at c75500b1b, files beside this one) and behind the runtime pack's
+ * shared with the desktop (packages/org/src/rooms, bundled as dist/src/org-package.js) and behind the runtime pack's
  * `RoomsApi` / `Room` interfaces (@marshal/agent-runtime-org rooms/api.d.ts).
  *
  * Where the address and token come from, as the desktop does it (electron/main.ts `OrgRoomsService`, org-service
@@ -39,17 +39,33 @@ import {
   type UserPrincipal,
 } from "@marshal/agent-runtime-org";
 
-import { setRoomsLog, type RoomsLogSink } from "./log.js";
-import { CONVERSATION_SCHEMA, isBuiltinRoomKind } from "./rooms-conversation.js";
-import { OrgRoomsManager, type FetchLike, type RoomsCaller, type RoomsEndpoint } from "./rooms-manager.js";
-import { fullRoomKind } from "./rooms-schema.js";
-import type { RoomsSocketFactory } from "./rooms-socket.js";
+import {
+  addLogSink,
+  CONVERSATION_SCHEMA,
+  fullRoomKind,
+  isBuiltinRoomKind,
+  OrgRoomsManager,
+  type FetchLike,
+  type RoomsCaller,
+  type RoomsEndpoint,
+  type RoomsSocketFactory,
+} from "../../org-rooms.js";
 import { createNodeRoomsSocket } from "./rooms-ws.js";
 
-export { CONVERSATION_SCHEMA, ConversationRoom, isBuiltinRoomKind } from "./rooms-conversation.js";
-export { OrgRoomsManager, type RoomsCaller, type RoomsEndpoint } from "./rooms-manager.js";
+export { CONVERSATION_SCHEMA, ConversationRoom, isBuiltinRoomKind, OrgRoomsManager, type RoomsCaller, type RoomsEndpoint } from "../../org-rooms.js";
 export { createNodeRoomsSocket } from "./rooms-ws.js";
-export type { RoomsLogSink } from "./log.js";
+
+/** Where the rooms client's log lines go: error names and counts only, never room content. Silent by default. */
+export type RoomsLogSink = (level: "info" | "warn", tag: string, message: string) => void;
+let removeRoomsLog: (() => void) | undefined;
+
+function setRoomsLog(sink: RoomsLogSink): void {
+  removeRoomsLog?.();
+  removeRoomsLog = addLogSink((entry) => {
+    if (!/^(Org)?Rooms/i.test(entry.tag)) return;
+    sink(entry.level === "info" ? "info" : "warn", entry.tag, entry.args.map(String).join(" "));
+  });
+}
 
 export interface OrgRoomsOptions {
   endpoints: { apiBase: string; socketUrl: string };

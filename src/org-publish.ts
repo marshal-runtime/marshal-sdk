@@ -12,6 +12,7 @@ import type {
   UserPrincipal,
 } from "@marshal/agent-runtime-org";
 
+import { scrubText } from "./org-scrub.js";
 import type { FileSessionStore, SessionRecord, TranscriptMessage } from "./session-store.js";
 
 /** What publishing needs from an organization client; `OrgClient` satisfies it, a test passes a fake. */
@@ -126,7 +127,7 @@ export async function publishToOrg(options: OrgPublishOptions): Promise<OrgPubli
       const fresh = entry.messageCount === 0;
       const pending: OrgTranscriptMessage[] = [
         ...(fresh ? [headerMessage(record)] : []),
-        ...local.slice(entry.sent).map((message, offset) => toOrgMessage(message, options.inboxMessageId?.(record.id, entry.sent + offset))),
+        ...local.slice(entry.sent).map((message, offset) => toOrgMessage(message, record, options.inboxMessageId?.(record.id, entry.sent + offset))),
       ];
       let first = true;
       for (const page of pages(pending)) {
@@ -235,10 +236,10 @@ function headerMessage(record: SessionRecord): OrgTranscriptMessage {
   return { role: "system", text: lines.join("\n"), at: record.createdAt };
 }
 
-function toOrgMessage(message: TranscriptMessage, inboxMessageId?: string): OrgTranscriptMessage {
+function toOrgMessage(message: TranscriptMessage, record: SessionRecord, inboxMessageId?: string): OrgTranscriptMessage {
   return {
     role: message.role,
-    text: clip(message.content, MAX_MESSAGE_BYTES),
+    text: clip(scrubText(message.content, { workspaceRoot: record.native.cwd, homeDir: os.homedir() }), MAX_MESSAGE_BYTES),
     at: message.timestamp,
     ...(inboxMessageId && message.role === "user" ? { messageId: inboxMessageId } : {}),
   };
