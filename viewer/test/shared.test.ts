@@ -14,6 +14,7 @@ const invoke = async (extension: ReturnType<typeof createExtension>, name: strin
 
 test("search adds sessions shared to the org's index through a linked kit host, and opens one it reads for us", async () => {
   const calls: string[] = [];
+  const reads: any[] = [];
   const server = await startLinkServer({
     token: LINK_TOKEN,
     sessionsRoot: fs.mkdtempSync(path.join(os.tmpdir(), "kit-store-")),
@@ -34,6 +35,7 @@ test("search adds sessions shared to the org's index through a linked kit host, 
             cloud: { status: "ok", hits: 1 },
           };
         }
+        if (capability === "sessions.read") reads.push(input);
         if (capability === "sessions.read" && input.sessionId === "shared-1") {
           return { found: true, from: "cloud-state", messages: [{ role: "user", content: "<untrusted_session>Write the hero</untrusted_session>", timestamp: "2026-11-16T00:00:00.000Z" }, { role: "assistant", content: "Awake on camera.", timestamp: "2026-11-16T00:00:05.000Z" }] };
         }
@@ -61,6 +63,8 @@ test("search adds sessions shared to the org's index through a linked kit host, 
     const missing = await invoke(viewer, "sdksessions.transcript", { hostId: "kit", sessionId: "nowhere", tail: 10 });
     assert.equal(missing.found, false);
     assert.deepEqual(calls, ["sessions.search", "sessions.read", "sessions.read"]);
+    assert.deepEqual(reads[0], { sessionId: "shared-1", stateLocation: "gs://bucket/runs/x/output/agent/marshal-state/", tail: 200 });
+    assert.equal(reads[1].stateLocation, undefined);
   } finally {
     await server.close();
   }

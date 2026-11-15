@@ -354,11 +354,13 @@ export function linkedHost(config: LinkedHostConfig): Host {
   const quick = new LinkClient({ url: config.url, token: config.token, timeoutMs: INFO_TIMEOUT_MS });
   // Sessions this host doesn't keep but read for us through sessions.read (its stores, then GCS): a snapshot, nothing to watch.
   const sharedOnly = new Set<string>();
+  // Where each shared hit's run keeps its state in GCS; sessions.read reads a sandbox run's transcript there only when given it.
+  const stateOf = new Map<string, string>();
   const readShared = async (sessionId: string, tail?: number): Promise<TranscriptPage> => {
     const none = { found: false, total: 0, cursor: 0, messages: [] };
     let out: Row;
     try {
-      out = unwrapInvoke(await client.invoke("sessions.read", { sessionId, ...(tail ? { tail } : {}) }, 120_000));
+      out = unwrapInvoke(await client.invoke("sessions.read", { sessionId, ...(stateOf.has(sessionId) ? { stateLocation: stateOf.get(sessionId) } : {}), ...(tail ? { tail } : {}) }, 120_000));
     } catch {
       return none;
     }
@@ -417,7 +419,7 @@ export function linkedHost(config: LinkedHostConfig): Host {
     async shared(query, limit) {
       try {
         const results = unwrapInvoke(await client.invoke("sessions.search", { query, scope: "cloud", limit: Math.min(30, limit) }, 60_000)).results;
-        return (Array.isArray(results) ? (results as Row[]) : [])
+        const hits: SharedHit[] = (Array.isArray(results) ? (results as Row[]) : [])
           .filter((hit) => hit && typeof hit.id === "string")
           .map((hit) => ({
             sessionId: hit.id,
@@ -428,6 +430,8 @@ export function linkedHost(config: LinkedHostConfig): Host {
             snippet: unwrapUntrusted(hit.snippet),
             ...(hit.runId || hit.stateLocation ? { origin: { ...(hit.runId ? { runId: String(hit.runId) } : {}), ...(hit.stateLocation ? { stateLocation: String(hit.stateLocation) } : {}) } } : {}),
           }));
+        for (const hit of hits) if (hit.origin?.stateLocation) stateOf.set(hit.sessionId, hit.origin.stateLocation);
+        return hits;
       } catch {
         // A host without the sessions kit (or the Brain unreachable from it) has no shared sessions to add.
         return [];
