@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>SDK sessions</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
+    font-size: 13px; line-height: 1.45;
+    background: var(--background, Canvas); color: var(--foreground, CanvasText);
+  }
+  button { font: inherit; color: inherit; }
+  .app { display: flex; flex-direction: column; height: 100%; }
+  header {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    border-bottom: 1px solid var(--border, #8884);
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; white-space: nowrap; }
+  header .back { display: none; }
+  input[type=search] {
+    flex: 1; min-width: 0; padding: 7px 10px; border-radius: var(--radius, 8px);
+    border: 1px solid var(--input, var(--border, #8886)); background: var(--card, transparent); color: inherit; font: inherit;
+  }
+  .panes { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.3fr) minmax(320px, 2.2fr); }
+  .pane { min-height: 0; overflow: auto; border-right: 1px solid var(--border, #8884); }
+  .pane:last-child { border-right: 0; }
+  .pane h2 {
+    position: sticky; top: 0; z-index: 1; margin: 0; padding: 8px 12px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground, GrayText);
+    background: var(--background, Canvas); border-bottom: 1px solid var(--border, #8884);
+  }
+  .item {
+    display: block; width: 100%; text-align: left; padding: 10px 12px; border: 0; background: none; cursor: pointer;
+    border-bottom: 1px solid var(--border, #8882);
+  }
+  .item:hover { background: var(--hover, var(--accent, #8881)); }
+  .item[aria-current=true] { background: var(--accent, #8882); }
+  .item .title { font-weight: 600; overflow-wrap: anywhere; }
+  .meta { color: var(--muted-foreground, GrayText); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .chip {
+    font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border, #8886);
+    color: var(--muted-foreground, GrayText);
+  }
+  .state { font-size: 11px; padding: 1px 6px; border-radius: 999px; font-weight: 600; }
+  .state.idle { background: var(--success-bg, #2a62); color: var(--success-fg, var(--success, green)); }
+  .state.running { background: var(--warning-bg, #c802); color: var(--warning-fg, var(--warning, darkorange)); }
+  .state.failed { background: var(--destructive-bg, #d002); color: var(--destructive, red); }
+  .child { padding-left: 28px; }
+  .empty { padding: 16px 12px; color: var(--muted-foreground, GrayText); }
+  .detail { padding: 10px 12px; border-bottom: 1px solid var(--border, #8884); }
+  .detail .title { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin-top: 6px; font-size: 12px; }
+  .kv dt { color: var(--muted-foreground, GrayText); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+  .msg { padding: 10px 12px; border-bottom: 1px solid var(--border, #8882); }
+  .msg .who { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground, GrayText); }
+  .msg.assistant .who { color: var(--primary, var(--link, LinkText)); }
+  .msg.error .who { color: var(--destructive, red); }
+  .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
+  .msg .body.clip { max-height: 16em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .more { margin-top: 4px; border: 0; background: none; color: var(--link, LinkText); cursor: pointer; padding: 4px 0; }
+  .ghost {
+    border: 1px solid var(--border, #8886); background: var(--card, transparent); border-radius: var(--radius, 8px);
+    padding: 6px 10px; cursor: pointer; min-height: 32px;
+  }
+  .error-box { margin: 12px; padding: 10px; border-radius: var(--radius, 8px); background: var(--destructive-bg, #d001); color: var(--destructive, red); }
+
+  /* Phone: one pane at a time, drill in and back. */
+  .mobile .panes { display: block; }
+  .mobile .pane { display: none; height: 100%; border-right: 0; }
+  .mobile[data-view=runs] .pane.runs,
+  .mobile[data-view=sessions] .pane.sessions,
+  .mobile[data-view=transcript] .pane.transcript { display: block; }
+  .mobile[data-view=sessions] header .back,
+  .mobile[data-view=transcript] header .back { display: inline-block; }
+  .mobile .item { padding: 12px 14px; min-height: 48px; }
+  .mobile input[type=search] { min-height: 40px; font-size: 16px; }
+  .mobile .ghost { min-height: 40px; }
+</style>
+</head>
+<body>
+<div class="app" id="app" data-view="runs">
+  <header>
+    <button class="ghost back" id="back" type="button" aria-label="Back">‹ Back</button>
+    <h1 id="heading">SDK sessions</h1>
+    <input type="search" id="search" placeholder="Search sessions" aria-label="Search sessions" />
+  </header>
+  <div class="panes">
+    <section class="pane runs" aria-label="Runs"><h2>Runs</h2><div id="runs"><div class="empty">Loading…</div></div></section>
+    <section class="pane sessions" aria-label="Sessions"><h2 id="sessions-heading">Sessions</h2><div id="sessions"><div class="empty">Pick a run.</div></div></section>
+    <section class="pane transcript" aria-label="Transcript"><h2>Transcript</h2><div id="transcript"><div class="empty">Pick a session.</div></div></section>
+  </div>
+</div>
+<script>
+(() => {
+  const embedded = window.parent !== window;
+  const pending = new Map();
+  let hostContext = {};
+  const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random());
+  const app = document.getElementById("app");
+  const $ = (id) => document.getElementById(id);
+  const state = { runs: [], runId: null, sessions: [], sessionId: null, query: "", hits: null };
+
+  function applyContext(next) {
+    hostContext = { ...hostContext, ...(next || {}) };
+    const vars = hostContext.styles && hostContext.styles.variables;
+    if (vars) for (const [key, value] of Object.entries(vars)) document.documentElement.style.setProperty(key, value);
+    if (hostContext.theme) document.documentElement.dataset.theme = hostContext.theme;
+    app.classList.toggle("mobile", hostContext.formFactor === "mobile");
+  }
+
+  if (embedded) {
+    addEventListener("message", (event) => {
+      if (event.source !== parent || !event.data || event.data.jsonrpc !== "2.0") return;
+      const message = event.data;
+      const call = message.id !== undefined ? pending.get(message.id) : undefined;
+      if (call) {
+        pending.delete(message.id);
+        if (message.error) call.reject(new Error(message.error.message || "Request failed."));
+        else call.resolve(message.result);
+        return;
+      }
+      if (message.method === "ui/notifications/host-context-changed") applyContext(message.params);
+    });
+  }
+
+  function request(method, params) {
+    if (!embedded) return Promise.reject(new Error("Not inside Marshal."));
+    const id = newKey();
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+    });
+  }
+
+  const ready = request("ui/initialize", {
+    protocolVersion: "2026-01-26",
+    appInfo: { name: "SDK sessions", version: "0.1.0" },
+    hostChrome: "compact",
+  }).then((result) => {
+    applyContext(result && result.hostContext);
+    parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} }, "*");
+  });
+
+  async function call(name, args) {
+    await ready;
+    const result = await request("tools/call", { name, arguments: args || {}, _meta: { idempotencyKey: newKey() } });
+    if (result && result.isError) {
+      const text = (result.structuredContent && result.structuredContent.error && result.structuredContent.error.message)
+        || ((result.content || []).find((part) => part.type === "text") || {}).text || "Request failed.";
+      throw new Error(text);
+    }
+    let out = result && result.structuredContent;
+    if (out && "output" in out) out = out.output;
+    if (out && typeof out === "object" && "result" in out) out = out.result;
+    if (out && out.ok === false) throw new Error(out.error || "Request failed.");
+    return out;
+  }
+
+  const el = (tag, attrs, ...children) => {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (value === undefined || value === null || value === false) continue;
+      if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+      else if (key === "class") node.className = value;
+      else node.setAttribute(key, value === true ? "" : String(value));
+    }
+    for (const child of children.flat()) if (child !== null && child !== undefined && child !== false) node.append(child.nodeType ? child : String(child));
+    return node;
+  };
+  const money = (value) => "$" + (value || 0).toFixed(2);
+  const count = (value) => (value >= 1000 ? (value / 1000).toFixed(1) + "k" : String(value || 0));
+  const when = (iso) => {
+    const date = new Date(iso);
+    return isNaN(date) ? "" : date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+  const seconds = (from, to) => Math.max(0, Math.round((new Date(to) - new Date(from)) / 1000));
+  const shortId = (id) => String(id || "").slice(0, 8);
+  const stateBadge = (value) => el("span", { class: "state " + value }, value);
+  const showError = (target, error) => target.replaceChildren(el("div", { class: "error-box" }, error.message || String(error)));
+
+  function setView(view) {
+    app.dataset.view = view;
+    $("heading").textContent = view === "runs" ? "SDK sessions"
+      : view === "sessions" ? "Run " + shortId(state.runId)
+      : (state.sessions.find((session) => session.id === state.sessionId) || {}).title || "Transcript";
+  }
+
+  function renderRuns() {
+    const box = $("runs");
+    if (!state.runs.length) return box.replaceChildren(el("div", { class: "empty" }, "No runs found in the configured stores."));
+    box.replaceChildren(...state.runs.map((run) =>
+      el("button", { class: "item", type: "button", "aria-current": run.runId === state.runId, onclick: () => openRun(run.runId) },
+        el("div", { class: "title" }, run.firstTitle.replace(/ · .*$/, "") + " · " + shortId(run.runId)),
+        el("div", { class: "meta" }, when(run.startedAt) + " · " + seconds(run.startedAt, run.updatedAt) + "s · " + run.sessions + " sessions · " + money(run.costUsd)),
+        el("div", { class: "chips" },
+          el("span", { class: "chip" }, "host " + run.host.id + " (" + run.host.kind + ")"),
+          ...run.models.map((model) => el("span", { class: "chip" }, model)),
+          run.running ? el("span", { class: "state running" }, run.running + " running") : null,
+          run.failed ? el("span", { class: "state failed" }, run.failed + " failed") : null))));
+  }
+
+  function sessionItem(session, child) {
+    return el("button", { class: "item" + (child ? " child" : ""), type: "button", "aria-current": session.id === state.sessionId, onclick: () => openSession(session.id) },
+      el("div", { class: "title" }, session.title, " ", stateBadge(session.state)),
+      el("div", { class: "meta" }, [session.model, session.reasoningEffort].filter(Boolean).join(" · ") + " · " + session.messageCount + " msgs · " + count(session.usage.outputTokens) + " out · " + money(session.usage.costUsd)),
+      Object.keys(session.labels || {}).length
+        ? el("div", { class: "chips" }, ...Object.entries(session.labels).map(([key, value]) => el("span", { class: "chip" }, key + "=" + value)))
+        : null);
+  }
+
+  function renderSessions() {
+    const box = $("sessions");
+    $("sessions-heading").textContent = state.hits ? "Search results" : "Sessions" + (state.runId ? " · run " + shortId(state.runId) : "");
+    if (state.hits) {
+      if (!state.hits.length) return box.replaceChildren(el("div", { class: "empty" }, "Nothing matches “" + state.query + "”."));
+      return box.replaceChildren(...state.hits.map((hit) =>
+        el("button", { class: "item", type: "button", "aria-current": hit.sessionId === state.sessionId, onclick: () => openSession(hit.sessionId, hit.runId) },
+          el("div", { class: "title" }, hit.title, " ", stateBadge(hit.state)),
+          el("div", { class: "meta" }, "run " + shortId(hit.runId) + " · " + hit.snippet))));
+    }
+    if (!state.sessions.length) return box.replaceChildren(el("div", { class: "empty" }, state.runId ? "No sessions." : "Pick a run."));
+    const ids = new Set(state.sessions.map((session) => session.id));
+    const roots = state.sessions.filter((session) => !session.parentId || !ids.has(session.parentId));
+    const items = [];
+    const add = (session, depth) => {
+      items.push(sessionItem(session, depth > 0));
+      for (const child of state.sessions.filter((other) => other.parentId === session.id)) add(child, depth + 1);
+    };
+    roots.forEach((session) => add(session, 0));
+    box.replaceChildren(...items);
+  }
+
+  async function renderTranscript() {
+    const box = $("transcript");
+    if (!state.sessionId) return box.replaceChildren(el("div", { class: "empty" }, "Pick a session."));
+    box.replaceChildren(el("div", { class: "empty" }, "Loading…"));
+    try {
+      const out = await call("sdksessions.transcript", { sessionId: state.sessionId });
+      if (!out || !out.found) return box.replaceChildren(el("div", { class: "empty" }, "This session is not in the stores any more."));
+      const session = out.session;
+      const usage = session.usage || {};
+      const detail = el("div", { class: "detail" },
+        el("div", { class: "title" }, session.title, " ", stateBadge(session.state)),
+        el("dl", { class: "kv" },
+          el("dt", {}, "session"), el("dd", {}, session.id),
+          el("dt", {}, "run"), el("dd", {}, session.runId),
+          el("dt", {}, "host"), el("dd", {}, session.host.id + " (" + session.host.kind + ")"),
+          el("dt", {}, "model"), el("dd", {}, [session.model, session.reasoningEffort].filter(Boolean).join(" · ") || "default"),
+          el("dt", {}, "usage"), el("dd", {}, count(usage.inputTokens) + " in · " + count(usage.outputTokens) + " out · " + count(usage.cacheReadTokens) + " cache read · " + usage.turns + " turns · " + money(usage.costUsd)),
+          session.parentId ? [el("dt", {}, "parent"), el("dd", {}, session.parentId)] : null,
+          el("dt", {}, "native"), el("dd", {}, session.native.kind + " " + (session.native.sessionId || "(none yet)")),
+          session.lastError ? [el("dt", {}, "error"), el("dd", {}, session.lastError)] : null));
+      const messages = out.messages.map((message) => {
+        const long = message.content.length > 900;
+        const body = el("div", { class: "body" + (long ? " clip" : "") }, message.content);
+        const more = long ? el("button", { class: "more", type: "button", onclick: (event) => {
+          const clipped = body.classList.toggle("clip");
+          event.currentTarget.textContent = clipped ? "Show all (" + count(message.content.length) + " chars)" : "Show less";
+        } }, "Show all (" + count(message.content.length) + " chars)") : null;
+        return el("div", { class: "msg " + message.role + (message.error ? " error" : "") },
+          el("div", { class: "who" }, message.role + " · " + when(message.timestamp)),
+          body, more);
+      });
+      box.replaceChildren(detail, ...(messages.length ? messages : [el("div", { class: "empty" }, "No messages yet.")]));
+    } catch (error) {
+      showError(box, error);
+    }
+  }
+
+  async function openRun(runId, keepSession) {
+    state.runId = runId;
+    state.hits = null;
+    if (!keepSession) state.sessionId = null;
+    renderRuns();
+    $("sessions").replaceChildren(el("div", { class: "empty" }, "Loading…"));
+    setView("sessions");
+    try {
+      const out = await call("sdksessions.sessions", { runId });
+      state.sessions = out.sessions || [];
+      renderSessions();
+      if (!keepSession) renderTranscript();
+    } catch (error) {
+      showError($("sessions"), error);
+    }
+  }
+
+  async function openSession(sessionId, runId) {
+    state.sessionId = sessionId;
+    if (runId && runId !== state.runId) {
+      state.runId = runId;
+      renderRuns();
+      try { state.sessions = (await call("sdksessions.sessions", { runId })).sessions || []; } catch {}
+    }
+    renderSessions();
+    setView("transcript");
+    renderTranscript();
+  }
+
+  $("back").addEventListener("click", () => setView(app.dataset.view === "transcript" ? "sessions" : "runs"));
+  let searchTimer = 0;
+  $("search").addEventListener("input", (event) => {
+    clearTimeout(searchTimer);
+    const query = event.target.value.trim();
+    searchTimer = setTimeout(async () => {
+      state.query = query;
+      if (!query) { state.hits = null; renderSessions(); return; }
+      try {
+        state.hits = (await call("sdksessions.search", { query, limit: 30 })).hits || [];
+        renderSessions();
+        setView("sessions");
+      } catch (error) {
+        showError($("sessions"), error);
+      }
+    }, 250);
+  });
+
+  (async () => {
+    try {
+      await ready;
+      const out = await call("sdksessions.runs", {});
+      const opened = hostContext.toolInput || {};
+      const wanted = opened.runId || opened.sessionId ? opened : out.focus || {};
+      state.runs = out.runs || [];
+      renderRuns();
+      const runId = wanted.runId || (state.runs[0] && state.runs[0].runId);
+      if (runId) {
+        if (wanted.sessionId) {
+          await openRun(runId, true);
+          await openSession(wanted.sessionId);
+        } else {
+          await openRun(runId);
+        }
+        if (!wanted.runId && !wanted.sessionId) setView("runs");
+      }
+    } catch (error) {
+      showError($("runs"), error);
+    }
+  })();
+})();
+</script>
+</body>
+</html>
