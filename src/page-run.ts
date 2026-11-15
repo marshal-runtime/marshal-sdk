@@ -123,9 +123,12 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   let reply = "";
   let shots: unknown[] = [];
   const warnings: string[] = [];
+  let build: PageStudioBuild = {};
   try {
     if (options.model || options.effort || options.quickModel) await call("pagestudio.settings", pinnedSettings(options));
     settings = (await call("pagestudio.settings", {})) ?? {};
+    build = await pageStudioBuild(call, options.env, log);
+    if (build.drift) warnings.push(build.drift);
     log(`page model ${settings.bigModel} at ${settings.bigEffort}, depth ${depth}${options.fake ? ", fake backend" : ""}`);
     const board = await call("pagestudio.brand.add", {
       name: input.brandName,
@@ -196,6 +199,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
       depth,
       boardId,
       pageId,
+      pageStudio: build,
       reply,
       sections: finished?.sections ?? [],
       assets: finished?.assets.length ?? 0,
@@ -316,12 +320,14 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   let reply = "";
   let route: unknown;
   let shots: unknown[] = [];
+  let build: PageStudioBuild = {};
   try {
     if (!pageId) throw new Error(`No page to edit: ${state} has no ${PAGE_RUN_RECORD} and no --page-id was given.`);
     if (options.model || options.effort || options.quickModel) await call("pagestudio.settings", pinnedSettings(options));
     // The dry path has no OpenAI key: route by the fast model instead of the Decisions API.
     if (options.fake) await call("pagestudio.settings", { useDecisions: false });
     settings = (await call("pagestudio.settings", {})) ?? {};
+    build = await pageStudioBuild(call, options.env, log);
     fs.writeFileSync(path.join(logs, "query", "task.md"), options.request);
     fs.writeFileSync(path.join(logs, "query", "options.json"), JSON.stringify({ capability: "pagestudio.ask", pageId, settings, fake: Boolean(options.fake) }, null, 2));
     const asked = await call("pagestudio.ask", { pageId, text: options.request });
@@ -355,13 +361,50 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     started,
     error: failure,
     requiredSkills: [],
-    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, request: options.request, route, reply, sections: finished?.sections ?? [], shots },
+    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, request: options.request, route, reply, sections: finished?.sections ?? [], shots },
   });
   if (record) {
     writePageRunRecord(state, { ...record, edits: [...(record.edits ?? []), { at: new Date().toISOString(), request: options.request, runId: host.runId, ...(failure ? { error: failure } : {}) }] });
   }
   await host.dispose().catch(() => undefined);
   return summary;
+}
+
+/** The env var naming the Page Studio content hash the caller expects (the desktop's, for one shared look). */
+export const PAGE_STUDIO_HASH_ENV = "MARSHAL_PAGE_STUDIO_HASH";
+
+export interface PageStudioBuild {
+  version?: string;
+  contentHash?: string;
+  /** Set when the expected hash differs: a warning, never a failure (R32: desktop and sandbox may differ). */
+  drift?: string;
+}
+
+/** The Page Studio build this host runs (pagestudio.skills), compared with $MARSHAL_PAGE_STUDIO_HASH when set. */
+export async function pageStudioBuild(
+  call: (capability: string, args: Record<string, unknown>) => Promise<any>,
+  env: Readonly<Record<string, string | undefined>> | undefined,
+  log: (line: string) => void,
+): Promise<PageStudioBuild> {
+  let skills: { version?: unknown; contentHash?: unknown } | undefined;
+  try {
+    skills = await call("pagestudio.skills", {});
+  } catch (error) {
+    log(`Page Studio build unknown (pagestudio.skills failed: ${error instanceof Error ? error.message : String(error)})`);
+    return {};
+  }
+  const build: PageStudioBuild = {
+    ...(typeof skills?.version === "string" ? { version: skills.version } : {}),
+    ...(typeof skills?.contentHash === "string" ? { contentHash: skills.contentHash } : {}),
+  };
+  const expected = (env ?? process.env)[PAGE_STUDIO_HASH_ENV]?.trim();
+  if (expected && build.contentHash && expected !== build.contentHash) {
+    build.drift = `Page Studio drift: this host runs ${build.version ?? "?"} (${build.contentHash.slice(0, 12)}), the caller expects ${expected.slice(0, 12)}; continuing`;
+    log(`WARNING ${build.drift}`);
+  } else {
+    log(`Page Studio ${build.version ?? "?"} (${build.contentHash?.slice(0, 12) ?? "no hash"})${expected ? ", matches the caller" : ""}`);
+  }
+  return build;
 }
 
 /** What one page run needs from agent-sandbox's input folder. */

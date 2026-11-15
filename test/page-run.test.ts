@@ -156,6 +156,9 @@ test("page-run's dry path writes the whole run contract from an input folder, wi
   for (const file of ["shots/mobile.png", "shots/desktop.png"]) assert.ok(fs.existsSync(path.join(out, file)), file);
   assert.deepEqual(summary.skills_missing, ["lp-design"]);
   assert.ok(summary.results.length >= 2, "the whole-page writer and the critic ran as sessions");
+  const build = (summary.marshal as { pageStudio: { version?: string; contentHash?: string; drift?: string } }).pageStudio;
+  assert.match(build.contentHash ?? "", /^[0-9a-f]{64}$/, "the run records the Page Studio build it ran");
+  assert.equal(build.drift, undefined);
 });
 
 test("page-edit reopens a finished run's state and edits its page through Page Studio's ask, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 120_000 }, async () => {
@@ -170,8 +173,10 @@ test("page-edit reopens a finished run's state and edits its page through Page S
   assert.equal(record?.settings.quickModel, "haiku");
   const editOut = path.join(root, "edit-1", "out");
   const editLogs = path.join(root, "edit-1", "logs");
-  const edited = await runPageEdit({ state, out: editOut, logs: editLogs, request: "Make the hero title shorter.", extension: PAGE_STUDIO, fake: true });
+  const env = { ...(process.env as Record<string, string>), MARSHAL_PAGE_STUDIO_HASH: "0".repeat(64) };
+  const edited = await runPageEdit({ state, out: editOut, logs: editLogs, request: "Make the hero title shorter.", extension: PAGE_STUDIO, fake: true, env });
   assert.equal(edited.error, "", edited.error);
+  assert.match((edited.marshal as { pageStudio: { drift?: string } }).pageStudio.drift ?? "", /Page Studio drift: .*continuing/, "a different build only warns");
   assert.match(fs.readFileSync(path.join(editOut, "index.html"), "utf8"), /A page written without a model/);
   for (const file of ["summary.json", "run.jsonl", "query/task.md"]) assert.ok(fs.existsSync(path.join(editLogs, file)), file);
   assert.equal((edited.marshal as { job: string }).job, "edit");
