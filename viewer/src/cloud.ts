@@ -93,7 +93,7 @@ export function configuredClouds(configuration: Row | undefined): { clouds: Clou
 }
 
 /** Output roots under a prefix: runs on the SDK (agent/marshal-state/run.json) and older-pipeline runs (preview only). */
-async function listRoots(config: CloudHostConfig): Promise<{ root: string; marshal: boolean }[]> {
+async function listRoots(config: CloudHostConfig, discovered: readonly string[] = []): Promise<{ root: string; marshal: boolean }[]> {
   const found = new Map<string, boolean>();
   const ls = async (pattern: string) => {
     try {
@@ -118,6 +118,9 @@ async function listRoots(config: CloudHostConfig): Promise<{ root: string; marsh
   const roots = await Promise.all(pointers.map(async (uri) => (await readJson(uri))?.outputRoot));
   for (const root of roots) if (typeof root === "string" && /^gs:\/\/[^/]+\/.+/.test(root) && !found.has(trim(root))) found.set(trim(root), true);
   for (const root of config.runs ?? []) if (!found.has(root)) found.set(root, true);
+  // Runs whose sessions were shared to the org's session index (it names each run's state location); GCS still backs them.
+  const bucket = config.uri.slice(0, config.uri.indexOf("/", "gs://".length) + 1);
+  for (const root of discovered) if (root.startsWith(bucket) && !found.has(trim(root))) found.set(trim(root), true);
   return [...found.entries()].map(([root, marshal]) => ({ root, marshal })).slice(-MAX_RUNS);
 }
 
@@ -130,7 +133,7 @@ async function readJson(uri: string): Promise<Row | undefined> {
 }
 
 /** A cloud host: the folder host over a local mirror of each run's marshal-state, plus the cloud's own run list. */
-export function cloudHost(config: CloudHostConfig, pullRoot: string): Host & {
+export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: () => Promise<string[]> = async () => []): Host & {
   cloudRuns(refresh?: boolean): Promise<CloudRun[]>;
   rootOfRun(runId: string): Promise<string | undefined>;
   cacheRoot: string;
@@ -147,7 +150,7 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string): Host & {
     if (syncing) return syncing;
     syncing = (async () => {
       fs.mkdirSync(cacheRoot, { recursive: true });
-      const roots = await listRoots(config);
+      const roots = await listRoots(config, await discover().catch(() => []));
       const runs: CloudRun[] = [];
       for (const { root, marshal } of roots) {
         const previewUri = `${root}/preview/index.html`;
