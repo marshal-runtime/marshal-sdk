@@ -183,3 +183,15 @@ export {
   type Speech,
   type SpeechConfig,
 } from "./models/index.js";
+export {
+  assembleHostPrompt,
+  createHostPrompts,
+  mergePromptLayers,
+  renderMemoryBlock,
+  type HostPromptOptions,
+  type HostPromptRole,
+  type HostPromptSection,
+  type PromptLayer,
+  type PromptMemoryEntry,
+  type SessionPromptContext,
+} from "./prompt.js";
