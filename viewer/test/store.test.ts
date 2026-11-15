@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import zlib from "node:zlib";
 
 import { FileSessionStore } from "../../src/session-store";
 import { createExtension } from "../src/index";
@@ -64,4 +65,61 @@ test("capabilities answer through the provider with the result envelope", async 
   const missing = (await provider.invoke("sdksessions.transcript", { sessionId: "../../etc" }, {})) as { output: { result: any } };
   assert.equal(missing.output.result.found, false);
   assert.equal(extension.uiApplications[0]!.metadata["marshal.ui.viewports"].length, 2);
+});
+
+/** One idle session whose Claude file sits where Claude keeps it, and a host that answers importNative as told. */
+function continueRig(answer: (request: Record<string, any>) => { status: string; error?: { code?: string; message?: string }; result?: { output?: any } }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-continue-"));
+  const configDir = path.join(root, "account");
+  const store = new FileSessionStore(path.join(root, "run", "state", "sessions"), { runId: "run-c", host: { id: "e2b", kind: "e2b" } });
+  const session = store.create({ title: "Page Studio · hero", runtime: "claude", native: { kind: "claude", sessionId: "native-9", cwd: "/sandbox/ws", configDir } });
+  store.update(session.id, { state: "idle" });
+  const file = path.join(configDir, "projects", "-sandbox-ws", "native-9.jsonl");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{"type":"user","sessionId":"native-9"}\n');
+  const requests: Record<string, any>[] = [];
+  const extension = createExtension({
+    configuration: { roots: [root] },
+    execute: async (request) => {
+      requests.push(request);
+      return answer(request);
+    },
+  });
+  const run = async (sessionId = session.id) =>
+    ((await extension.capabilityProviders[0]!.invoke("sdksessions.continue", { sessionId }, {})) as { output: { result: any } }).output.result;
+  return { store, session, run, requests };
+}
+
+test("continue says plainly when this Marshal has no importNative yet", async () => {
+  const rig = continueRig(() => ({ status: "error", error: { code: "not-found", message: 'Capability "marshal.sessions.importNative" was not found.' } }));
+  const result = await rig.run();
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "unavailable");
+  assert.match(result.message, /can't continue a session yet.*pull\/155/);
+});
+
+test("continue sends the Claude file gzipped to importNative and reports the new session", async () => {
+  const rig = continueRig(() => ({ status: "success", result: { output: { ok: true, sessionId: "local-7" } } }));
+  const result = await rig.run();
+  assert.deepEqual(result, { ok: true, sessionId: "local-7", message: "Opened as a new session in Marshal." });
+  const sent = rig.requests[0]!;
+  assert.equal(sent.target, "marshal.sessions.importNative");
+  assert.equal(sent.input.name, "Page Studio · hero");
+  assert.equal(sent.input.state.format, "claude-jsonl");
+  assert.equal(sent.input.state.encoding, "gzip-base64");
+  assert.equal(zlib.gunzipSync(Buffer.from(sent.input.state.data, "base64")).toString("utf8"), '{"type":"user","sessionId":"native-9"}\n');
+});
+
+test("continue explains refusals, approvals, running sessions and missing files without calling twice", async () => {
+  const refused = continueRig(() => ({ status: "success", result: { output: { ok: false, error: "runtime-unavailable" } } }));
+  assert.match((await refused.run()).message, /Claude runtime isn't set up/);
+  const approval = continueRig(() => ({ status: "error", error: { code: "approval-required", message: "needs approval" } }));
+  assert.equal((await approval.run()).reason, "approval");
+  const running = continueRig(() => ({ status: "success", result: { output: { ok: true, sessionId: "x" } } }));
+  running.store.update(running.session.id, { state: "running" });
+  assert.equal((await running.run()).reason, "running");
+  const missing = continueRig(() => ({ status: "success", result: { output: { ok: true, sessionId: "x" } } }));
+  missing.store.update(missing.session.id, { native: { kind: "claude", sessionId: "gone", cwd: "/sandbox/ws", configDir: "/nowhere" } });
+  assert.equal((await missing.run()).reason, "no-native-state");
+  assert.equal(running.requests.length + missing.requests.length, 0);
 });

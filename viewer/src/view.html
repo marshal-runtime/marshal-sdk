@@ -64,6 +64,15 @@
   .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
   .msg .body.clip { max-height: 16em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
   .more { margin-top: 4px; border: 0; background: none; color: var(--link, LinkText); cursor: pointer; padding: 4px 0; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+  .primary {
+    border: 0; border-radius: var(--radius, 8px); padding: 7px 12px; min-height: 32px; cursor: pointer; font-weight: 600;
+    background: var(--primary, LinkText); color: var(--primary-foreground, Canvas);
+  }
+  .primary:disabled { opacity: .6; cursor: default; }
+  .notice { font-size: 12px; overflow-wrap: anywhere; color: var(--muted-foreground, GrayText); }
+  .notice.ok { color: var(--success-fg, var(--success, green)); }
+  .notice.warn { color: var(--warning-fg, var(--warning, darkorange)); }
   .ghost {
     border: 1px solid var(--border, #8886); background: var(--card, transparent); border-radius: var(--radius, 8px);
     padding: 6px 10px; cursor: pointer; min-height: 32px;
@@ -80,7 +89,7 @@
   .mobile[data-view=transcript] header .back { display: inline-block; }
   .mobile .item { padding: 12px 14px; min-height: 48px; }
   .mobile input[type=search] { min-height: 40px; font-size: 16px; }
-  .mobile .ghost { min-height: 40px; }
+  .mobile .ghost, .mobile .primary { min-height: 44px; }
 </style>
 </head>
 <body>
@@ -158,7 +167,7 @@
     let out = result && result.structuredContent;
     if (out && "output" in out) out = out.output;
     if (out && typeof out === "object" && "result" in out) out = out.result;
-    if (out && out.ok === false) throw new Error(out.error || "Request failed.");
+    if (out && out.ok === false && out.error) throw new Error(out.error);
     return out;
   }
 
@@ -236,6 +245,32 @@
     box.replaceChildren(...items);
   }
 
+  function continueRow(session) {
+    const notice = el("div", { class: "notice", role: "status", "aria-live": "polite" },
+      session.native && session.native.sessionId ? "Opens a copy here that picks up the conversation where it stopped." : "No conversation file yet.");
+    const button = el("button", {
+      class: "primary", type: "button", disabled: !(session.native && session.native.sessionId) || session.state === "running",
+      onclick: async () => {
+        button.disabled = true;
+        button.textContent = "Continuing…";
+        notice.className = "notice";
+        notice.textContent = "";
+        try {
+          const out = await call("sdksessions.continue", { sessionId: session.id });
+          notice.className = "notice " + (out && out.ok ? "ok" : "warn");
+          notice.textContent = (out && out.message) || (out && out.ok ? "Opened." : "Couldn't continue this session.");
+        } catch (error) {
+          notice.className = "notice warn";
+          notice.textContent = error.message || String(error);
+        } finally {
+          button.disabled = false;
+          button.textContent = "Continue in Marshal";
+        }
+      },
+    }, "Continue in Marshal");
+    return el("div", { class: "actions" }, button, notice);
+  }
+
   async function renderTranscript() {
     const box = $("transcript");
     if (!state.sessionId) return box.replaceChildren(el("div", { class: "empty" }, "Pick a session."));
@@ -255,7 +290,8 @@
           el("dt", {}, "usage"), el("dd", {}, count(usage.inputTokens) + " in · " + count(usage.outputTokens) + " out · " + count(usage.cacheReadTokens) + " cache read · " + usage.turns + " turns · " + money(usage.costUsd)),
           session.parentId ? [el("dt", {}, "parent"), el("dd", {}, session.parentId)] : null,
           el("dt", {}, "native"), el("dd", {}, session.native.kind + " " + (session.native.sessionId || "(none yet)")),
-          session.lastError ? [el("dt", {}, "error"), el("dd", {}, session.lastError)] : null));
+          session.lastError ? [el("dt", {}, "error"), el("dd", {}, session.lastError)] : null),
+        continueRow(session));
       const messages = out.messages.map((message) => {
         const long = message.content.length > 900;
         const body = el("div", { class: "body" + (long ? " clip" : "") }, message.content);

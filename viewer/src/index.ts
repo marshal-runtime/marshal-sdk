@@ -1,9 +1,11 @@
 // @omer/marshal-sdk-sessions: the sessions a headless Marshal host (marshal-sdk) ran, read inside Marshal.
 // Runs -> sessions -> transcript, from the host's session store folders.
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import { gzipSync } from "node:zlib";
 
 import { VIEW_HTML } from "./generated/view";
-import { expandHome, findSession, findStores, readSessions, readTranscript, searchSessions, summarizeRuns } from "./store";
+import { claudeNativeFile, expandHome, findSession, findStores, readSessions, readTranscript, searchSessions, summarizeRuns } from "./store";
 
 type Row = Record<string, any>;
 type JsonSchema = Record<string, unknown>;
@@ -15,6 +17,19 @@ const VERSION = "1.0.0";
 const PROTOCOL_VERSION = "1.0.0";
 const DEFAULT_ROOTS = ["~/marshal/marshal-sdk/.runs"];
 const MAX_MESSAGE_CHARS = 20_000;
+export const IMPORT_NATIVE_CAPABILITY = "marshal.sessions.importNative";
+const IMPORT_NATIVE_PR = "https://github.com/OmerMachluf/marshal/pull/155";
+/** Why marshal.sessions.importNative refused, in words for the person who pressed Continue. */
+const IMPORT_ERRORS: Record<string, string> = {
+  "unsupported-format": "This Marshal can't resume that kind of conversation file.",
+  "runtime-unavailable": "Marshal's Claude runtime isn't set up here, so the conversation can't be resumed.",
+  "invalid-state": "The conversation file couldn't be read as a Claude session.",
+  "invalid-encoding": "The conversation file couldn't be read as a Claude session.",
+  "state-too-large": "The conversation file is too large to continue here.",
+  "workspace-unavailable": "That workspace isn't available in this Marshal.",
+  "already-local": "This session is already in Marshal.",
+  "start-failed": "Marshal couldn't start the session.",
+};
 
 const ANY: JsonSchema = { type: ["object", "array", "string", "number", "boolean", "null"] };
 const OUT: JsonSchema = { type: "object", properties: { result: ANY }, required: ["result"], additionalProperties: false };
@@ -29,7 +44,7 @@ const roots: JsonSchema = { type: "array", items: str, description: "Store folde
 
 interface Context {
   configuration: Row;
-  execute?: (request: Row, invocation: unknown) => Promise<{ status: string; error?: { message?: string }; result?: { output?: any } }>;
+  execute?: (request: Row, invocation: unknown) => Promise<{ status: string; error?: { code?: string; message?: string }; result?: { output?: any } }>;
 }
 
 interface Capability {
@@ -136,6 +151,57 @@ export function createExtension(context: Context) {
       },
     },
     {
+      name: "sdksessions.continue",
+      title: "Continue a session in Marshal",
+      description:
+        "Open a copy of an SDK session as a new local Marshal session that resumes its Claude conversation (through marshal.sessions.importNative). Answers ok:false with reason unavailable when this Marshal has no import yet.",
+      input: obj({ sessionId: str, workspaceName: str, roots }, ["sessionId"]),
+      read: false,
+      handler: async (input, invocation) => {
+        const found = findSession(storesFor(input), String(input.sessionId));
+        if (!found) return { ok: false, reason: "not-found", message: "This session is not in the stores any more." };
+        if (found.session.state === "running") {
+          return { ok: false, reason: "running", message: "This session is still running. Continue it once it is idle." };
+        }
+        const file = claudeNativeFile(found.session);
+        if (!file || !fs.existsSync(file)) {
+          return {
+            ok: false,
+            reason: "no-native-state",
+            message: `This session's Claude conversation file isn't on this machine${file ? ` (${file})` : ""}.`,
+          };
+        }
+        if (!context.execute) return unavailable();
+        const response = await context.execute(
+          {
+            protocolVersion: PROTOCOL_VERSION,
+            targetType: "operation",
+            target: IMPORT_NATIVE_CAPABILITY,
+            input: {
+              name: found.session.title,
+              state: { format: "claude-jsonl", encoding: "gzip-base64", data: gzipSync(fs.readFileSync(file)).toString("base64") },
+              ...(typeof input.workspaceName === "string" && input.workspaceName ? { workspaceName: input.workspaceName } : {}),
+            },
+          },
+          invocation,
+        );
+        if (response.status !== "success") {
+          const code = String(response.error?.code ?? "");
+          const text = String(response.error?.message ?? "");
+          if (code === "not-found" || /was not found|unknown capability/i.test(text)) return unavailable();
+          if (/approval/i.test(code)) {
+            return { ok: false, reason: "approval", message: "Marshal asked you to approve continuing this session. Approve it, then press Continue in Marshal again." };
+          }
+          if (/permission|denied/i.test(code)) return { ok: false, reason: "denied", message: "Continuing sessions isn't allowed by your permission settings." };
+          return { ok: false, reason: "failed", message: text || "Marshal couldn't continue this session." };
+        }
+        const out = (response.result?.output ?? {}) as Row;
+        if (out.ok === true) return { ok: true, sessionId: out.sessionId, message: "Opened as a new session in Marshal." };
+        const error = String(out.error ?? "start-failed");
+        return { ok: false, reason: error, message: IMPORT_ERRORS[error] ?? "Marshal couldn't continue this session." };
+      },
+    },
+    {
       name: "sdksessions.search",
       title: "Search SDK sessions",
       description: "Find sessions by words in their title, labels, run id or transcript.",
@@ -210,7 +276,7 @@ export function createExtension(context: Context) {
         version: VERSION,
         presentationModes: ["inline", "fullscreen"],
         tools: [],
-        actions: capabilities.filter((capability) => capability.read).map(action),
+        actions: capabilities.filter((capability) => capability.name !== "sdksessions.open").map(action),
       },
       tags: ["marshal-sdk", "sessions"],
       metadata: { "marshal.ui.viewports": ["mobile", "desktop"] },
@@ -229,8 +295,17 @@ export const CAPABILITY_NAMES = [
   "sdksessions.runs",
   "sdksessions.sessions",
   "sdksessions.transcript",
+  "sdksessions.continue",
   "sdksessions.search",
 ];
+
+function unavailable() {
+  return {
+    ok: false,
+    reason: "unavailable",
+    message: `This Marshal can't continue a session yet: it has no ${IMPORT_NATIVE_CAPABILITY}. That arrives with ${IMPORT_NATIVE_PR}; after the update and a restart, this button opens the session here.`,
+  };
+}
 
 export function activate(context: Context) {
   return createExtension(context);

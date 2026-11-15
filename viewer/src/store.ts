@@ -154,6 +154,14 @@ export function summarizeRuns(stores: readonly string[]): RunSummary[] {
   return [...runs.values()].sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 
+/** Claude keeps a session at `<config dir or ~/.claude>/projects/<cwd, non-alphanumerics as '-'>/<id>.jsonl` (same as src/org-publish.ts). */
+export function claudeNativeFile(session: Pick<SessionRecord, "native">): string | undefined {
+  const { native } = session;
+  if (native?.kind !== "claude" || !native.sessionId || !/^[A-Za-z0-9_.-]+$/.test(native.sessionId)) return undefined;
+  const configDir = native.configDir ?? path.join(os.homedir(), ".claude");
+  return path.join(configDir, "projects", native.cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${native.sessionId}.jsonl`);
+}
+
 export function findSession(stores: readonly string[], sessionId: string): { store: string; session: SessionRecord } | undefined {
   for (const store of stores) {
     const session = readSessions(store).find((record) => record.id === sessionId);
