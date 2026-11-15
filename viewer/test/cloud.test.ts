@@ -188,6 +188,18 @@ test("agent-sandbox's runner layout (host/sessions, page-studio/, page-run.json,
   assert.equal(JSON.parse(fs.readFileSync(path.join(state, "page-studio", "pages", "saffpro--sandbox.json"), "utf8")).version, 3);
   assert.equal(fs.existsSync(path.join(state, "data")), false);
   assert.match(fs.readFileSync(path.join(state, "sandbox-page.html"), "utf8"), /new/);
+
+  // A page-generator run mid-flight: a run.json and page-studio/pages, page-run.json not written yet. Still the sandbox layout.
+  fs.rmSync(path.join(state, "page-run.json"));
+  fs.writeFileSync(path.join(state, "run.json"), JSON.stringify({ schemaVersion: 1, runId: "run-902", status: "done", title: "sdk-781-saffpro" }));
+  await pushToCloud({
+    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work2"),
+    renderedHtml: '<html><body><section data-key="hero"><h1>newer</h1></section></body></html>',
+    pageDoc: { id: "local", title: "SaffPro", brand: { id: "233", name: "SaffPro" }, product: null, source: "imported", version: 4, updatedAt: new Date().toISOString(), updatedBy: "Omer", notes: [], sections: [] },
+  });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(state, "page-studio", "pages", "saffpro--sandbox.json"), "utf8")).version, 4);
+  assert.equal(fs.existsSync(path.join(state, "data")), false);
+  assert.match(fs.readFileSync(path.join(state, "sandbox-page.html"), "utf8"), /newer/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
