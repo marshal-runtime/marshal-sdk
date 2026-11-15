@@ -108,6 +108,11 @@ async function listRoots(config: CloudHostConfig): Promise<{ root: string; marsh
     const root = line.slice(0, -"/preview/index.html".length);
     if (!found.has(root)) found.set(root, false);
   }
+  // Runs whose output root is elsewhere in the bucket (their page-generation-runs/<id>/output) announce themselves with a
+  // pointer under the prefix: <uri>/index/<run>.json {outputRoot}. Listing a whole bucket for marshal-state is too slow.
+  const pointers = await ls(`${config.uri}/index/*.json`);
+  const roots = await Promise.all(pointers.map(async (uri) => (await readJson(uri))?.outputRoot));
+  for (const root of roots) if (typeof root === "string" && /^gs:\/\/[^/]+\/.+/.test(root) && !found.has(trim(root))) found.set(trim(root), true);
   for (const root of config.runs ?? []) if (!found.has(root)) found.set(root, true);
   return [...found.entries()].map(([root, marshal]) => ({ root, marshal })).slice(-MAX_RUNS);
 }
