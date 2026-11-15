@@ -20,6 +20,90 @@ export function configureEngineHost(next: Partial<EngineHostServices>): void {
   if (Object.hasOwn(next, "sessionErrors")) sessionErrors = next.sessionErrors as EngineHostServices["sessionErrors"];
   if (Object.hasOwn(next, "AskUserToolResultSchema")) AskUserToolResultSchema = next.AskUserToolResultSchema as EngineHostServices["AskUserToolResultSchema"];
   if (Object.hasOwn(next, "NEVER_BACKGROUND_TOOL_NAMES")) NEVER_BACKGROUND_TOOL_NAMES = next.NEVER_BACKGROUND_TOOL_NAMES as EngineHostServices["NEVER_BACKGROUND_TOOL_NAMES"];
+  if (Object.hasOwn(next, "DEFAULT_SESSION_NAME")) {
+    try {
+      DEFAULT_SESSION_NAME = next.DEFAULT_SESSION_NAME as EngineHostServices["DEFAULT_SESSION_NAME"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "BusySessionTracker")) {
+    try {
+      BusySessionTracker = next.BusySessionTracker as EngineHostServices["BusySessionTracker"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "LEAN_PROMPT_DISABLED_NATIVE_TOOLS")) {
+    try {
+      LEAN_PROMPT_DISABLED_NATIVE_TOOLS = next.LEAN_PROMPT_DISABLED_NATIVE_TOOLS as EngineHostServices["LEAN_PROMPT_DISABLED_NATIVE_TOOLS"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "SPAWN_ONLY_SKILL_NAMES")) {
+    try {
+      SPAWN_ONLY_SKILL_NAMES = next.SPAWN_ONLY_SKILL_NAMES as EngineHostServices["SPAWN_ONLY_SKILL_NAMES"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "V2_DISABLED_NATIVE_TOOLS")) {
+    try {
+      V2_DISABLED_NATIVE_TOOLS = next.V2_DISABLED_NATIVE_TOOLS as EngineHostServices["V2_DISABLED_NATIVE_TOOLS"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "V2_DEFERRED_HOST_TOOLS")) {
+    try {
+      V2_DEFERRED_HOST_TOOLS = next.V2_DEFERRED_HOST_TOOLS as EngineHostServices["V2_DEFERRED_HOST_TOOLS"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "V2_EXPOSED_HOST_TOOLS")) {
+    try {
+      V2_EXPOSED_HOST_TOOLS = next.V2_EXPOSED_HOST_TOOLS as EngineHostServices["V2_EXPOSED_HOST_TOOLS"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "V2_NATIVE_SUBAGENT_ALLOWLIST")) {
+    try {
+      V2_NATIVE_SUBAGENT_ALLOWLIST = next.V2_NATIVE_SUBAGENT_ALLOWLIST as EngineHostServices["V2_NATIVE_SUBAGENT_ALLOWLIST"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "LocalSessionStore")) {
+    try {
+      LocalSessionStore = next.LocalSessionStore as EngineHostServices["LocalSessionStore"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "STUCK_TIMEOUT_MS")) {
+    try {
+      STUCK_TIMEOUT_MS = next.STUCK_TIMEOUT_MS as EngineHostServices["STUCK_TIMEOUT_MS"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "ViewEmissionManager")) {
+    try {
+      ViewEmissionManager = next.ViewEmissionManager as EngineHostServices["ViewEmissionManager"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
+  if (Object.hasOwn(next, "workspaceDisplayName")) {
+    try {
+      workspaceDisplayName = next.workspaceDisplayName as EngineHostServices["workspaceDisplayName"];
+    } catch {
+      // A host test double without this export; the port stays unset until supplied.
+    }
+  }
 }
 
 /** True once a host has supplied any port. */
@@ -83,3 +167,64 @@ export const secureWriteFileSync = port("secureWriteFileSync");
 export const sendErrorTelemetry = port("sendErrorTelemetry");
 export const takeSessionMentionContext = port("takeSessionMentionContext");
 export const takeSharedSessionContext = port("takeSharedSessionContext");
+
+// SessionManager's ports (electron/sessions.ts and the modules that moved with it).
+export let DEFAULT_SESSION_NAME: EngineHostServices["DEFAULT_SESSION_NAME"] = undefined as unknown as EngineHostServices["DEFAULT_SESSION_NAME"];
+export let BusySessionTracker: EngineHostServices["BusySessionTracker"] = undefined as unknown as EngineHostServices["BusySessionTracker"];
+export let LEAN_PROMPT_DISABLED_NATIVE_TOOLS: EngineHostServices["LEAN_PROMPT_DISABLED_NATIVE_TOOLS"] = undefined as unknown as EngineHostServices["LEAN_PROMPT_DISABLED_NATIVE_TOOLS"];
+export let SPAWN_ONLY_SKILL_NAMES: EngineHostServices["SPAWN_ONLY_SKILL_NAMES"] = undefined as unknown as EngineHostServices["SPAWN_ONLY_SKILL_NAMES"];
+export let V2_DISABLED_NATIVE_TOOLS: EngineHostServices["V2_DISABLED_NATIVE_TOOLS"] = undefined as unknown as EngineHostServices["V2_DISABLED_NATIVE_TOOLS"];
+export let V2_DEFERRED_HOST_TOOLS: EngineHostServices["V2_DEFERRED_HOST_TOOLS"] = undefined as unknown as EngineHostServices["V2_DEFERRED_HOST_TOOLS"];
+export let V2_EXPOSED_HOST_TOOLS: EngineHostServices["V2_EXPOSED_HOST_TOOLS"] = undefined as unknown as EngineHostServices["V2_EXPOSED_HOST_TOOLS"];
+export let V2_NATIVE_SUBAGENT_ALLOWLIST: EngineHostServices["V2_NATIVE_SUBAGENT_ALLOWLIST"] = undefined as unknown as EngineHostServices["V2_NATIVE_SUBAGENT_ALLOWLIST"];
+export let LocalSessionStore: EngineHostServices["LocalSessionStore"] = undefined as unknown as EngineHostServices["LocalSessionStore"];
+export let STUCK_TIMEOUT_MS: EngineHostServices["STUCK_TIMEOUT_MS"] = undefined as unknown as EngineHostServices["STUCK_TIMEOUT_MS"];
+export let ViewEmissionManager: EngineHostServices["ViewEmissionManager"] = undefined as unknown as EngineHostServices["ViewEmissionManager"];
+export let workspaceDisplayName: EngineHostServices["workspaceDisplayName"] = undefined as unknown as EngineHostServices["workspaceDisplayName"];
+
+export const isHiddenInternalControlMessage = port("isHiddenInternalControlMessage");
+export const isToolFreeRuntimeAgentRole = port("isToolFreeRuntimeAgentRole");
+export const isVisibleInternalControlResponse = port("isVisibleInternalControlResponse");
+export const describeAgentMessageSendTime = port("describeAgentMessageSendTime");
+export const isAgentMessageDeliveryControlError = port("isAgentMessageDeliveryControlError");
+export const clearAvatarCache = port("clearAvatarCache");
+export const buildImportedConversationState = port("buildImportedConversationState");
+export const buildTranscriptConversationState = port("buildTranscriptConversationState");
+export const reconcileWithTranscript = port("reconcileWithTranscript");
+export const getMcpStatus = port("getMcpStatus");
+export const assembleMarshalSystemPrompt = port("assembleMarshalSystemPrompt");
+export const isAgentPromptV2Session = port("isAgentPromptV2Session");
+export const isLeanCoreSession = port("isLeanCoreSession");
+export const isLeanPromptSession = port("isLeanPromptSession");
+export const isLeanRepoRulesSession = port("isLeanRepoRulesSession");
+export const resolveAgentPromptV2ForNewSession = port("resolveAgentPromptV2ForNewSession");
+export const resolveLeanCoreForNewSession = port("resolveLeanCoreForNewSession");
+export const resolveLeanPromptForNewSession = port("resolveLeanPromptForNewSession");
+export const resolveLeanRepoRulesForNewSession = port("resolveLeanRepoRulesForNewSession");
+export const assembleMarshalSystemPromptV2 = port("assembleMarshalSystemPromptV2");
+export const searchSessions = port("searchSessions");
+export const isSessionHiddenFromList = port("isSessionHiddenFromList");
+export const isSessionHiddenFromSearchAndDelete = port("isSessionHiddenFromSearchAndDelete");
+export const readRuntimeTranscript = port("readRuntimeTranscript");
+export const createSkillCatalog = port("createSkillCatalog");
+export const getSkillsForSystemPrompt = port("getSkillsForSystemPrompt");
+export const getWorkspaceRegistry = port("getWorkspaceRegistry");
+export const getWorkspaceRoot = port("getWorkspaceRoot");
+export const listRegisteredWorkspaces = port("listRegisteredWorkspaces");
+export const normalizePathForCompare = port("normalizePathForCompare");
+export const registerExistingWorkspace = port("registerExistingWorkspace");
+export const registerManagedWorkspace = port("registerManagedWorkspace");
+export const resolveRegisteredWorkspace = port("resolveRegisteredWorkspace");
+export const validateWorkspaceName = port("validateWorkspaceName");
+export const applyRuntimeAgentStrategy = port("applyRuntimeAgentStrategy");
+export const buildSdkDefaultSubagentSystemContent = port("buildSdkDefaultSubagentSystemContent");
+export const buildSystemMessage = port("buildSystemMessage");
+export const getSoulGreeting = port("getSoulGreeting");
+export const buildRelayAttentionSection = port("buildRelayAttentionSection");
+export const buildSoulPrompt = port("buildSoulPrompt");
+export const formatBundledWorkspaceFile = port("formatBundledWorkspaceFile");
+
+// Class ports are also used as types, as the desktop modules exported them.
+export type BusySessionTracker = InstanceType<EngineHostServices["BusySessionTracker"]>;
+export type LocalSessionStore = InstanceType<EngineHostServices["LocalSessionStore"]>;
+export type ViewEmissionManager = InstanceType<EngineHostServices["ViewEmissionManager"]>;

@@ -23,23 +23,48 @@ const sharedLogger = {
 const orgEntry = path.join(root, "src", "org-package.ts");
 const orgRoomsEntry = path.join(root, "src", "org-rooms.ts");
 const orgScrubEntry = path.join(root, "src", "org-scrub.ts");
+// SessionManager (packages/providers/src/engine) is bundled into dist/src/session-engine.js. The engine's ports
+// module is bundled alone into dist/src/engine-host.js and both providers.js and session-engine.js import it, so a
+// host configures both with one configureEngineHost call.
+const sessionEngineEntry = path.join(root, "src", "session-engine.ts");
+const engineHostEntry = path.join(root, "src", "engine-host.ts");
+const sharedEngineHost = {
+  name: "shared-engine-host",
+  setup(context) {
+    const portsModule = path.join(root, "packages", "providers", "src", "backend", "engine-host");
+    context.onResolve({ filter: /engine-host$/ }, (args) =>
+      args.importer === engineHostEntry || path.resolve(args.resolveDir, args.path) !== portsModule
+        ? undefined
+        : { path: "./engine-host.js", external: true },
+    );
+  },
+};
 const sources = ["src", "test", "packages/prompt/src"]
   .flatMap((directory) =>
     readdirSync(path.join(root, directory), { recursive: true })
       .filter((name) => name.endsWith(".ts") && !name.endsWith(".d.ts"))
       .map((name) => path.join(root, directory, name)),
   )
-  .filter((source) => ![providersEntry, permissionsEntry, orgEntry, orgRoomsEntry, orgScrubEntry].includes(source));
+  .filter((source) => ![providersEntry, permissionsEntry, orgEntry, orgRoomsEntry, orgScrubEntry, sessionEngineEntry, engineHostEntry].includes(source));
 
 const common = { outbase: root, format: "esm", platform: "node", target: "node22", sourcemap: true, logLevel: "warning" };
 rmSync(path.join(root, "dist"), { recursive: true, force: true });
 await build({ ...common, entryPoints: sources, outdir: path.join(root, "dist") });
 await build({
   ...common,
-  entryPoints: [providersEntry],
+  entryPoints: [providersEntry, engineHostEntry],
   outdir: path.join(root, "dist"),
   bundle: true,
   packages: "external",
+  plugins: [sharedEngineHost],
+});
+await build({
+  ...common,
+  entryPoints: [sessionEngineEntry],
+  outdir: path.join(root, "dist"),
+  bundle: true,
+  packages: "external",
+  plugins: [sharedLogger, sharedEngineHost],
 });
 await build({
   ...common,
