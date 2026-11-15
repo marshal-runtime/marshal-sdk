@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -27,12 +27,10 @@ import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type 
 import { createForkToolsProvider } from "./fork-provider.js";
 import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
-import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
-import { createLinkCallProvider } from "./link/call-provider.js";
+import { readPackageManifest } from "./onboarding.js";
 import { linkPersonRoute } from "./link/decisions.js";
-import { startLinkServer, type LinkLivePort, type LinkServer } from "./link/server.js";
+import { startLinkServer, type LinkServer } from "./link/server.js";
 import { createOrgBridge, type OrgBridge, type OrgBridgeOptions } from "./org-bridge.js";
-import { httpLinkRelay, type LinkRelay } from "./org-host-room.js";
 import { ConversationRoomRoute } from "./rooms-route.js";
 import { FileSessionStore, type SessionRecord } from "./session-store.js";
 
@@ -233,8 +231,6 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   });
   const hostAutomations = automations;
   const decisions = new DecisionDesk(sessions, agents, log);
-  // marshal.link.call answers through a private loopback link that starts on first use (after the extensions activate).
-  let linkRelay: LinkRelay | undefined;
   const forks = new SessionForks(agents, sessions, { log });
   const models = createModelServices(options.models, { env: options.env ?? process.env, ...(options.modelsFetch ? { fetch: options.modelsFetch } : {}) });
   const runtime = await createAgentRuntime({
@@ -268,7 +264,6 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       () => createAutomationsProvider(hostAutomations),
       () => createDecisionsProvider(decisions),
       () => createModelsProvider(models),
-      () => createLinkCallProvider(() => linkRelay),
       createRuntimeBuiltinsSource({
         typescript: true,
         artifacts: true,
@@ -300,13 +295,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       try {
         const materializer = await createRuntimeHostMaterializer({ allowedRoots: [extension.packageRoot] });
         const request = await materializer.materialize({ packageRoot: extension.packageRoot });
-        // The org extension reaches this host only through capabilities; what it cannot ask for (who the host is, where
-        // to keep its ledgers) the host gives it here, under any configuration the manifest set.
-        const configuration =
-          declared.identity === ORG_EXTENSION
-            ? { hostId: (options.host ?? { id: HARNESS_ID }).id, hostKind: (options.host ?? { kind: "local" }).kind, stateDir: path.join(stateRoot, "org"), ...(extension.configuration as object | undefined) }
-            : extension.configuration;
-        installed = await lifecycle.install(request, { configuration } as never);
+        installed = await lifecycle.install(request, { configuration: extension.configuration } as never);
       } catch (error) {
         throw new Error(`Extension ${declared.identity}@${declared.version} (${extension.packageRoot}) could not be installed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
       }
@@ -473,25 +462,6 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
 
   let link: LinkServer | undefined;
   let names: Promise<string[]> | undefined;
-  const live: LinkLivePort = {
-    send: (sessionId, text, deliveryMode) => agents.send(sessionId, text, deliveryMode),
-    cancel: (sessionId) => agents.cancel(sessionId),
-    invoke: (capability, input) => invoke(capability, input),
-    extensions: () => [...installedExtensions],
-    capabilities: () => (names ??= capabilityNames(runtime.kernel as never, runId, context)),
-    answer: (input) => decisions.answer({ ...input, route: "link" }),
-  };
-  const linkFiles = { workspace: workspacePath, ...options.link?.files };
-  let innerLink: Promise<{ server: LinkServer; token: string }> | undefined;
-  const startInnerLink = async () => {
-    const token = randomBytes(24).toString("hex");
-    const server = await startLinkServer({ token, bind: "127.0.0.1", port: 0, sessionsRoot: sessions.root, host: options.host ?? { id: HARNESS_ID, kind: "local" }, files: linkFiles, live, log });
-    return { server, token };
-  };
-  linkRelay = async (request) => {
-    const inner = await (innerLink ??= startInnerLink());
-    return httpLinkRelay(inner.server.url, () => inner.token)(request);
-  };
   if (options.link) {
     const pageStudioDir = options.link.pageStudioDir ?? options.env?.PAGE_STUDIO_DIR ?? process.env.PAGE_STUDIO_DIR;
     try {
@@ -501,10 +471,17 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         port: options.link.port ?? 0,
         sessionsRoot: sessions.root,
         host: options.host ?? { id: HARNESS_ID, kind: "local" },
-        files: linkFiles,
+        files: { workspace: workspacePath, ...options.link.files },
         ...(options.link.nativeRoots ? { nativeRoots: options.link.nativeRoots } : {}),
         ...(pageStudioDir ? { pageStudioDir } : {}),
-        live,
+        live: {
+          send: (sessionId, text, deliveryMode) => agents.send(sessionId, text, deliveryMode),
+          cancel: (sessionId) => agents.cancel(sessionId),
+          invoke: (capability, input) => invoke(capability, input),
+          extensions: () => [...installedExtensions],
+          capabilities: () => (names ??= capabilityNames(runtime.kernel as never, runId, context)),
+          answer: (input) => decisions.answer({ ...input, route: "link" }),
+        },
         log,
       });
       log(`link serving on ${link.url}`);
@@ -546,8 +523,6 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       await models.dispose().catch(() => undefined);
       await agents.dispose();
       await runtime.dispose();
-      // After the runtime: the org extension publishes its last turns through it while it closes.
-      if (innerLink) await (await innerLink).server.close();
     },
   };
 }
