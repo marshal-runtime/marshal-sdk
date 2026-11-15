@@ -22,7 +22,8 @@
     "test",
     "packages/providers/src",
     "packages/permissions/src",
-    "packages/permissions/host-deps.ts"
+    "packages/permissions/host-deps.ts",
+    "packages/prompt/src"
   ],
   "exclude": [
     "packages/providers/src/**/*.test.ts",

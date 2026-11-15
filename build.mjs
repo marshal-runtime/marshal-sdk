@@ -17,7 +17,7 @@ const sharedLogger = {
     context.onResolve({ filter: /providers\/src\/common\/marshal-logger$/ }, () => ({ path: "./providers.js", external: true }));
   },
 };
-const sources = ["src", "test"]
+const sources = ["src", "test", "packages/prompt/src"]
   .flatMap((directory) =>
     readdirSync(path.join(root, directory), { recursive: true })
       .filter((name) => name.endsWith(".ts") && !name.endsWith(".d.ts"))

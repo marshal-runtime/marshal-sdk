@@ -61,3 +61,11 @@ rendered from desktop `36452cec2`; `node scripts/desktop-prompt-fixture.mjs [des
 
 The desktop's words (its 24 slot values, role texts, browser guidance, notable-extensions list) stay in the desktop
 as its layer; they describe the desktop. Everything the hosts share is already in the package.
+
+## One source for both shells
+
+The layer code (`PromptLayer`, `assembleHostPrompt`, `mergePromptLayers`, `renderMemoryBlock`) lives in
+`packages/prompt/src/index.ts`, which depends only on `@marshal/agent-runtime-prompt`. `src/prompt.ts` re-exports it
+and adds the SDK host's own pieces (`sdkBaseLayer`, `createHostPrompts`). The desktop vendors `packages/prompt/src`
+(pinned commit and content hash, like `packages/providers`) and renders its v2 prompt through `assembleHostPrompt`
+with the desktop layer above, so the two shells run the same prompt code, not two that happen to agree.
