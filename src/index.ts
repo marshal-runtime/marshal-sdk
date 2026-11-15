@@ -108,3 +108,27 @@ export { PageStore, writePage, type PageManifest, type PagePicture, type PageSum
 export { LINK_PROTOCOL_VERSION, sdkVersion, startLinkServer, type LinkLivePort, type LinkServer, type LinkServerOptions } from "./link/server.js";
 export { StoreReader, type RunSummary } from "./link/store-reader.js";
 export { combineTelemetry, telemetryFromEvents, type Activity, type EventLine, type Telemetry } from "./link/telemetry.js";
+export {
+  createModelServices,
+  createModelsProvider,
+  createDecideService,
+  createEmbedService,
+  createSpeech,
+  speechConfigFromEnv,
+  modelCredential,
+  googleAccessTokenProvider,
+  formatForGemini,
+  EmbedError,
+  MODEL_CAPABILITIES,
+  type ModelsConfig,
+  type ModelServices,
+  type DecideConfig,
+  type DecideRequest,
+  type DecideResult,
+  type EmbedConfig,
+  type EmbedRequest,
+  type EmbedResult,
+  type LocalEmbedder,
+  type Speech,
+  type SpeechConfig,
+} from "./models/index.js";

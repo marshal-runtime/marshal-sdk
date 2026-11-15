@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
 import type { KitOptions, KitSelection } from "./kit/index.js";
+import type { ModelsConfig } from "./models/index.js";
 
 export const MANIFEST_FILE = "marshal-sdk.json";
 const EXTENSION_ID = /^@[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -69,6 +70,8 @@ export interface SdkManifest {
   model?: string;
   reasoningEffort?: string;
   kit?: KitSelection;
+  /** Which provider answers decide / embed / speech on this host (docs/models.md). */
+  models?: ModelsConfig;
   org?: ManifestOrg;
   defaults?: false | ManifestDefaults;
   extensions: ManifestExtension[];
@@ -113,6 +116,7 @@ export interface OnboardingHostOptions {
   /** Every default that loads, the Brain included (an image packs these too). */
   defaults: ResolvedExtension[];
   kit?: KitSelection;
+  models?: ModelsConfig;
   model?: string;
   reasoningEffort?: string;
   /** Identities that came from the built-in defaults (the start-up report marks them). */
@@ -231,6 +235,7 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
     ...(typeof root.model === "string" ? { model: root.model } : {}),
     ...(typeof root.reasoningEffort === "string" ? { reasoningEffort: root.reasoningEffort } : {}),
     ...(kit !== undefined ? { kit: kit as KitSelection } : {}),
+    ...(record(root.models) ? { models: root.models as ModelsConfig } : {}),
     ...(org
       ? { org: { discovery: org.discovery as string, ...(allow || deny ? { profile: { ...(allow ? { allow } : {}), ...(deny ? { deny } : {}) } } : {}) } }
       : {}),
@@ -412,6 +417,7 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
   return {
     extensions: all,
     ...(kit !== undefined ? { kit } : {}),
+    ...(manifest.models ? { models: manifest.models } : {}),
     ...(manifest.model ? { model: manifest.model } : {}),
     ...(manifest.reasoningEffort ? { reasoningEffort: manifest.reasoningEffort } : {}),
     defaults,
