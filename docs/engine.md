@@ -81,54 +81,55 @@ await backend.sessions.send(sessionId, { prompt });
 send, streamed `text-delta`, `turn-complete`, `idle`, and the session config trace written to the host's
 app data directory.
 
-## Next: the engine half of `SessionManager`
+## Part 2: `SessionManager`
 
-`electron/sessions.ts` is 14.7k lines: 532 methods, 122 private fields and 125 import lines. About two
-thirds of it is the engine: the turn loop, delivery and queueing, fork bookkeeping. The rest is desktop
-product: IPC, views, relay, goals, workflows. The engine half moves the same way the backend did, with a
-new set of ports.
+`electron/sessions.ts` (the desktop's `SessionManager`, about 14.7k lines) moved with the same mechanism,
+unchanged except for its import lines: it is now `src/engine/sessions.ts`, and the desktop's
+`electron/sessions.ts` is a re-export of it. Queueing and delivery, the turn state machine, steering, compaction
+and the request-ledger re-injection, fork and subagent bookkeeping, and client revive and failover now run from
+the SDK tree in both hosts. IPC handlers and the renderer stay in the desktop: they call `SessionManager` as
+before, through `electron/ipc/*`.
 
-### Moves to the engine
+46 modules moved with it: every module that `sessions.ts` imports whose import closure has no Electron
+dependency and is at most 1,300 lines. They include `turn-accumulator`, `session-start-coordinator`,
+`session-model-switch`, `runtime-continuations`, `runtime-subagent-mirrors`, `background-task-manager`,
+`mcp-status-manager`, `model-manager`, the worktree helpers, `souls`, `untrusted-wrap`, and the contracts
+`relay-contract`, `runtime-subagent`, `session-import-contract` and the telemetry error families. They live
+under `src/engine/*` (desktop `electron/*`) and `src/common/*` (desktop `common/*`), and each has a re-export at
+its old desktop path.
 
-| Concern | Where in `sessions.ts` |
+`src/session-engine.ts` builds as `dist/src/session-engine.js` and exports `SessionManager`,
+`TurnAccumulator` and `SessionStartCoordinator`. It shares one ports module (`dist/src/engine-host.js`) with
+the provider bundle, so a single `configureEngineHost()` call configures both. `test/session-engine.test.ts`
+checks this.
+
+### New ports
+
+| Family | Ports |
 | --- | --- |
-| Turn lifecycle: send, steer, cancel, stop, wait, busy/idle, pending sends, turn state | `sendMessage` 12147, `performSendMessage` 12473, `steerMessage` 12101, `cancelTurn`/`performCancelTurn` 11862/11981, `stopSession` 11891, `waitForIdle` 11789, `beginPendingSend`… 7365–7398, `markBusy`/`markIdle`/`getTurnState` 13792–13803 |
-| Event intake and turn accumulation, live-turn checkpoints | `subscribeToBackendEvents` 6174, `getAccumulator` 2616, `persistLiveTurnCheckpoint`…`promoteLiveTurnCheckpoint` 2648–2699, `appendMessage` 2511 |
-| Backend session create/resume/recreate/refresh | `createBackendSession(Attempt)` 5395–5859, `createSessionLocked` 7903, `refreshSession` 13399, `recreateSessionBackendWithLatestConfig` 13689 |
-| Compaction and post-compaction context | `compactSession` 13525, `registerContextCompactedHook`/`notifyContextCompacted` 2953–2974 |
-| Runtime switch and cross-provider handoff | `prepareRuntimeHandoff` 5997, `performBackendRuntimeSwitch` 5939, `moveSessionToCurrentRuntime` 6119, `switchBackend` 6153 |
-| Agent messages, queue and continuations | `deliverAgentMessage` 1873, `acceptAgentMessage` 11119, `sendMessageToSession`/`ToSubagent`/`ToParent` 10758/10708/11072, runtime continuations 10887–10935, `sendAndCollect` 12982 |
-| Forks and subagents: launch, readiness wakes, yield | `forkSubagentSessions` 9785, `createSubagentSession(Deferred)` 9626/10212, `listForkSiblings` 10115, readiness wakes 6566–7185, subagent yield 2150–2236 |
-| Running and background tools | 3779–4427 (`listRunningTools`, `claimBackgroundToolDispatch`, `inspectRunningTool`, `cancelRunningTool`…) |
-| Idle reaper and pause | `startIdleSessionReaper` 6551, `reapIdleSessions` 7185, `pauseSession` 7236–7343 |
-| Client and auth lifecycle | `checkAuthStatus` 3238, `initClient` 3307, `reviveClient` 3549, `login` 3568, `signOut` 3472 |
-| Per-session model, effort and context tier | 13807–14645 |
+| IPC contract helpers | `DEFAULT_SESSION_NAME`, `isHiddenInternalControlMessage`, `isToolFreeRuntimeAgentRole`, `isVisibleInternalControlResponse` |
+| Session store and search | `LocalSessionStore` (class), `readRuntimeTranscript`, `searchSessions`, `isSessionHiddenFromList`, `isSessionHiddenFromSearchAndDelete` |
+| Views | `ViewEmissionManager` (class), `STUCK_TIMEOUT_MS`, `clearAvatarCache` |
+| Busy state | `BusySessionTracker` (class) |
+| Transcript state | `buildImportedConversationState`, `buildTranscriptConversationState`, `reconcileWithTranscript` |
+| Agent messages | `describeAgentMessageSendTime`, `isAgentMessageDeliveryControlError` |
+| MCP | `getMcpStatus` |
+| System prompt | `buildSystemMessage`, `applyRuntimeAgentStrategy`, `buildSdkDefaultSubagentSystemContent`, `buildRelayAttentionSection`, `buildSoulPrompt`, `getSoulGreeting`, `formatBundledWorkspaceFile`, `assembleMarshalSystemPrompt`, `assembleMarshalSystemPromptV2`, `V2_*` tool lists, `SPAWN_ONLY_SKILL_NAMES`, the lean-prompt and agent-prompt-v2 resolvers |
+| Skills | `createSkillCatalog`, `getSkillsForSystemPrompt` |
+| Workspaces | `getWorkspaceRegistry`, `getWorkspaceRoot`, `listRegisteredWorkspaces`, `registerExistingWorkspace`, `registerManagedWorkspace`, `resolveRegisteredWorkspace`, `validateWorkspaceName`, `workspaceDisplayName`, `normalizePathForCompare` |
 
-### Stays in the desktop, behind ports the engine calls
+The desktop registers these in `electron/backend/engine-host/engine-sessions.ts` (and one wiring file per moved
+module that uses ports), with lazy getters, so `vi.mock` of a desktop module still reaches the engine.
 
-| Concern | Where | Port the engine needs |
-| --- | --- | --- |
-| View emission, hydration, list listeners | 2729 (`ViewEmissionManager`), 8327, 11284–11424 | an event sink |
-| System prompt assembly | 4564–4996 (`buildSystemMessage`) | the SDK prompt layers (desktop adds sections) |
-| Relay (WhatsApp and other channels) | 2769–2832, 10941–11036 | a delivery-origin hook |
-| Goals and workflows | 3056–3172 | a turn-boundary hook |
-| Request ledger | 2832–2953 | a ledger port (reminders, compaction context) |
-| Permission cards, reviewer scopes | 5331–5364, 9009 | the approval port from the permission policy |
-| Session list decoration (unread, pinned, souls) | 9016–9330, 14673 | none: read from the store |
-| Worktrees and workspace registry | 10408–10688, 9371–9494 | a workspace resolver port |
-| Command center | 4427–4457 | the event sink |
-| Session index and content store | `SessionIndexWriter`, `LocalSessionStore` | a session store port (`runtimeId`/`backendOrigin` partition kept) |
+### Known gaps
 
-### Order
-
-1. **Inside the desktop first.** Extract a `SessionEngine` class from `sessions.ts` that holds the "moves"
-   rows and reaches the "stays" rows only through the ports above. `SessionManager` becomes a thin facade
-   that keeps its public methods and IPC behavior. The ~30 `sessions-*.test.ts` suites and
-   `conformance.test.ts` must pass unchanged. This is the big step: about one to two weeks, done family by
-   family, each in its own PR.
-2. **Lift it here with the same mechanism** used for the backend: same tree, import lines only, the
-   desktop's old path re-exports it, and the vendored hash pins it.
-3. **Make the SDK host run sessions through it.** `ClaudeAgentPort`'s per-turn query becomes an adapter
-   over `SessionEngine` plus `LocalBackend`. The SDK session store implements the store port and gains
-   `runtimeId`/`backendOrigin`. After this step a desktop session and an SDK session are the same object
-   in two shells.
+- **The SDK does not typecheck `src/engine`.** The SDK's host binding declares desktop types as open shapes,
+  and the 14k-line `SessionManager` relies on their real structure. The desktop typechecks the engine against
+  its real types on every build, so the code is checked, but only from the desktop. The folder becomes
+  checkable here as its types move into `src/contract/host-types.ts`.
+- **An SDK host must supply the class ports** (`LocalSessionStore`, `ViewEmissionManager`, `BusySessionTracker`)
+  and the prompt and workspace ports before it can run a `SessionManager` headless. The desktop supplies its
+  own. Implementing them for the SDK host is the next step, and it belongs to the integration work that runs
+  the desktop on the SDK host.
+- A few small helpers now exist both here and in `packages/permissions`. Part-1 ports for modules that later
+  moved (for example `model-manager`) could become direct imports.
