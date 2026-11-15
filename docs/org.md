@@ -43,7 +43,7 @@ Production writes are allowed under that identity. They are off unless the perso
 
 ## The extension
 
-The SDK host gives `@marshal/org` three things it cannot ask for itself: `hostId`, `hostKind` and `stateDir` (`<state>/org`, holding the ledgers and the rooms replica). They go under any configuration the manifest set. The onboarding default passes the manifest's `org.discovery`; `MARSHAL_ORG_URL` stands in until then.
+The SDK host gives `@marshal/org` three things it cannot ask for itself: `hostId`, `hostKind` and `stateDir` (`<state>/org`, holding the ledgers and the rooms replica). They go under any configuration the manifest set. Onboarding passes the manifest's `org.discovery` and `org.profile` (src/onboarding.ts `withOrgConfiguration`); `MARSHAL_ORG_URL` is the fallback for a host without a manifest.
 
 Other configuration fields: `tokenFile`, `workspaceId` (default `MARSHAL_ORG_WORKSPACE`, else the person's first workspace), `allowProductionOrg`, `live`, `start` (default true; tests use false and call the capabilities), `syncSeconds`, `rooms` (`false`, or `{apiBase, socketUrl, tokenFile?}` in place of the discovery document's), and `profile`.
 
