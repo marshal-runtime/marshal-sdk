@@ -202,3 +202,42 @@ The decisions:
 - `prepareKit` defaults (memory implies the Brain, code intelligence, principal claims, denials, prompt);
 - the broker denies the writes and defers everything else;
 - a real host with `kit: ["sessions"]` serves `sessions.search` and its prompt names it.
+
+## Skills from extensions
+
+An extension brings its skills with it. Its `runtime-extension.json` declares each skill folder as a catalog
+contribution:
+
+```json
+{ "contributes": { "catalog": ["skill:skills/lp-roles", "skill:skills/lp-review"] } }
+```
+
+- **The folder.** Each folder holds a `SKILL.md` with frontmatter `name` (lowercase, defaults to the folder name)
+  and `description`. Its other `.md` and `.txt` files are references.
+- **Not a declaration.** An entry `skill://...` is the id of a skill entry an extension registers in code, not a
+  folder.
+- **Why `contributes.catalog`.** Every released runtime accepts that key and ignores its strings, while it rejects
+  any unknown `contributes` key. So the same package installs on the desktop's pinned packs today.
+
+On a host:
+
+- **Search.** Every declared skill is a runtime_search `skill` entry `skill://<identity>/<name>`. Its action reads
+  the `SKILL.md` text, and `metadata.references` lists `skill://<identity>/<name>/<path>` for each reference.
+- **Read.** Sessions read a skill with the `mcp__marshal__runtime_read_resource {uri}` tool; code on the host uses
+  `host.readResource(uri)`.
+- **Prompt.** The session prompt gets a "Skills from installed extensions" section naming each skill, the extension
+  it came from and its URI. `host.skills` lists them.
+- **Refusals.** A missing `SKILL.md`, a missing description, or a bad or repeated name stops the host from starting,
+  as the runtime refuses such a package.
+
+The runtime reads the same declaration natively from agent-runtime-extensions (runtime PR "extensions: skills
+declared as skill: catalog contributions"), and there disable and remove take the skills out with the activation.
+The SDK host runs the desktop's pinned packs (host-72), which don't, so `src/extension-skills.ts` reads the
+declaration itself and registers the same entries and resources. It stands aside when the loaded runtime exports
+`readRuntimeExtensionSkills`. This host installs its extensions once at start, so there is no disable here.
+
+The desktop lists the same skills with the person's own skills and loads them with `getSkill`, marked with the
+extension they came from.
+
+Tests: `test/extension-skills.test.ts`, with a fixture extension carrying one skill and one reference, on the pinned
+packs.

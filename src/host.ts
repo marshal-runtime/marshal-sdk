@@ -6,6 +6,7 @@ import path from "node:path";
 import { createSdkMcpServer, query as claudeQuery, tool } from "@anthropic-ai/claude-agent-sdk";
 import { assembleAgentPrompt } from "@marshal/agent-runtime-prompt";
 import { createAllowAllPermissionBroker } from "@marshal/runtime";
+import * as runtimeExtensions from "@marshal/runtime/extensions";
 import { RUNTIME_EXTENSION_LIFECYCLE_SERVICE } from "@marshal/runtime/extensions";
 import {
   createAgentRuntime,
@@ -19,6 +20,7 @@ import { z } from "zod";
 import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
 import { createAgentProvider } from "./agent-provider.js";
 import desktopPlacements from "./desktop-placements.json" with { type: "json" };
+import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type ExtensionSkill } from "./extension-skills.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { startLinkServer, type LinkServer } from "./link/server.js";
 import { FileSessionStore, type SessionRecord } from "./session-store.js";
@@ -89,6 +91,10 @@ export interface MarshalHost {
   /** Call one runtime capability the way an agent would, and return its output. */
   invoke<T = unknown>(capability: string, input?: unknown, timeoutMs?: number): Promise<T>;
   search(query: string, limit?: number): Promise<unknown>;
+  /** Read a runtime resource (an extension skill `skill://<identity>/<name>`, its references, extension docs). */
+  readResource(uri: string): Promise<{ uri: string; mimeType?: string; text?: string }>;
+  /** Skills the installed extensions declare (`skill:` catalog contributions). */
+  readonly skills: readonly Omit<ExtensionSkill, "content" | "references">[];
   /** The system prompt a session of this host gets. */
   systemPrompt(): string | undefined;
   /** The link server, when the host was created with `link`. */
@@ -120,6 +126,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const kitOptions = normalizeKit(options.kit);
   const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath }) : undefined;
   const extensions = [...(kit?.extensions ?? []), ...(options.extensions ?? [])];
+  const extensionSkills = extensions.flatMap((extension) => readExtensionSkills(extension.packageRoot));
+  // Runtime packs that read `skill:` catalog contributions list these skills themselves.
+  const runtimeReadsSkills = "readRuntimeExtensionSkills" in runtimeExtensions;
   const context = { sessionId: hostSessionId, workspacePath };
 
   // Both are filled once the runtime exists; sessions only read them when a turn starts.
@@ -175,6 +184,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         authoredUiPromotion: false,
       }),
       ...(kit?.providerSources ?? []),
+      ...(extensionSkills.length && !runtimeReadsSkills ? [extensionSkillSource(extensionSkills)] : []),
     ],
   } as never);
   // The core kernel takes the caller's own invocation context, so the Brain sees the same principal.
@@ -214,7 +224,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     options.browser === false
       ? undefined
       : playwrightServer(typeof options.browser === "object" ? options.browser : {}, log);
-  prompt = marshalPrompt(guidance, browserServer !== undefined, log, kit?.promptSection);
+  const skillsSection = extensionSkillsPrompt(extensionSkills);
+  prompt = marshalPrompt(guidance, browserServer !== undefined, log, [
+    ...(kit?.promptSection ? [kit.promptSection] : []),
+    ...(skillsSection ? [skillsSection] : []),
+  ]);
 
   serversFor = (session: SessionRecord): Record<string, unknown> => {
     const adapter = adapterFor(session.id);
@@ -254,6 +268,22 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
             timeoutMs: z.number().int().min(1).max(EXEC_TIMEOUT_MS).optional(),
           },
           (args) => call("runtime_exec", args),
+        ),
+        tool(
+          "runtime_read_resource",
+          "Read a Marshal runtime resource by URI: an installed extension's skill (skill://<extension>/<name>) and the references it names, or a resource a runtime_search entry points to (action resource_read).",
+          { uri: z.string().min(1).max(2048) },
+          async ({ uri }) => {
+            try {
+              const read = (await adapter.readResource(uri)) as { contents: { uri: string; text?: string }[] };
+              return { content: read.contents.map((item) => ({ type: "text" as const, text: item.text ?? "" })) } as never;
+            } catch (error) {
+              return {
+                content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }],
+                isError: true,
+              } as never;
+            }
+          },
         ),
       ],
     });
@@ -317,6 +347,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     systemPrompt: () => prompt,
     invoke,
     search,
+    readResource: async (uri) => {
+      const read = (await hostAdapter.readResource(uri)) as { contents: { uri: string; mimeType?: string; text?: string }[] };
+      return read.contents[0]!;
+    },
+    skills: extensionSkills.map(({ content: _content, references: _references, ...skill }) => skill),
     ...(link ? { link: { url: link.url, port: link.port } } : {}),
     async dispose(): Promise<void> {
       await link?.close();
@@ -364,7 +399,7 @@ function marshalPrompt(
   extensionGuidance: readonly string[],
   browser: boolean,
   log: (line: string) => void,
-  kitSection?: { id: string; text: string },
+  sections: readonly { id: string; text: string }[] = [],
 ): string | undefined {
   try {
     return assembleAgentPrompt({
@@ -378,12 +413,16 @@ function marshalPrompt(
           description:
             "Run a capability ({targetType: 'operation', target, input}) or TypeScript that calls context.runtime.invoke ({targetType: 'inline_module', source, input}).",
         },
+        {
+          name: "mcp__marshal__runtime_read_resource",
+          description: "Read a runtime resource by URI: an extension's skill (skill://...) and its references.",
+        },
         ...(browser
           ? [{ name: "mcp__playwright__*", description: "A headless browser: open pages and local HTML files, resize, scroll, screenshot." }]
           : []),
       ],
       extraSections: [
-        ...(kitSection ? [kitSection] : []),
+        ...sections,
         ...(extensionGuidance.length
           ? [{ id: "extensions", text: `## Installed extensions\n\n${extensionGuidance.join("\n")}` }]
           : []),
