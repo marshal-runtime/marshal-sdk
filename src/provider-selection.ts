@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { QueryFn } from "./agent-port.js";
+import { readSecret } from "./credentials.js";
 import { createProviderQuery, PROVIDER_TOOLS } from "./provider-query.js";
 import {
   claudeAccountConfigDir,
@@ -247,8 +248,8 @@ export function marshalProviderTools(
 }
 
 function readApiKey(env: Record<string, string>, name: string): string {
-  const value = env[name]?.trim();
-  if (!value) throw new Error(`The API key variable ${name} is not set in the host environment.`);
+  const value = readSecret(name, env);
+  if (!value) throw new Error(`The API key variable ${name} is not set in the host environment (nor ${name}_FILE).`);
   return value;
 }
 

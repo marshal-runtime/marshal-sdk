@@ -92,6 +92,9 @@ export {
   type ConversationRoomRouteOptions,
 } from "./rooms-route.js";
 export { linkPersonRoute, readDecisions } from "./link/decisions.js";
+export { DEFAULT_KEY_ENV, providerKey, readSecret, requireProviderKey, type CredentialEnv, type KeyProvider, type ResolvedKey } from "./credentials.js";
+export { createProviderQuery, PROVIDER_TOOLS, type ProviderQueryOptions } from "./provider-query.js";
+export { PROVIDER_IDS, resolveProvider, type ProviderCredential, type ProviderId, type ProviderSelection, type ResolvedProvider } from "./provider-selection.js";
 export {
   FileSessionStore,
   type NativeSessionRef,
