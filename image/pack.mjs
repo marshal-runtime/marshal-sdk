@@ -48,6 +48,17 @@ if (args.manifest) {
     const spec = DEFAULT_EXTENSIONS.find((candidate) => candidate.identity === extension.identity);
     if (spec?.bundled) bundledAt.set(extension.packageRoot, spec.bundled);
   }
+  // A kit that asks for the Brain loads it itself, so it is not among the defaults; the installed SDK still needs its copy.
+  const kitParts = Array.isArray(resolved.kit) ? resolved.kit : (resolved.kit?.parts ?? []);
+  const brainSpec = DEFAULT_EXTENSIONS.find((candidate) => candidate.key === "brain");
+  const brainRoot = resolved.kit?.brain?.packageRoot ?? process.env[brainSpec?.env ?? "MARSHAL_SDK_BRAIN_PACKAGE"];
+  if ((kitParts.includes("brain") || kitParts.includes("memory")) && brainSpec?.bundled && ![...bundledAt.values()].includes(brainSpec.bundled)) {
+    if (!brainRoot || !fs.existsSync(path.join(brainRoot, "runtime-extension.json"))) {
+      throw new Error(`The manifest's kit asks for the Brain: set ${brainSpec.env} to a built @marshal/brain package to pack it.`);
+    }
+    args.extension.push(path.resolve(brainRoot));
+    bundledAt.set(path.resolve(brainRoot), brainSpec.bundled);
+  }
 }
 if (!args.extension.length) args.extension.push("/Users/omer/marshal-tracking/page-studio/out/package");
 
