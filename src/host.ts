@@ -4,7 +4,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import { createSdkMcpServer, query as claudeQuery, tool } from "@anthropic-ai/claude-agent-sdk";
-import { assembleAgentPrompt } from "@marshal/agent-runtime-prompt";
 import { createAllowAllPermissionBroker } from "@marshal/runtime";
 import * as runtimeExtensions from "@marshal/runtime/extensions";
 import { RUNTIME_EVENT_BUS } from "@marshal/runtime/events";
@@ -28,6 +27,7 @@ import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type 
 import { createForkToolsProvider } from "./fork-provider.js";
 import { DISABLED_NATIVE_TOOLS, NATIVE_SUBAGENT_ALLOWLIST } from "./native-tools.js";
 import { repositoryRulesPrompt } from "./repo-rules.js";
+import { createHostPrompts, sdkBaseLayer, type HostPromptOptions, type HostPrompts, type PromptLayer } from "./prompt.js";
 import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
@@ -110,6 +110,11 @@ export interface MarshalHostOptions {
   models?: ModelsConfig;
   /** Test hook: the HTTP client model services use. */
   modelsFetch?: typeof fetch;
+  /**
+   * Layers over the shared Marshal prompt: surface, role, soul, slots, added sections, session context, or a full
+   * override; `session` gives one session its own layer (docs/prompt.md).
+   */
+  prompt?: HostPromptOptions;
 }
 
 /** The org bridge without what the host supplies; `host` defaults to the host's id. */
@@ -166,8 +171,10 @@ export interface MarshalHost {
   readonly skills: readonly Omit<ExtensionSkill, "content" | "references">[];
   /** Each installed extension as it came up: identity, version, its capabilities and declared skills. */
   readonly extensions: readonly MarshalHostExtensionState[];
-  /** The system prompt a session of this host gets. */
-  systemPrompt(): string | undefined;
+  /** The system prompt a session of this host gets (a top-level session when none is named). */
+  systemPrompt(sessionId?: string): string | undefined;
+  /** Give one session its own prompt layer (soul, role, sections, context, override); undefined removes it. */
+  setSessionPrompt(sessionId: string, layer: PromptLayer | undefined): void;
   /** The link server, when the host was created with `link`. */
   readonly link?: { url: string; port: number };
   /** The org bridge, when the host was created with `org`. */
@@ -215,7 +222,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const context = { sessionId: hostSessionId, workspacePath };
 
   // Both are filled once the runtime exists; sessions only read them when a turn starts.
-  let prompt: string | undefined;
+  let prompts: HostPrompts | undefined;
   let serversFor: (session: SessionRecord) => Record<string, unknown> = () => ({});
   let automations: HostAutomations | undefined;
   // A test's own query runs every turn; otherwise Claude is the default provider.
@@ -233,7 +240,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     defaultModel: options.model ?? provider?.defaultModel ?? DEFAULT_MODEL,
     ...(options.reasoningEffort ? { defaultReasoningEffort: options.reasoningEffort } : {}),
     workspaceName: path.basename(workspacePath),
-    systemPrompt: () => prompt,
+    systemPrompt: (session) => prompts?.forSession(session),
     mcpServers: (session) => serversFor(session),
     log,
     onSessionEvent: (type, payload) => {
@@ -381,12 +388,16 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       : playwrightServer(typeof options.browser === "object" ? options.browser : {}, log);
   const skillsSection = extensionSkillsPrompt(extensionSkills);
   const rulesSection = repoRules ? repositoryRulesPrompt(workspacePath, options.provider?.id ?? "claude") : "";
-  prompt = marshalPrompt(guidance, browserServer !== undefined, log, [
-    ...(kit?.promptSection ? [kit.promptSection] : []),
-    forksPromptSection(),
-    ...(skillsSection ? [skillsSection] : []),
-    ...(rulesSection ? [{ id: "repository-rules", text: rulesSection }] : []),
-  ]);
+  prompts = createHostPrompts(
+    sdkBaseLayer({
+      browser: browserServer !== undefined,
+      extensionGuidance: guidance,
+      sections: [...(kit?.promptSection ? [kit.promptSection] : []), forksPromptSection(), ...(skillsSection ? [skillsSection] : [])],
+      ...(rulesSection ? { repoRules: rulesSection } : {}),
+    }),
+    options.prompt,
+    log,
+  );
 
   serversFor = (session: SessionRecord): Record<string, unknown> => {
     const adapter = adapterFor(session.id);
@@ -546,7 +557,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     sessions,
     agents,
     forks,
-    systemPrompt: () => prompt,
+    systemPrompt: (sessionId) => {
+      const session = sessionId ? sessions.get(sessionId) : undefined;
+      return prompts?.forSession(session ?? undefined);
+    },
+    setSessionPrompt: (sessionId, layer) => prompts?.setSessionLayer(sessionId, layer),
     invoke,
     search,
     readResource: async (uri) => {
@@ -611,42 +626,3 @@ function playwrightServer(browser: MarshalHostBrowser, log: (line: string) => vo
   }
 }
 
-/** Marshal agent prompt v2 on its unattended cloud surface, with what this host really holds. */
-function marshalPrompt(
-  extensionGuidance: readonly string[],
-  browser: boolean,
-  log: (line: string) => void,
-  sections: readonly { id: string; text: string }[] = [],
-): string | undefined {
-  try {
-    return assembleAgentPrompt({
-      core: { behavior: "v2", claudeTooling: "lean" },
-      surface: "cloud-headless",
-      role: "worker",
-      tools: [
-        { name: "mcp__marshal__runtime_search", description: "Find Marshal runtime capabilities and read their schemas." },
-        {
-          name: "mcp__marshal__runtime_exec",
-          description:
-            "Run a capability ({targetType: 'operation', target, input}) or TypeScript that calls context.runtime.invoke ({targetType: 'inline_module', source, input}).",
-        },
-        {
-          name: "mcp__marshal__runtime_read_resource",
-          description: "Read a runtime resource by URI: an extension's skill (skill://...) and its references.",
-        },
-        ...(browser
-          ? [{ name: "mcp__playwright__*", description: "A headless browser: open pages and local HTML files, resize, scroll, screenshot." }]
-          : []),
-      ],
-      extraSections: [
-        ...sections,
-        ...(extensionGuidance.length
-          ? [{ id: "extensions", text: `## Installed extensions\n\n${extensionGuidance.join("\n")}` }]
-          : []),
-      ],
-    }).content;
-  } catch (error) {
-    log(`Marshal prompt v2 could not be assembled (${error instanceof Error ? error.message : String(error)}); sessions use the backend's own prompt.`);
-    return undefined;
-  }
-}
