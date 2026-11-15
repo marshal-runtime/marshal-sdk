@@ -385,7 +385,11 @@ export async function pushToCloud(input: PushInput): Promise<PushResult> {
 
   // agent-sandbox's runner keeps PAGE_STUDIO_DIR as page-studio/ and the finished page as sandbox-page.html (the
   // baseline its next edit turn diffs against); page-run folders keep it as data/.
-  const sandboxLayout = Boolean(await readJson(`${root}/${STATE}/page-run.json`));
+  // Decided by where the run keeps its pages, not by page-run.json: the page generator's runs carry a run.json too and
+  // write page-run.json only at the end.
+  const sandboxLayout =
+    Boolean(await readJson(`${root}/${STATE}/page-run.json`)) ||
+    (await gcloud(["storage", "ls", `${root}/${STATE}/page-studio/pages/*.json`], { timeoutMs: 30_000 }).then((out) => out.trim().length > 0).catch(() => false));
   const studio = `${root}/${STATE}/${sandboxLayout ? "page-studio" : "data"}`;
   const doc: Row = { ...input.pageDoc, id: input.cloudPageId };
   const docFile = path.join(out, `${input.cloudPageId}.json`);
