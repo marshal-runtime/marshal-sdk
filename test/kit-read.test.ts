@@ -51,8 +51,8 @@ test("sessions.read opens a published sandbox session from the run state it name
   const cloud = tempStore("812");
   const published = seed(cloud.store, "agent-sandbox run 812 · state gs://bucket/run-812/agent/marshal-state/\n\nbuild the page");
   const objects = new Map<string, string>([
-    ["gs://bucket/run-812/agent/marshal-state/sessions/index.json", fs.readFileSync(path.join(cloud.root, "sessions", "index.json"), "utf8")],
-    [`gs://bucket/run-812/agent/marshal-state/sessions/${published.id}/transcript.jsonl`, fs.readFileSync(path.join(cloud.root, "sessions", published.id, "transcript.jsonl"), "utf8")],
+    ["gs://bucket/run-812/agent/marshal-state/host/sessions/index.json", fs.readFileSync(path.join(cloud.root, "sessions", "index.json"), "utf8")],
+    [`gs://bucket/run-812/agent/marshal-state/host/sessions/${published.id}/transcript.jsonl`, fs.readFileSync(path.join(cloud.root, "sessions", published.id, "transcript.jsonl"), "utf8")],
   ]);
   const asked: string[] = [];
   const provider = createSessionsProvider(own.store, undefined, {
@@ -69,10 +69,10 @@ test("sessions.read opens a published sandbox session from the run state it name
 
   const missing = (await out(provider.invoke("sessions.read", { sessionId: "nope", stateLocation: "gs://bucket/run-812/agent/marshal-state" }, context))) as Read;
   assert.equal(missing.found, false);
-  assert.deepEqual(missing.tried, ["this host", "gs://bucket/run-812/agent/marshal-state/sessions"]);
+  assert.deepEqual(missing.tried, ["this host", "gs://bucket/run-812/agent/marshal-state/state/sessions", "gs://bucket/run-812/agent/marshal-state/host/sessions", "gs://bucket/run-812/agent/marshal-state/sessions"]);
   await assert.rejects(async () => provider.invoke("sessions.read", { sessionId: "../etc" }, context));
   await assert.rejects(async () => provider.invoke("sessions.read", { sessionId: "x", stateLocation: "/etc" }, context));
-  assert.ok(asked.every((url) => url.startsWith("gs://bucket/run-812/agent/marshal-state/sessions/")));
+  assert.ok(asked.every((url) => url.startsWith("gs://bucket/run-812/agent/marshal-state/")));
 });
 
 test("cloud hits from sessions.search carry the run and state a published session names", async () => {
