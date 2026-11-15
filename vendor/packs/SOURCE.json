@@ -1,7 +1,7 @@
 {
   "desktop": {
-    "commit": "f779c44e9daa78a40bef82ad122d673d50b81e82",
-    "branch": "chore/runtime-pack-host-88"
+    "commit": "36452cec25536725976879362a4c0bb202a8e628",
+    "branch": "main"
   },
   "runtimeSource": {
     "commit": "66a12c4be145da8be67ba0a43f9a5a230481f856",

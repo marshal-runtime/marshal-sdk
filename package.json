@@ -14,6 +14,7 @@
     "image": "node image/prepare.mjs",
     "pack": "node image/pack.mjs",
     "vendor:packs": "node scripts/vendor-packs.mjs",
+    "check:packs": "node build.mjs && node scripts/check-packs.mjs",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

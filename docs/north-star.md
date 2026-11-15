@@ -9,7 +9,7 @@ are to this repository's `main` (2026-11-15).
 
 | Concern | Desktop | SDK | Shared already |
 | --- | --- | --- | --- |
-| Runtime kernel, extensions, capabilities | `electron/marshal-runtime/*` over the `@marshal/runtime` + `agent-runtime-*` packs | `MarshalHost` (`src/host.ts`) over the same packs | Yes: same packages, separate pins |
+| Runtime kernel, extensions, capabilities | `electron/marshal-runtime/*` over the `@marshal/runtime` + `agent-runtime-*` packs | `MarshalHost` (`src/host.ts`) over the same packs | Yes: the same tarballs, checked by `check:packs` |
 | Agent execution | `ISessionBackend` per runtime (`electron/backend/{claude,copilot,codex,cursor,gateway}`), driven by `SessionManager` (`electron/sessions.ts`, ~14.7k lines) | `ClaudeAgentPort` (`src/agent-port.ts`), Claude only | No |
 | Session storage | `LocalSessionStore` + `sessions-index.json`, partitioned by `runtimeId` | `FileSessionStore` (`src/session-store.ts`): `index.json`, `transcript.jsonl`, `events.jsonl`, native ref | No (the desktop imports SDK conversations through `importClaudeTranscript`) |
 | Marshal tools (`marshal.tool.*`) | `electron/self-tools.ts` (~4.3k lines) | `src/agent-provider.ts`, `forks.ts`, `automations.ts`, `decisions.ts`, `kit/` | Names and shapes, not code |
@@ -35,8 +35,11 @@ are to this repository's `main` (2026-11-15).
 ## In order
 
 1. **One pack pin.** The desktop and the SDK resolve the same `@marshal/runtime` and `agent-runtime-*` builds from one
-   manifest (today: desktop `.marshal-runtime-packs/archives/*.tgz`, SDK `package.json` 0.1.0). Without this, a
-   capability can behave differently in the two shells.
+   manifest. Done: `scripts/vendor-packs.mjs --from <desktop>` copies the desktop's pinned tarballs into
+   `vendor/packs` (source commit and hashes in `SOURCE.json`); `npm run check:packs -- --desktop <checkout> [--ref
+   origin/main]` and `test/pack-pins.test.ts` (with `MARSHAL_DESKTOP_DIR`, or a sibling `marshal` checkout) fail
+   when the two differ by archive name or bytes. Each pack keeps its own build number (runtime host-88 next to claude
+   host-78 is the desktop's own pin set, not drift).
 2. **Converge the session record.** Add `runtimeId`, `backendOrigin`, `workspace` and `effort` to the SDK
    `SessionRecord`; write a two-way mapping to the desktop index row with tests on real rows from both. Desktop keeps
    its files; nothing moves yet.
