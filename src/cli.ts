@@ -12,6 +12,8 @@ const USAGE = `marshal-sdk <command> [options]
               --capability <name> [--input <json | @file>]
   agent     Start one Marshal session with a task and print its last message.
               --task <text | @file> [--name <title>]
+  page-run  One Page Studio page from an agent-sandbox page-agent input folder, in its run contract.
+              --input <dir> --out <dir> --logs <dir> --state <dir> [--fake] (page-run --help for the rest)
   sessions  List or search the sessions a host wrote.
               --state <dir> [--search <words>] [--run <id>] [--transcript <session id>]
   serve     Serve a host over the link (docs/link.md) so another Marshal can watch and drive it.
@@ -99,6 +101,11 @@ function hostOptions(args: Arguments): MarshalHostOptions {
 }
 
 async function main(): Promise<void> {
+  if (process.argv[2] === "page-run") {
+    const { pageRunCommand } = await import("./page-run.js");
+    process.exitCode = await pageRunCommand(process.argv.slice(3));
+    return;
+  }
   const args = parse(process.argv.slice(2));
   if (args.command === "sessions") {
     const root = path.join(path.resolve(required(args, "state")), "sessions");

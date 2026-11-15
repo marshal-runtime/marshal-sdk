@@ -4,3 +4,4 @@ dist
 .image
 *.log
 .pulled
+.pack
