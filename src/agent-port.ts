@@ -385,6 +385,15 @@ export class ClaudeAgentPort {
     return this.live.has(agentId) ? this.summary(agentId) : null;
   }
 
+  /** Switch an idle agent to another model for its next turns (each turn reads the model from the session record). */
+  setModel(agentId: string, model: string, reasoningEffort?: string): AgentSummary {
+    if (this.agent(agentId).running) {
+      throw Object.assign(new Error(`Agent ${agentId} is running; switch its model once it is idle.`), { code: "invalid_request" });
+    }
+    this.options.store.update(agentId, { model, ...(reasoningEffort ? { reasoningEffort } : {}) });
+    return this.summary(agentId);
+  }
+
   /** Stops every session; resolves when their backends have exited. */
   async dispose(): Promise<void> {
     for (const agent of this.live.values()) {

@@ -1,226 +1,141 @@
 import { randomUUID } from "node:crypto";
 
 import { RUNTIME_PROTOCOL_VERSION, type CapabilityProvider, type InvocationContext } from "@marshal/runtime";
+import {
+  createRuntimeAgentProvider,
+  MARSHAL_RUNTIME_AGENT_REASONING_EFFORTS,
+  type MarshalRuntimeAgentPort,
+  type MarshalRuntimeAgentSummary,
+} from "@marshal/runtime/delegation";
 
-import type { ClaudeAgentPort } from "./agent-port.js";
+import type { AgentSummary, ClaudeAgentPort } from "./agent-port.js";
 import type { MessageSender } from "./session-messages.js";
 import type { FileSessionStore } from "./session-store.js";
 
-const PREFIX = "marshal.agent.";
 const VERSION = "1.0.0";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const string = (maxLength: number) => ({ type: "string", minLength: 1, maxLength });
 const agentId = string(256);
-
-/**
- * Field names and shapes follow the desktop's provider (electron/marshal-runtime/agent-provider.ts), so an
- * extension written against the desktop calls the same capabilities here. Desktop-only launch fields
- * (worktrees, souls, runtime accounts) are accepted and ignored: a headless host has one backend and one checkout.
- */
-const AGENT = {
-  type: "object",
-  additionalProperties: false,
-  required: ["id", "name", "state", "createdAt", "updatedAt"],
-  properties: {
-    id: { type: "string" },
-    name: { type: "string" },
-    state: { enum: ["running", "idle", "failed"] },
-    createdAt: { type: "string" },
-    updatedAt: { type: "string" },
-    model: { type: "string" },
-    reasoningEffort: { type: "string" },
-    workspaceName: { type: "string" },
-    sessionId: { type: "string" },
-    usage: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        inputTokens: { type: "number" },
-        outputTokens: { type: "number" },
-        cachedInputTokens: { type: "number" },
-        costUsd: { type: "number" },
-        modelTurns: { type: "number" },
-      },
-    },
-  },
-} as const;
-const MESSAGE = {
-  type: "object",
-  additionalProperties: false,
-  required: ["id", "role", "content", "timestamp"],
-  properties: {
-    id: { type: "string" },
-    role: { enum: ["user", "assistant", "system"] },
-    content: { type: "string" },
-    timestamp: { type: "string" },
-    error: { type: "boolean" },
-  },
-} as const;
 const output = (required: string[], properties: Record<string, unknown>) => ({
   type: "object",
   additionalProperties: false,
   required,
   properties,
 });
-const OUTPUTS: Record<string, object> = {
-  launch: output(["agent"], { agent: AGENT }),
-  send: output(["agent", "accepted"], { agent: AGENT, accepted: { type: "boolean" } }),
-  transcript: output(["agent", "messageCount", "showing", "messages"], {
-    agent: AGENT,
-    messageCount: { type: "integer" },
-    showing: { type: "integer" },
-    messages: { type: "array", items: MESSAGE },
-    result: { type: "string" },
-  }),
-  wait: output(["state", "agent"], {
-    state: { enum: ["completed", "timeout"] },
-    agent: AGENT,
-    result: { type: "string" },
-    structuredOutput: {},
-  }),
-  cancel: output(["agent"], { agent: AGENT }),
-  list: output(["agents"], { agents: { type: "array", items: AGENT } }),
-  get: output(["found"], { found: { type: "boolean" }, agent: AGENT }),
-};
 
-const OPERATIONS: Record<string, { title: string; description: string; risk: "low" | "medium" | "high"; input: object }> = {
-  launch: {
-    title: "Launch an ordinary Marshal child agent",
-    description:
-      "Start a Marshal session on this host with a task. Returns at once with the agent; read it with marshal.agent.transcript or marshal.agent.wait.",
-    risk: "high",
-    input: {
-      type: "object",
-      required: ["task", "idempotencyKey"],
-      properties: {
-        task: string(32_768),
-        idempotencyKey: string(256),
-        name: string(256),
-        model: string(256),
-        reasoningEffort: { enum: EFFORTS },
-        systemPrompt: string(200_000),
-        attachments: { type: "array", maxItems: 20, items: string(4096) },
-      },
-    },
-  },
-  send: {
-    title: "Send a message to a launched agent",
-    description: "Queue a message for the agent's next turn, or interrupt its running turn with it.",
-    risk: "high",
-    input: {
-      type: "object",
-      required: ["agentId", "message"],
-      properties: { agentId, message: string(200_000), deliveryMode: { enum: ["queue", "interrupt"] } },
-    },
-  },
-  transcript: {
-    title: "Read a launched agent's transcript",
-    description: "The agent's state, how many messages it has, its latest messages and its last result.",
-    risk: "low",
-    input: {
-      type: "object",
-      required: ["agentId"],
-      properties: { agentId, limit: { type: "integer", minimum: 1, maximum: 200 } },
-    },
-  },
-  wait: {
-    title: "Wait for a launched agent to finish its work",
-    description: "Resolves when the agent is idle with nothing queued, or at the timeout.",
-    risk: "low",
-    input: {
-      type: "object",
-      required: ["agentId"],
-      properties: { agentId, timeoutMs: { type: "integer", minimum: 1, maximum: 300_000 } },
-    },
-  },
-  cancel: {
-    title: "Cancel a launched agent",
-    description: "Stops the agent's running turn and drops what was queued for it.",
-    risk: "high",
-    input: { type: "object", required: ["agentId"], properties: { agentId } },
-  },
-  list: {
-    title: "List the agents launched on this host",
-    description: "Every agent of this run with its state.",
-    risk: "low",
-    input: { type: "object", properties: {} },
-  },
-  get: {
-    title: "Read one launched agent",
-    description: "The agent's summary; found is false when this host does not know it.",
-    risk: "low",
-    input: { type: "object", required: ["agentId"], properties: { agentId } },
-  },
-};
-
+/**
+ * `marshal.agent.*` is the runtime's own provider (@marshal/runtime/delegation): the desktop's names, schemas,
+ * permissions and errors, so an extension written against the desktop calls the same capabilities here. This host
+ * registers its Claude Agent SDK sessions as the port. Desktop-only launch fields (worktrees, souls, runtime accounts,
+ * allowedTools, repository agents) are accepted and ignored: a headless host has one backend and one checkout.
+ */
 export function createAgentProvider(
   port: ClaudeAgentPort,
   knownSession: (sessionId: string | undefined) => boolean,
 ): CapabilityProvider {
-  const descriptors = Object.entries(OPERATIONS).map(([operation, spec]) => ({
-    protocolVersion: RUNTIME_PROTOCOL_VERSION,
-    name: `${PREFIX}${operation}`,
-    version: VERSION,
-    title: spec.title,
-    description: spec.description,
-    tags: ["marshal", "agent", "session"],
-    inputSchema: spec.input,
-    outputSchema: OUTPUTS[operation],
-    permissions: [{ permission: `${PREFIX}${operation}`, risk: spec.risk }],
-  }));
-  const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
-  return {
-    id: "marshal.agent-orchestration",
-    version: VERSION,
-    list: () => descriptors,
-    get: (name: string) => byName.get(name),
-    invoke: async (name: string, value: unknown, context: InvocationContext) => {
-      const input = (value ?? {}) as Record<string, any>;
-      const caller = callerSessionId(context);
-      switch (name.slice(PREFIX.length)) {
-        case "launch":
-          return {
-            output: {
-              agent: port.launch({
-                task: text(input.task, "task"),
-                idempotencyKey: text(input.idempotencyKey, "idempotencyKey"),
-                ...(typeof input.name === "string" ? { name: input.name } : {}),
-                ...(typeof input.model === "string" ? { model: input.model } : {}),
-                ...(typeof input.reasoningEffort === "string" ? { reasoningEffort: input.reasoningEffort } : {}),
-                ...(typeof input.systemPrompt === "string" ? { systemPrompt: input.systemPrompt } : {}),
-                ...(Array.isArray(input.attachments) ? { attachments: input.attachments as string[] } : {}),
-                ...(knownSession(caller) ? { parentId: caller } : {}),
-              }),
-            },
-          };
-        case "send":
-          return {
-            output: {
-              agent: port.send(
-                text(input.agentId, "agentId"),
-                text(input.message, "message"),
-                input.deliveryMode === "interrupt" ? "interrupt" : "queue",
-              ),
-              accepted: true,
-            },
-          };
-        case "transcript":
-          return { output: port.transcript(text(input.agentId, "agentId"), input.limit) };
-        case "wait":
-          return { output: await port.wait(text(input.agentId, "agentId"), input.timeoutMs) };
-        case "cancel":
-          return { output: { agent: port.cancel(text(input.agentId, "agentId")) } };
-        case "list":
-          return { output: { agents: port.list() } };
-        case "get": {
-          const agent = port.get(text(input.agentId, "agentId"));
-          return { output: agent ? { found: true, agent } : { found: false } };
-        }
-        default:
-          throw Object.assign(new Error(`Unknown capability ${name}.`), { code: "not-found" });
-      }
+  return createRuntimeAgentProvider(sessionAgentPort(port, knownSession), {
+    // The host itself (host.invoke, a schedule, the link) calls without a session and acts as the host.
+    resolveScope: (context) => {
+      const named = context.metadata?.marshalWorkspaceName;
+      return {
+        sessionId: callerSessionId(context) ?? `host:${port.hostId}`,
+        workspaceName: typeof named === "string" && named.trim() ? named.trim() : "workspace",
+      };
     },
-  } as unknown as CapabilityProvider;
+  });
+}
+
+/**
+ * The runtime's agent port over this host's sessions. Every agent on the host is visible to every caller (one
+ * tenant per host); a launch from a known session records it as the parent.
+ */
+function sessionAgentPort(
+  port: ClaudeAgentPort,
+  knownSession: (sessionId: string | undefined) => boolean,
+): MarshalRuntimeAgentPort {
+  return {
+    async launch(request) {
+      if (request.sessionId) {
+        return agentSummary(port.send(request.sessionId, request.task, "queue"));
+      }
+      return agentSummary(
+        port.launch({
+          task: request.task,
+          idempotencyKey: request.idempotencyKey,
+          ...(request.name ? { name: request.name } : {}),
+          ...(request.model ? { model: request.model } : {}),
+          ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+          ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
+          ...(request.attachments ? { attachments: request.attachments } : {}),
+          ...(knownSession(request.scope.sessionId) ? { parentId: request.scope.sessionId } : {}),
+        }),
+      );
+    },
+    async list() {
+      return port.list().map(agentSummary);
+    },
+    async get(_scope, id) {
+      const agent = port.get(id);
+      return agent ? agentSummary(agent) : null;
+    },
+    async send(_scope, id, message, deliveryMode) {
+      return { agent: agentSummary(port.send(id, message, deliveryMode)), accepted: true };
+    },
+    async transcript(_scope, id, limit) {
+      const transcript = port.transcript(id, limit);
+      return {
+        agent: agentSummary(transcript.agent),
+        messageCount: transcript.messageCount,
+        showing: transcript.showing,
+        messages: transcript.messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          timestamp: message.timestamp,
+          ...(message.error ? { error: true } : {}),
+        })),
+        ...(transcript.result !== undefined ? { result: transcript.result } : {}),
+      };
+    },
+    async wait(_scope, id, options) {
+      const waited = await port.wait(id, options?.timeoutMs);
+      return {
+        state: waited.state,
+        agent: agentSummary(waited.agent),
+        ...(waited.result !== undefined ? { result: waited.result } : {}),
+      };
+    },
+    async cancel(_scope, id) {
+      return agentSummary(port.cancel(id));
+    },
+    async setModel(_scope, id, model, reasoningEffort) {
+      return agentSummary(port.setModel(id, model, reasoningEffort));
+    },
+  };
+}
+
+/** The runtime's agent shape: a failed turn reads as idle, with the error message in its transcript. */
+function agentSummary(agent: AgentSummary): MarshalRuntimeAgentSummary {
+  const effort = MARSHAL_RUNTIME_AGENT_REASONING_EFFORTS.find((value) => value === agent.reasoningEffort);
+  return {
+    id: agent.id,
+    name: agent.name,
+    state: agent.state === "running" ? "running" : "idle",
+    createdAt: agent.createdAt,
+    updatedAt: agent.updatedAt,
+    ...(agent.model ? { model: agent.model } : {}),
+    ...(effort ? { reasoningEffort: effort } : {}),
+    ...(agent.workspaceName ? { workspaceName: agent.workspaceName } : {}),
+    ...(agent.sessionId ? { sessionId: agent.sessionId } : {}),
+    usage: {
+      inputTokens: agent.usage.inputTokens,
+      outputTokens: agent.usage.outputTokens,
+      cachedInputTokens: agent.usage.cachedInputTokens,
+      costUsd: agent.usage.costUsd,
+      // The runtime's usage object is open; the SDK's own round-trip count rides along.
+      ...(agent.usage.modelTurns ? { modelTurns: agent.usage.modelTurns } : {}),
+    },
+  };
 }
 
 /** The calling session: the runtime puts the tool adapter's trusted session id in the invocation scope. */
