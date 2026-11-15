@@ -24,6 +24,7 @@
     "@marshal/agent-runtime-prompt": "file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-83.tgz",
     "@marshal/runtime": "file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz",
     "@modelcontextprotocol/sdk": "1.30.0",
+    "@openai/agents": "0.22.0",
     "@openai/codex": "0.162.1",
     "@playwright/mcp": "0.0.68",
     "playwright-core": "1.59.0-alpha-1771104257000",

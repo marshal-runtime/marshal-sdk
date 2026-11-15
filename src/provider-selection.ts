@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 import type { QueryFn } from "./agent-port.js";
-import { readSecret } from "./credentials.js";
+import { readSecret, requireProviderKey } from "./credentials.js";
+import { createOpenAIAgentsQuery } from "./openai-agents-query.js";
+import type { ModelProvider } from "@openai/agents";
 import { createProviderQuery, PROVIDER_TOOLS } from "./provider-query.js";
 import {
   claudeAccountConfigDir,
@@ -26,7 +28,7 @@ import {
 
 export { PROVIDER_TOOLS };
 
-export const PROVIDER_IDS = ["claude", "codex", "cursor"] as const;
+export const PROVIDER_IDS = ["claude", "openai", "codex", "cursor"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 /** Which model provider runs a host's sessions, and on whose credentials (docs/providers.md). */
@@ -38,7 +40,7 @@ export interface ProviderSelection {
    * environment exactly as given).
    */
   account?: string;
-  /** Run on an API key read from this environment variable instead of a signed-in subscription. */
+  /** Run on an API key read from this environment variable instead of a signed-in subscription. OpenAI always runs on a key: default OPENAI_API_KEY. */
   apiKeyEnv?: string;
   /** Overrides the credential home: CLAUDE_CONFIG_DIR, CODEX_HOME, or the folder holding Cursor's credential store. */
   home?: string;
@@ -77,6 +79,8 @@ export interface ResolveProviderOptions {
     claude?: (options: ClaudeClientFactoryOptions) => RuntimeClientFactory;
     codex?: (options: CodexClientFactoryOptions) => RuntimeClientFactory;
     cursor?: (options: CursorClientFactoryOptions) => RuntimeClientFactory;
+    /** The OpenAI Agents SDK model provider for a key. */
+    openai?: (options: { apiKey: string }) => ModelProvider;
   };
   log?: (line: string) => void;
 }
@@ -92,6 +96,23 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
   }
   if (selection.account && selection.apiKeyEnv) {
     throw new Error("Choose an account or an API key for a provider, not both.");
+  }
+  if (selection.id === "openai") {
+    // The OpenAI Agents SDK runs on the OpenAI API: an API key, never a ChatGPT login (that is the codex provider).
+    if (selection.account || selection.home) throw new Error("The openai provider runs on an API key (apiKeyEnv, default OPENAI_API_KEY), not an account or home.");
+    const { key, source } = requireProviderKey("openai", { env: options.env, ...(selection.apiKeyEnv ? { keyEnv: selection.apiKeyEnv } : {}) });
+    const modelProvider = options.factories?.openai?.({ apiKey: key });
+    return {
+      id: "openai",
+      credential: "api-key",
+      env: options.env,
+      query: Object.assign(
+        createOpenAIAgentsQuery({ apiKey: key, ...(modelProvider ? { modelProvider } : {}), ...(options.log ? { log: options.log } : {}) }),
+        { dispose: async () => undefined },
+      ),
+      defaultModel: "",
+      description: `provider openai (Agents SDK): API key from ${source}`,
+    };
   }
   const homeDir = options.homeDir ?? os.homedir();
   const dataDirs = options.desktopDataDirs ?? [path.join(homeDir, ".marshal"), path.join(homeDir, ".marshal-dev")];

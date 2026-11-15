@@ -1,7 +1,7 @@
 # Providers: one provider layer for the SDK and the Marshal desktop
 
-A host's sessions run on Claude, Codex or Cursor, on a signed-in subscription or an API key. The provider code is
-the same code the Marshal desktop runs: `packages/providers/src` here is the source, and the desktop vendors it
+A host's sessions run on Claude (subscription or API key), OpenAI through the OpenAI Agents SDK (API key), Codex or
+Cursor. The Claude, Codex and Cursor provider code is the same code the Marshal desktop runs: `packages/providers/src` here is the source, and the desktop vendors it
 byte for byte at `packages/marshal-providers/src`, pinned by commit and hash in `SOURCE.json`. A session that works in
 a local harness works the same way in production and in the desktop.
 
@@ -19,9 +19,9 @@ as given, as before.
 
 | Field | Meaning |
 |---|---|
-| `id` | `claude`, `codex` or `cursor` |
+| `id` | `claude`, `openai`, `codex` or `cursor` |
 | `account` | An account from the Marshal desktop's registry (Settings, Accounts), e.g. `omer-max`. It uses the same credential home the desktop uses. |
-| `apiKeyEnv` | Run on an API key read from this environment variable. A key never goes in the manifest. |
+| `apiKeyEnv` | Run on an API key read from this environment variable (or the file `<name>_FILE` names). A key never goes in the manifest. `openai` always runs on a key: default `OPENAI_API_KEY`. |
 | `home` | Overrides the credential home: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or the folder holding Cursor's credential store (a container's mounted login). |
 | `engine` | Claude only: `agent-sdk` (default) or `client` (the desktop's Claude client). |
 
@@ -35,12 +35,31 @@ that isn't set.
 |---|---|---|
 | Claude | `CLAUDE_CONFIG_DIR=~/.marshal/marshal-claude-accounts/<id>`, with `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` removed | `ANTHROPIC_API_KEY` from `apiKeyEnv` |
 | Codex | `CODEX_HOME=~/.marshal/marshal-codex-accounts/<id>`; without an account, `~/.marshal/marshal-codex` | A private `CODEX_HOME` under the host's state, signed in with the key once per client |
+| OpenAI | None: the Agents SDK runs on the OpenAI API (a ChatGPT login is the `codex` provider) | `OPENAI_API_KEY`, or `apiKeyEnv` |
 | Cursor | The account's credential store under the desktop's data folder (`~/.marshal`, or `~/.marshal-dev` when the login lives there) | `CURSOR_API_KEY` with an empty private store, so the key is the one in use |
 
 The registry is read from `marshal-settings.json` (`runtimeAccounts`) in `~/.marshal` and `~/.marshal-dev`, without
 writing to it. The desktop's default account is not adopted: without `account`, a host keeps its environment.
 
-## How a turn runs
+Every key is read through `src/credentials.ts` (`readSecret`, `providerKey`, `requireProviderKey`): `NAME`, then the
+file `NAME_FILE` names. Model services (docs/models.md) read their keys the same way.
+
+## OpenAI: the Agents SDK
+
+`provider: {"id": "openai"}` runs each turn with `@openai/agents` (src/openai-agents-query.ts) on the Responses API.
+
+- A session's native id is its last response id. The next turn continues from it (`previousResponseId`), and a fork
+  continues from the parent's, so forks work. Forking at an earlier message (`resumeSessionAt`) needs Claude.
+- Tools: the marshal runtime tools as function tools; the Agents SDK's `shell` and `apply_patch` tools, run by the host
+  in the session's working directory (`localTools: false` leaves them out); stdio and HTTP MCP servers such as the
+  browser.
+- Marshal's prompt is the agent's instructions. Images in a prompt become `input_image` parts. A launch's
+  `outputFormat` JSON schema is the output type, and its parsed result is the structured output.
+- Usage counts input, output and cached tokens. Cost is not reported (0).
+- Tracing to OpenAI's trace viewer is off.
+- With no model set, the Agents SDK's default model is used (`OPENAI_DEFAULT_MODEL` overrides it).
+
+## How a turn runs on Codex and Cursor
 
 The agent port's `query` is `createProviderQuery` (src/provider-query.ts), a `QueryFn` over the providers'
 `RuntimeClient`.
