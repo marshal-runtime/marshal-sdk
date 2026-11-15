@@ -6,7 +6,7 @@ import { build } from "esbuild";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const sources = ["src", "test"].flatMap((directory) =>
-  readdirSync(path.join(root, directory))
+  readdirSync(path.join(root, directory), { recursive: true })
     .filter((name) => name.endsWith(".ts"))
     .map((name) => path.join(root, directory, name)),
 );

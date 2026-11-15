@@ -19,6 +19,7 @@ import { z } from "zod";
 import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
 import { createAgentProvider } from "./agent-provider.js";
 import desktopPlacements from "./desktop-placements.json" with { type: "json" };
+import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { FileSessionStore, type SessionRecord } from "./session-store.js";
 
 const HARNESS_ID = "marshal-sdk";
@@ -39,6 +40,11 @@ export interface MarshalHostOptions {
   /** Host-private folder outside the workspace: runtime state and the session store. */
   stateRoot: string;
   extensions?: readonly MarshalHostExtension[];
+  /**
+   * Zyg's shared knowledge for every session: `["brain", "memory", "sessions"]` (docs/kit.md). Read-only
+   * unless the kit options turn a write on.
+   */
+  kit?: KitSelection;
   /** One run of this host; every session it starts carries it. Defaults to a new id. */
   runId?: string;
   /** Which machine or sandbox this is, as other Marshals will show it. */
@@ -94,7 +100,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     runId,
     host: options.host ?? { id: HARNESS_ID, kind: "local" },
   });
-  const extensions = options.extensions ?? [];
+  const kitOptions = normalizeKit(options.kit);
+  const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath }) : undefined;
+  const extensions = [...(kit?.extensions ?? []), ...(options.extensions ?? [])];
   const context = { sessionId: hostSessionId, workspacePath };
 
   // Both are filled once the runtime exists; sessions only read them when a turn starts.
@@ -117,10 +125,15 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     protectedLifecycleResultRoot: privateRoot,
     stateDirectory: `.marshal/runtime/${createHash("sha256").update(HARNESS_ID).digest("hex").slice(0, 16)}`,
     identity: { harnessId: HARNESS_ID },
-    principal: { id: `${HARNESS_ID}:${runId}`, kind: "agent" },
+    principal: {
+      id: `${HARNESS_ID}:${runId}`,
+      kind: "agent",
+      ...(kit && Object.keys(kit.claims).length ? { claims: kit.claims } : {}),
+    },
     // An unattended host has nobody to approve; what a run may do is decided by what is installed on it.
-    permissionBroker: createAllowAllPermissionBroker(),
-    codeIntelligence: false,
+    permissionBroker: kit?.permissionBroker ?? createAllowAllPermissionBroker(),
+    // The Brain extension requires the code-intelligence service.
+    codeIntelligence: kit?.codeIntelligence ?? false,
     extensions: extensions.length
       ? {
           allowedRoots: extensions.map((extension) => extension.packageRoot),
@@ -144,8 +157,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         extensionAuthoring: false,
         authoredUiPromotion: false,
       }),
+      ...(kit?.providerSources ?? []),
     ],
   } as never);
+  // The core kernel takes the caller's own invocation context, so the Brain sees the same principal.
+  kit?.bind((runtime as unknown as { core: never }).core);
 
   const guidance: string[] = [];
   try {
@@ -179,7 +195,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     options.browser === false
       ? undefined
       : playwrightServer(typeof options.browser === "object" ? options.browser : {}, log);
-  prompt = marshalPrompt(guidance, browserServer !== undefined, log);
+  prompt = marshalPrompt(guidance, browserServer !== undefined, log, kit?.promptSection);
 
   serversFor = (session: SessionRecord): Record<string, unknown> => {
     const adapter = adapterFor(session.id);
@@ -281,7 +297,12 @@ function playwrightServer(browser: MarshalHostBrowser, log: (line: string) => vo
 }
 
 /** Marshal agent prompt v2 on its unattended cloud surface, with what this host really holds. */
-function marshalPrompt(extensionGuidance: readonly string[], browser: boolean, log: (line: string) => void): string | undefined {
+function marshalPrompt(
+  extensionGuidance: readonly string[],
+  browser: boolean,
+  log: (line: string) => void,
+  kitSection?: { id: string; text: string },
+): string | undefined {
   try {
     return assembleAgentPrompt({
       core: { behavior: "v2", claudeTooling: "lean" },
@@ -298,9 +319,12 @@ function marshalPrompt(extensionGuidance: readonly string[], browser: boolean, l
           ? [{ name: "mcp__playwright__*", description: "A headless browser: open pages and local HTML files, resize, scroll, screenshot." }]
           : []),
       ],
-      extraSections: extensionGuidance.length
-        ? [{ id: "extensions", text: `## Installed extensions\n\n${extensionGuidance.join("\n")}` }]
-        : [],
+      extraSections: [
+        ...(kitSection ? [kitSection] : []),
+        ...(extensionGuidance.length
+          ? [{ id: "extensions", text: `## Installed extensions\n\n${extensionGuidance.join("\n")}` }]
+          : []),
+      ],
     }).content;
   } catch (error) {
     log(`Marshal prompt v2 could not be assembled (${error instanceof Error ? error.message : String(error)}); sessions use the backend's own prompt.`);
