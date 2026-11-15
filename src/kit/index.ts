@@ -6,11 +6,22 @@ import type { FileSessionStore } from "../session-store.js";
 import { brainConfiguration, brainPackageRoot, type BrainKitOptions } from "./brain.js";
 import { kernelCall, type KernelLike } from "./call.js";
 import { createMemoryProvider, type MemoryKitOptions } from "./memory.js";
-import { createSessionsProvider, type SessionsKitOptions } from "./sessions.js";
+import { createSessionsProvider, publishOptions, type SessionsKitOptions } from "./sessions.js";
 
 export * from "./brain.js";
 export { createMemoryProvider, type MemoryKitOptions, type RecalledMemory } from "./memory.js";
-export { createSessionsProvider, mergeByRank, sharePayload, type FoundSession, type SessionsKitOptions } from "./sessions.js";
+export {
+  createSessionsProvider,
+  mergeByRank,
+  publishOptions,
+  shareAccess,
+  shareParts,
+  sharePayload,
+  type FoundSession,
+  type SessionsKitOptions,
+  type SessionsPublishOptions,
+  type ShareAudience,
+} from "./sessions.js";
 export { kernelCall, type CapabilityCall, type KernelLike } from "./call.js";
 
 export type KitPart = "brain" | "memory" | "sessions";
@@ -60,6 +71,8 @@ export interface PreparedKit {
   /** Capabilities the broker refuses on this host. */
   denied: ReadonlySet<string>;
   promptSection?: { id: string; text: string };
+  /** The host shares each session to the Brain's session index after every finished turn (`kit.sessions.publish`). */
+  publishes: boolean;
   /** Hand the kit the runtime's kernel once it exists; kit capabilities call the Brain through it. */
   bind(kernel: KernelLike): void;
 }
@@ -86,7 +99,8 @@ export function prepareKit(input: {
   const parts = new Set<KitPart>([...requested, ...(brainOn ? (["brain"] as const) : [])]);
   const brain = kit.brain ?? {};
   const memoryWrites = parts.has("memory") && kit.memory?.writes === true;
-  const ingest = parts.has("sessions") && kit.sessions?.ingest === true;
+  const publishes = parts.has("sessions") && brainOn && publishOptions(kit.sessions) !== undefined;
+  const ingest = (parts.has("sessions") && kit.sessions?.ingest === true) || publishes;
   const feedback = brain.feedback === true;
 
   let kernel: KernelLike | undefined;
@@ -112,7 +126,7 @@ export function prepareKit(input: {
     providerSources.push(() => provider);
   }
   if (parts.has("sessions")) {
-    const provider = createSessionsProvider(input.sessions, call, { ingest });
+    const provider = createSessionsProvider(input.sessions, call, { ...kit.sessions, ingest });
     providerSources.push(() => provider);
   }
 
@@ -136,6 +150,7 @@ export function prepareKit(input: {
     permissionBroker: kitPermissionBroker(denied),
     denied,
     promptSection: kitPrompt(parts, { memoryWrites, ingest }),
+    publishes,
     bind(next) {
       kernel = next;
     },

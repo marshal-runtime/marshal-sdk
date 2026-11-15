@@ -231,6 +231,10 @@ export class FileSessionStore {
     return limit === undefined ? all : all.slice(-limit);
   }
 
+  events(id: string): { seq: number; at: string; event: unknown }[] {
+    return readJsonLines<{ seq: number; at: string; event: unknown }>(path.join(this.root, id, EVENTS_FILE));
+  }
+
   appendEvent(id: string, event: unknown): void {
     const count = (this.counts.get(id) ?? 0) + 1;
     this.counts.set(id, count);

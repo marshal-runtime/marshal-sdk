@@ -121,3 +121,24 @@ test("frontmatter: quoted, folded and literal values", () => {
     note: "a\nb",
   });
 });
+
+test("a second host on the same workspace reinstalls an extension the persisted registry already holds", async () => {
+  const root = scratch();
+  const packageRoot = skillPackage(root, { "skills/brief-check/SKILL.md": SKILL }, ["skill:skills/brief-check"]);
+  const workspacePath = path.join(root, "workspace");
+  fs.mkdirSync(workspacePath);
+  for (const run of [1, 2]) {
+    const host = await createMarshalHost({
+      workspacePath,
+      stateRoot: path.join(root, `state-${run}`),
+      extensions: [{ packageRoot }],
+      browser: false,
+      query: () => (async function* () {})(),
+    });
+    try {
+      assert.deepEqual(host.extensions.map((extension) => extension.identity), ["@test/brief-skills"], `host ${run}`);
+    } finally {
+      await host.dispose();
+    }
+  }
+});

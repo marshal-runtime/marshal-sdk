@@ -36,6 +36,7 @@ import { repositoryRulesPrompt } from "./repo-rules.js";
 import { createHostPrompts, sdkBaseLayer, type HostPromptOptions, type HostPrompts, type PromptLayer } from "./prompt.js";
 import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
+import { SessionPublisher } from "./kit/publisher.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
 import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
 import { createLinkCallProvider } from "./link/call-provider.js";
@@ -252,6 +253,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   let prompts: HostPrompts | undefined;
   let serversFor: (session: SessionRecord) => Record<string, unknown> = () => ({});
   let automations: HostAutomations | undefined;
+  let publisher: SessionPublisher | undefined;
   // A test's own query runs every turn; otherwise Claude is the default provider.
   const selection = options.provider ?? (options.query ? undefined : ({ id: "claude" } as const));
   const hostEnv = options.env ?? definedEnv(process.env);
@@ -277,6 +279,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     onSessionEvent: (type, payload) => {
       telemetry(type, { sessionId: payload.sessionId, state: payload.state, ...(payload.parentId ? { parentId: payload.parentId } : {}) });
       automations?.emit(type, payload).catch((error: unknown) => log(`automations on ${type}: ${String(error)}`));
+      if (typeof payload.sessionId === "string") publisher?.schedule(payload.sessionId);
     },
   });
   automations = new HostAutomations({
@@ -578,6 +581,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     }
     return response.result?.output as T;
   };
+  if (kit?.publishes) publisher = new SessionPublisher((sessionId) => invoke("sessions.share", { sessionId }), log);
   const search = async (query: string, limit = 10): Promise<unknown> => {
     const result = (await hostAdapter.callTool("runtime_search", { query, limit }, undefined as never)) as {
       structuredContent?: unknown;
@@ -681,6 +685,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       eventSubscription?.dispose();
       lifecycleSubscription?.dispose();
       settingsSubscription?.();
+      await publisher?.flush();
       await hostAutomations.stop();
       await decisions.stop();
       await link?.close();

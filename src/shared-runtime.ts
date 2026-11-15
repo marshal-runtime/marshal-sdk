@@ -128,8 +128,22 @@ export async function createSharedRuntime(options: SharedRuntimeOptions): Promis
     lifecycle: bindings.lifecycle,
     serviceContainer: options.serviceContainer,
     stateRoot: bindings.stateRoot,
-    installLocalExtension: (packageRoot, configuration) =>
-      host.installLocalExtension(packageRoot, undefined, configuration && typeof configuration === "object" ? { configuration } : undefined),
+    installLocalExtension: async (packageRoot, configuration) => {
+      const install = () =>
+        host.installLocalExtension(packageRoot, undefined, configuration && typeof configuration === "object" ? { configuration } : undefined);
+      try {
+        return await install();
+      } catch (error) {
+        // The runtime's extension registry persists under its root (by default in the workspace), so a second host on
+        // the same workspace (page-edit reopening a run, a check after a proof) finds it installed: replace it, so the
+        // package and configuration this host was given are the ones that run.
+        if ((error as { code?: unknown })?.code !== "ALREADY_INSTALLED") throw error;
+        const identity = (JSON.parse(fs.readFileSync(path.join(packageRoot, "runtime-extension.json"), "utf8")) as { identity?: unknown }).identity;
+        if (typeof identity !== "string") throw error;
+        await host.removeExtension(identity);
+        return install();
+      }
+    },
     dispose: () => host.dispose(),
   };
 }
