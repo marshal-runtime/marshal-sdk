@@ -1,0 +1,14 @@
+{
+  "name": "@marshal/sdk",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A Marshal host without the desktop app: the portable runtime, extensions, Marshal sessions on the Claude Agent SDK.",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "bin": { "marshal-sdk": "dist/src/cli.js" },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs && node --test \"dist/test/*.test.js\""
+  },
+  "engines": { "node": ">=22.14.0" }
+}
