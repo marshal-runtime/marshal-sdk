@@ -21,6 +21,7 @@ import { z } from "zod";
 import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
 import { createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
 import { createAutomationsProvider, HostAutomations } from "./automations.js";
+import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decisions.js";
 import desktopPlacements from "./desktop-placements.json" with { type: "json" };
 import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type ExtensionSkill } from "./extension-skills.js";
 import { createForkToolsProvider } from "./fork-provider.js";
@@ -81,6 +82,8 @@ export interface MarshalHostOptions {
   link?: MarshalHostLinkOptions;
   /** Schedule- and event-based runs (docs/kit.md, "Automations"). */
   automations?: MarshalHostAutomationOptions;
+  /** Where decisions, questions and gaps go to people, and where their answers come from (docs/kit.md). */
+  routes?: readonly PersonRoute[];
 }
 
 export interface MarshalHostAutomationOptions {
@@ -136,6 +139,8 @@ export interface MarshalHost {
   readonly link?: { url: string; port: number };
   /** Automations: definitions, the scheduler behind runtime.schedules.*, and tick() for a fake clock. */
   readonly automations: HostAutomations;
+  /** The decisions record of this host's sessions and its person routes (addRoute). */
+  readonly decisions: DecisionDesk;
   /** An event happened on this host; event automations for its type run. */
   emit(event: string, payload?: Record<string, unknown>): Promise<{ automationId: string; sessionId: string }[]>;
   dispose(): Promise<void>;
@@ -201,6 +206,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     log,
   });
   const hostAutomations = automations;
+  const decisions = new DecisionDesk(sessions, agents, log);
   const forks = new SessionForks(agents, sessions, { log });
   const runtime = await createAgentRuntime({
     workspacePath,
@@ -232,6 +238,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       () => createSessionToolsProvider(agents, sessions),
       () => createForkToolsProvider(forks),
       () => createAutomationsProvider(hostAutomations),
+      () => createDecisionsProvider(decisions),
       createRuntimeBuiltinsSource({
         typescript: true,
         artifacts: true,
@@ -302,6 +309,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     void hostAutomations.emit(event.type, payload).catch((error: unknown) => log(`automations on ${event.type}: ${String(error)}`));
   });
   if (options.automations?.start !== false) hostAutomations.start();
+  for (const route of options.routes ?? []) await decisions.addRoute(route);
 
   const adapterFor = (sessionId: string) =>
     createRuntimeToolAdapter({
@@ -450,10 +458,12 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     skills: extensionSkills.map(({ content: _content, references: _references, ...skill }) => skill),
     ...(link ? { link: { url: link.url, port: link.port } } : {}),
     automations: hostAutomations,
+    decisions,
     emit: (event, payload = {}) => hostAutomations.emit(event, payload),
     async dispose(): Promise<void> {
       eventSubscription?.dispose();
       await hostAutomations.stop();
+      await decisions.stop();
       await link?.close();
       forks.dispose();
       await agents.dispose();

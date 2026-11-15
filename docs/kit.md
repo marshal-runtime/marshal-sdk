@@ -384,3 +384,39 @@ Tests: `test/automations.test.ts`, with a fake clock and no model:
 - event matching, the payload in the prompt, `marshal.events.emit`, and `session.idle` without self-triggering;
 - a `runtime.schedules.create` `agent.wake` waking a session;
 - an automation waking its target session.
+
+## Decisions, questions and asking a person
+
+A session keeps the record a person reviews later and can ask that person a question. The names are the desktop's:
+
+- **`marshal.tool.recordDecision {kind: decision|question|gap, text, defaultTaken?, ref?, options?, to?}`** records
+  the entry as it happens. A question stays `open` until someone answers it.
+- **`marshal.tool.askUser {question, answers: [{title, description?}], recommendedIndex?, to?}`** asks a question with
+  2 to 5 answers. The call returns at once with the `questionId`. The answer arrives later as a message in the asking
+  session, from the person: `Message from Omer:` / `Answer to your question "<question>" (<id>): <option>`. The
+  transcript message carries `from: {kind: "person", name, personId}`. The first answer wins.
+- **`marshal.decisions.list {sessionId?, runId?, kind?, status?}`** reads the record back.
+- **`marshal.decisions.answer {questionId, choice?, text?, by?, route?}`** answers a question. A remote Marshal answers
+  through the link with it.
+
+**Storage.** Entries are stored with the run, in the session store folder (`<stateRoot>/sessions/decisions.jsonl`, one
+line per entry, delivery or answer). Each entry carries `runId`, `host`, `sessionId` and the session title. An open
+question survives a host restart, and its answer still reaches the stored session.
+
+**Routes.** A `PersonRoute {id, deliver(entry), start?(sink), stop?()}` carries every entry to people. A route that
+hears answers calls `sink({questionId, choice?, text?, by, route})`. Routes come from `createMarshalHost({routes})` or
+`host.decisions.addRoute(route)`; `to: [routeId]` narrows one entry to some routes. This package has two:
+
+- `FilePersonRoute(folder)`: entries land in `outbox/<id>.json`, and answers are read from `inbox/*.json`
+  (`{questionId, choice?, text?, by?}`) and moved to `inbox/done/`;
+- `TestPersonRoute`: keeps `sent` and has an `answer()` that plays the person.
+
+WhatsApp (Marley) and a specific Marshal instance (the link) are routes still to be written against the same
+interface. With no route, entries are recorded and the ask says that nobody has seen the question yet.
+
+Tests: `test/decisions.test.ts`:
+
+- record and ask through a session's own MCP server, deliveries on a test route, the answer as a person's message, and
+  the refusals: answered twice, not a question, a bad option, an unknown route;
+- the file route's outbox, inbox, done round trip;
+- an open question answered after a host restart through `marshal.decisions.answer`.

@@ -34,6 +34,16 @@ export {
   type AutomationTrigger,
 } from "./automations.js";
 export {
+  createDecisionsProvider,
+  DecisionDesk,
+  FilePersonRoute,
+  TestPersonRoute,
+  type DecisionEntry,
+  type DecisionKind,
+  type InboundAnswer,
+  type PersonRoute,
+} from "./decisions.js";
+export {
   isLocalAddress,
   senderLine,
   type DeliveryMode,
