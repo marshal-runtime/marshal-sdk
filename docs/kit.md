@@ -289,6 +289,51 @@ Tests: `test/session-messages.test.ts`:
 - host level: sessions act through their own `marshal` MCP server. A session starts a lane, launches a child with a
   parent, and the lane messages its launcher back; both are found and read.
 
+## Forks
+
+A fork is the desktop's fork subagent on this host: a new session that continues its parent's exact conversation
+(same history, same prompt cache), takes its task as the first new message, works beside the parent, and reports its
+final message back when it goes idle. Code: `src/forks.ts` (`SessionForks`, on `host.forks`), `src/fork-provider.ts`
+(the capabilities), hooks in `src/agent-port.ts`. It uses `@marshal/agent-runtime-claude`, the session-file code the
+desktop and zyg-agents already share (`forkClaudeSessionFile`, `forkCallResult`, `forkLaunchPrompt`).
+
+| Capability (desktop name)                                                                | What it does                                                                                                   |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `marshal.tool.forkSubagents {tasks: [{task, name?, model?, reasoningEffort?}], sessionId?}` | Up to 8 forks; returns `{groupId, forks, mode}`. `sessionId` lets the host or an extension fork a session.     |
+| `marshal.tool.listSubagents`                                                             | The caller's children (launched and forked): state, fork group, queued messages, cost.                         |
+| `marshal.tool.messageSubagent {sessionId, message, deliveryMode?, replaceQueued?, waitForResponse?}` | Steer one child; `interrupt` stops its turn and delivers now. Refuses a session that is not the caller's child. |
+| `marshal.tool.messageForks {message, groupId?, deliveryMode?}`                           | The same message to every fork of the caller (or of one call).                                                 |
+| `marshal.tool.listForkSiblings`                                                          | In a fork: the other forks of its call, their tasks, state and latest message.                                 |
+| `marshal.tool.messageParent {message, deliveryMode?}`                                    | In a child: reach the parent now (default interrupt).                                                          |
+
+Cancel a fork with `marshal.agent.cancel {agentId}`. Sessions read these names in their prompt ("Forks, lanes and
+messages on this host").
+
+**How a fork starts.**
+
+- **From inside the parent's turn** (the parent called `forkSubagents` through `runtime_exec`): the parent's Claude
+  session file is copied with the open fork call answered for the child ("Forked. You are fork 1 of 2 (session …)"),
+  other open calls answered as not part of the fork, and the child resumes that copy. `mode: "file-copy"`.
+- **From outside** (the host, an extension, another session) while the parent is idle: the child's first turn resumes
+  the parent's native session with `forkSession: true`, so Claude writes the copy. `mode: "backend-fork"`.
+
+Either way the child keeps the parent's model, effort and system prompt unless its task names another model or
+effort. Its first message is the desktop's assignment ("Fork assignment 1/2 … Your task: … Sibling forks working
+beside you …"). The session record carries `parentId` and `fork {groupId, index, total, task}`.
+
+**Reporting.** Each time a fork's queue runs dry, its parent gets the desktop's notice as a queued message:
+`[Marshal notice] Subagent "<name>" is idle and ready for follow-up.\n\nIts final message:\n<reply>`, and wakes on it.
+A fork that failed reports `stopped on an error`; a fork whose last turn was cancelled does not report. Forks are
+read from the store, so after a host restart they are still listed, steering resumes them by their native id, and
+their reports still reach the parent.
+
+**Not built.** A fork on another backend or account (the desktop starts those from a transcript): this host has one
+Claude backend. `cancelQueuedSubagentMessages` (use `replaceQueued`). Per-fork permission modes (the host has none).
+
+Tests: `test/forks.test.ts` (fake backend, no model): backend fork with `resume` + `forkSession` and the assignment,
+the report queued into the parent and answered, the file copy from inside a running turn, list / siblings / interrupt
+steer / message every fork / refusals, cancelled and failed forks, a restart, and the capabilities on a real host.
+
 ## Automations: schedule- and event-based runs
 
 **What the runtime gives.** The scheduling builtin is a facade. `runtime.schedules.{create,get,list,update,pause,

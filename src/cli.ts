@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { MarshalHostOptions } from "./host.js";
+import { ONBOARDING_USAGE, onboardingCommand, withManifest } from "./onboarding-cli.js";
 import { startLinkServer } from "./link/server.js";
 import { FileSessionStore } from "./session-store.js";
 
@@ -23,7 +24,10 @@ const USAGE = `marshal-sdk <command> [options]
               [--bind <address>] (default 127.0.0.1) [--port <n>] (default 7781) [--files name=<dir>]...
               [--page-studio-dir <dir>] serves the pages a run made there (default: $PAGE_STUDIO_DIR on a live host)
 
-Host options (exec, agent):
+${ONBOARDING_USAGE}
+Host options (exec, agent, serve):
+  --manifest <file>          the marshal-sdk.json to load (default: $MARSHAL_SDK_MANIFEST, else ./marshal-sdk.json)
+  --cache <dir>              where registry and .tgz extensions are unpacked
   --workspace <dir>          where sessions work (required)
   --state <dir>              host-private folder outside the workspace (required)
   --extension <packageRoot>  a built runtime extension to load; repeatable
@@ -106,6 +110,10 @@ async function main(): Promise<void> {
     process.exitCode = await pageRunCommand(process.argv.slice(3));
     return;
   }
+  if (process.argv[2] === "init" || process.argv[2] === "extensions") {
+    process.exitCode = await onboardingCommand(process.argv[2], process.argv.slice(3));
+    return;
+  }
   const args = parse(process.argv.slice(2));
   if (args.command === "sessions") {
     const root = path.join(path.resolve(required(args, "state")), "sessions");
@@ -126,7 +134,7 @@ async function main(): Promise<void> {
     process.exitCode = args.command ? 2 : 0;
     return;
   }
-  const options = hostOptions(args);
+  const options = await withManifest(hostOptions(args), manifestFlags(args));
   const { createMarshalHost } = await import("./host.js");
   const host = await createMarshalHost(options);
   try {
@@ -153,6 +161,13 @@ async function main(): Promise<void> {
   } finally {
     await host.dispose();
   }
+}
+
+function manifestFlags(args: Arguments): { manifest?: string; cache?: string; model?: string; effort?: string } {
+  const pick = (name: string) => one(args, name);
+  return Object.fromEntries(
+    (["manifest", "cache", "model", "effort"] as const).flatMap((name) => (pick(name) ? [[name, pick(name)!]] : [])),
+  );
 }
 
 function linkToken(args: Arguments): string {
@@ -199,7 +214,7 @@ async function serve(args: Arguments): Promise<void> {
     log(`store-only link serving ${sessionsRoot} on ${server.url}`);
     close = () => server.close();
   } else {
-    const options = hostOptions(args);
+    const options = await withManifest(hostOptions(args), manifestFlags(args));
     // Loaded only for a live host: store-only serving needs no runtime or model SDK installed.
     const { createMarshalHost } = await import("./host.js");
     const pageStudioDir = one(args, "page-studio-dir");
@@ -231,7 +246,9 @@ main().then(
   // The runtime keeps timers alive; a finished command has nothing left to wait for.
   () => process.exit(process.exitCode ?? 0),
   (error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+    // A manifest or package problem is the user's to fix: its message names what and where, a stack adds nothing.
+    const plain = error instanceof Error && error.name === "OnboardingError";
+    process.stderr.write(`${plain ? `marshal-sdk: ${error.message}` : error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
     process.exit(1);
   },
 );

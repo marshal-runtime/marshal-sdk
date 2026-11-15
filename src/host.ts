@@ -23,7 +23,10 @@ import { createAgentProvider, createSessionToolsProvider } from "./agent-provide
 import { createAutomationsProvider, HostAutomations } from "./automations.js";
 import desktopPlacements from "./desktop-placements.json" with { type: "json" };
 import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type ExtensionSkill } from "./extension-skills.js";
+import { createForkToolsProvider } from "./fork-provider.js";
+import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
+import { readPackageManifest } from "./onboarding.js";
 import { startLinkServer, type LinkServer } from "./link/server.js";
 import { FileSessionStore, type SessionRecord } from "./session-store.js";
 
@@ -38,6 +41,16 @@ export interface MarshalHostExtension {
   /** Absolute path of a built runtime extension package (the folder holding runtime-extension.json). */
   packageRoot: string;
   configuration?: unknown;
+}
+
+export interface MarshalHostExtensionState {
+  identity: string;
+  version: string;
+  packageRoot: string;
+  status: string;
+  health: string;
+  capabilities: string[];
+  skills: string[];
 }
 
 export interface MarshalHostOptions {
@@ -106,6 +119,8 @@ export interface MarshalHost {
   readonly runId: string;
   readonly sessions: FileSessionStore;
   readonly agents: ClaudeAgentPort;
+  /** Forks of this host's sessions: fork, list, message; each fork reports to its parent when it goes idle. */
+  readonly forks: SessionForks;
   /** Call one runtime capability the way an agent would, and return its output. */
   invoke<T = unknown>(capability: string, input?: unknown, timeoutMs?: number): Promise<T>;
   search(query: string, limit?: number): Promise<unknown>;
@@ -113,6 +128,8 @@ export interface MarshalHost {
   readResource(uri: string): Promise<{ uri: string; mimeType?: string; text?: string }>;
   /** Skills the installed extensions declare (`skill:` catalog contributions). */
   readonly skills: readonly Omit<ExtensionSkill, "content" | "references">[];
+  /** Each installed extension as it came up: identity, version, its capabilities and declared skills. */
+  readonly extensions: readonly MarshalHostExtensionState[];
   /** The system prompt a session of this host gets. */
   systemPrompt(): string | undefined;
   /** The link server, when the host was created with `link`. */
@@ -148,6 +165,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const kitOptions = normalizeKit(options.kit);
   const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath }) : undefined;
   const extensions = [...(kit?.extensions ?? []), ...(options.extensions ?? [])];
+  // Fails before anything starts when a listed package is missing or is not an extension, naming it.
+  const packages = extensions.map((extension) => readPackageManifest(extension.packageRoot));
   const extensionSkills = extensions.flatMap((extension) => readExtensionSkills(extension.packageRoot));
   // Runtime packs that read `skill:` catalog contributions list these skills themselves.
   const runtimeReadsSkills = "readRuntimeExtensionSkills" in runtimeExtensions;
@@ -182,6 +201,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     log,
   });
   const hostAutomations = automations;
+  const forks = new SessionForks(agents, sessions, { log });
   const runtime = await createAgentRuntime({
     workspacePath,
     protectedLifecycleResultRoot: privateRoot,
@@ -210,6 +230,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     providerSources: [
       () => createAgentProvider(agents, (id) => id !== undefined && sessions.get(id) !== undefined),
       () => createSessionToolsProvider(agents, sessions),
+      () => createForkToolsProvider(forks),
       () => createAutomationsProvider(hostAutomations),
       createRuntimeBuiltinsSource({
         typescript: true,
@@ -232,18 +253,36 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
 
   const guidance: string[] = [];
   const installedExtensions: { identity: string; version: string }[] = [];
+  const extensionStates: MarshalHostExtensionState[] = [];
   try {
     const lifecycle = runtime.serviceContainer.tryGet(RUNTIME_EXTENSION_LIFECYCLE_SERVICE);
-    for (const extension of extensions) {
+    for (const [index, extension] of extensions.entries()) {
       if (!lifecycle) throw new Error("This runtime was composed without extension support.");
-      const materializer = await createRuntimeHostMaterializer({ allowedRoots: [extension.packageRoot] });
-      const request = await materializer.materialize({ packageRoot: extension.packageRoot });
-      const installed = await lifecycle.install(request, { configuration: extension.configuration } as never);
+      const declared = packages[index]!;
+      let installed: { identity: string };
+      try {
+        const materializer = await createRuntimeHostMaterializer({ allowedRoots: [extension.packageRoot] });
+        const request = await materializer.materialize({ packageRoot: extension.packageRoot });
+        installed = await lifecycle.install(request, { configuration: extension.configuration } as never);
+      } catch (error) {
+        throw new Error(`Extension ${declared.identity}@${declared.version} (${extension.packageRoot}) could not be installed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
       const record = lifecycle.get(installed.identity);
       if (record?.health !== "healthy" || record.status !== "enabled") {
-        throw new Error(`Extension ${installed.identity} did not activate: ${JSON.stringify(record?.blockReasons)}`);
+        throw new Error(
+          `Extension ${installed.identity}@${declared.version} (${extension.packageRoot}) did not activate: status ${record?.status ?? "missing"}, health ${record?.health ?? "unknown"}, reasons ${JSON.stringify(record?.blockReasons ?? [])}`,
+        );
       }
-      log(`extension ${installed.identity}@${record.version} active`);
+      extensionStates.push({
+        identity: installed.identity,
+        version: String(record.version),
+        packageRoot: extension.packageRoot,
+        status: String(record.status),
+        health: String(record.health),
+        capabilities: declared.capabilities,
+        skills: declared.skills,
+      });
+      log(`extension ${installed.identity}@${record.version} ${record.status}, ${record.health}: ${declared.capabilities.length} capabilities, ${declared.skills.length} skills`);
       installedExtensions.push({ identity: installed.identity, version: String(record.version) });
       if (record.agentGuidance) guidance.push(`${installed.identity}: ${JSON.stringify(record.agentGuidance)}`);
     }
@@ -279,6 +318,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const skillsSection = extensionSkillsPrompt(extensionSkills);
   prompt = marshalPrompt(guidance, browserServer !== undefined, log, [
     ...(kit?.promptSection ? [kit.promptSection] : []),
+    forksPromptSection(),
     ...(skillsSection ? [skillsSection] : []),
   ]);
 
@@ -398,6 +438,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     runId,
     sessions,
     agents,
+    forks,
     systemPrompt: () => prompt,
     invoke,
     search,
@@ -405,6 +446,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       const read = (await hostAdapter.readResource(uri)) as { contents: { uri: string; mimeType?: string; text?: string }[] };
       return read.contents[0]!;
     },
+    extensions: extensionStates,
     skills: extensionSkills.map(({ content: _content, references: _references, ...skill }) => skill),
     ...(link ? { link: { url: link.url, port: link.port } } : {}),
     automations: hostAutomations,
@@ -413,6 +455,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       eventSubscription?.dispose();
       await hostAutomations.stop();
       await link?.close();
+      forks.dispose();
       await agents.dispose();
       await runtime.dispose();
     },

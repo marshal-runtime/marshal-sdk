@@ -8,6 +8,21 @@ export {
   type QueryFn,
 } from "./agent-port.js";
 export { callerSessionId, createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
+export { createForkToolsProvider } from "./fork-provider.js";
+export { SessionForks, forkReport, type ForkGroupResult, type ForkTask, type SubagentSummary } from "./forks.js";
+export { manifestPath, withManifest } from "./onboarding-cli.js";
+export {
+  MANIFEST_FILE,
+  OnboardingError,
+  readManifest,
+  readPackageManifest,
+  resolveManifest,
+  writeManifest,
+  type ManifestExtension,
+  type ManifestRegistry,
+  type ResolvedExtension,
+  type SdkManifest,
+} from "./onboarding.js";
 export {
   AUTOMATION_CHECK_TASK,
   AUTOMATION_RUN_TASK,

@@ -1,0 +1,107 @@
+$ marshal-sdk init --model claude-opus-5-5 --effort high --extension <page-studio package> --extension <sdk sessions viewer> --extension ./fixture
+{
+  "written": "/private/tmp/fork-onboard/proof/marshal-sdk.json",
+  "extensions": [
+    "/Users/omer/marshal-tracking/page-studio/out/package",
+    "/Users/omer/marshal/marshal-sdk/viewer/out/package",
+    "fixture"
+  ]
+}
+
+$ marshal-sdk extensions add ./fixture --config-env token=FIXTURE_TOKEN
+{
+  "updated": "fixture",
+  "identity": "@test/onboard-fixture",
+  "manifest": "/private/tmp/fork-onboard/proof/marshal-sdk.json"
+}
+
+$ cat marshal-sdk.json
+{
+  "version": 1,
+  "model": "claude-opus-5-5",
+  "reasoningEffort": "high",
+  "extensions": [
+    {
+      "path": "/Users/omer/marshal-tracking/page-studio/out/package"
+    },
+    {
+      "path": "/Users/omer/marshal/marshal-sdk/viewer/out/package"
+    },
+    {
+      "path": "fixture",
+      "configuration": {
+        "token": "${env:FIXTURE_TOKEN}"
+      }
+    }
+  ]
+}
+
+$ marshal-sdk extensions list
+{
+  "manifest": "/private/tmp/fork-onboard/proof/marshal-sdk.json",
+  "model": "claude-opus-5-5",
+  "extensions": [
+    {
+      "entry": "/Users/omer/marshal-tracking/page-studio/out/package",
+      "source": "path",
+      "identity": "@zyg/page-studio",
+      "version": "0.1.0",
+      "capabilities": 37,
+      "skills": [
+        "lp-copywriting",
+        "lp-visual-world",
+        "lp-assets",
+        "lp-design",
+        "lp-roles",
+        "lp-review",
+        "studio-convert-run"
+      ]
+    },
+    {
+      "entry": "/Users/omer/marshal/marshal-sdk/viewer/out/package",
+      "source": "path",
+      "identity": "@omer/marshal-sdk-sessions",
+      "version": "0.2.7",
+      "capabilities": 14,
+      "skills": []
+    },
+    {
+      "entry": "fixture",
+      "source": "path",
+      "configuration": {
+        "token": "${env:FIXTURE_TOKEN}"
+      },
+      "identity": "@test/onboard-fixture",
+      "version": "1.0.0",
+      "capabilities": 0,
+      "skills": [
+        "brief-check"
+      ]
+    }
+  ]
+}
+
+$ PAGE_STUDIO_DIR=<empty temp dir> FIXTURE_TOKEN=<set> marshal-sdk exec --workspace ws --state state --no-browser --capability pagestudio.pages
+[marshal-sdk] manifest /private/tmp/fork-onboard/proof/marshal-sdk.json: @zyg/page-studio@0.1.0, @omer/marshal-sdk-sessions@0.2.7, @test/onboard-fixture@1.0.0
+[marshal-sdk] extension @zyg/page-studio@0.1.0 enabled, healthy: 37 capabilities, 7 skills
+[marshal-sdk] extension @omer/marshal-sdk-sessions@0.2.7 enabled, healthy: 14 capabilities, 0 skills
+[marshal-sdk] extension @test/onboard-fixture@1.0.0 enabled, healthy: 0 capabilities, 1 skills
+{
+  "result": {
+    "pages": [
+      {
+        "id": "rawdog--new-page-7n8n5",
+        "title": "RAWDOG · One agent + critic",
+        "brand": "RAWDOG",
+        "version": 1,
+        "updatedAt": "1970-01-01T00:00:00.000Z",
+        "notesOpen": 0
+      }
+    ],
+    "open": null
+  }
+}
+
+$ (FIXTURE_TOKEN unset) marshal-sdk exec ... --capability pagestudio.pages
+marshal-sdk: fixture configuration: environment variable FIXTURE_TOKEN is not set.
+exit 0

@@ -12,7 +12,10 @@ import {
   type SessionEnvelope,
   type SessionTransport,
 } from "./session-messages.js";
-import type { FileSessionStore, SessionRecord, TranscriptMessage } from "./session-store.js";
+import type { FileSessionStore, SessionFork, SessionRecord, TranscriptMessage } from "./session-store.js";
+
+/** How a session's queued work ended: idle with the last turn's answer (none when it was cancelled), or failed. */
+export type SessionOutcome = { state: "idle"; reply?: string } | { state: "failed"; error: string };
 
 /** The slice of the Claude Agent SDK's `query` this port relies on; tests pass a fake. */
 export type QueryFn = (params: { prompt: unknown; options: Record<string, unknown> }) => AsyncIterable<
@@ -46,6 +49,11 @@ export interface AgentLaunchRequest {
   /** Who the task comes from, recorded on the first transcript message. */
   from?: MessageSender;
   labels?: Record<string, string>;
+  /** The session id to use (a fork's id is written into the conversation it continues). Default: a new id. */
+  sessionId?: string;
+  /** Where the conversation starts: a native session to resume, or one the first turn forks (resume + forkSession). */
+  native?: { sessionId?: string; forkOf?: string };
+  fork?: SessionFork;
 }
 
 export interface AgentTranscript {
@@ -93,6 +101,8 @@ interface LiveAgent {
   abort?: AbortController;
   running: boolean;
   lastResult?: string;
+  /** The answer of the last turn that ran, undefined when it was cancelled. */
+  lastReply?: string;
   systemPrompt?: string;
   idle: Promise<void>;
 }
@@ -116,8 +126,35 @@ export class ClaudeAgentPort {
   private readonly live = new Map<string, LiveAgent>();
   private readonly launches = new Map<string, string>();
   private readonly transports = new Map<string, SessionTransport>();
+  private readonly settledListeners = new Set<(sessionId: string, outcome: SessionOutcome) => void>();
 
   constructor(private readonly options: AgentPortOptions) {}
+
+  /** Called each time a session's queue runs dry or it fails (forks report to their parent this way). */
+  onSettled(listener: (sessionId: string, outcome: SessionOutcome) => void): () => void {
+    this.settledListeners.add(listener);
+    return () => this.settledListeners.delete(listener);
+  }
+
+  /** The system prompt a launch gave this session in place of the host's (a fork keeps its parent's). */
+  systemPromptOf(agentId: string): string | undefined {
+    return this.live.get(agentId)?.systemPrompt;
+  }
+
+  /** Whether a turn of this session is running in this process now. */
+  isRunning(agentId: string): boolean {
+    return this.live.get(agentId)?.running === true;
+  }
+
+  /** Messages waiting behind the session's running turn. */
+  queuedCount(agentId: string): number {
+    return this.live.get(agentId)?.queue.length ?? 0;
+  }
+
+  /** The backend's environment (its CLAUDE_CONFIG_DIR is where native sessions are kept). */
+  get backendEnv(): Readonly<Record<string, string>> {
+    return this.options.env;
+  }
 
   /** This host's id in session addresses. */
   get hostId(): string {
@@ -137,6 +174,7 @@ export class ClaudeAgentPort {
     const existing = this.launches.get(request.idempotencyKey);
     if (existing) return this.summary(existing);
     const session = this.options.store.create({
+      ...(request.sessionId ? { id: request.sessionId } : {}),
       title: request.name ?? request.task.slice(0, 80),
       runtime: "claude",
       model: request.model ?? this.options.defaultModel,
@@ -145,7 +183,10 @@ export class ClaudeAgentPort {
         kind: "claude",
         cwd: this.options.cwd,
         ...(this.options.env.CLAUDE_CONFIG_DIR ? { configDir: this.options.env.CLAUDE_CONFIG_DIR } : {}),
+        ...(request.native?.sessionId ? { sessionId: request.native.sessionId } : {}),
+        ...(request.native?.forkOf && !request.native.sessionId ? { forkOf: request.native.forkOf } : {}),
       },
+      ...(request.fork ? { fork: request.fork } : {}),
       ...(request.parentId ? { parentId: request.parentId } : {}),
       ...(request.launchedBy ? { launchedBy: request.launchedBy } : {}),
       ...(this.options.workspaceName ? { workspace: this.options.workspaceName } : {}),
@@ -320,19 +361,32 @@ export class ClaudeAgentPort {
         try {
           reply = await this.turn(agent, item.text, item.attachments, item.from);
         } finally {
+          agent.lastReply = reply;
           for (const waiter of item.waiters) waiter(reply);
         }
         item = agent.queue.shift();
       }
       agent.running = false;
       this.announce("session.idle", this.options.store.update(agent.id, { state: "idle" }));
+      this.settle(agent.id, { state: "idle", ...(agent.lastReply !== undefined ? { reply: agent.lastReply } : {}) });
     } catch (error) {
       dropQueue(agent);
       agent.running = false;
       this.announce("session.failed", this.options.store.update(agent.id, { state: "failed", lastError: errorText(error) }));
+      this.settle(agent.id, { state: "failed", error: errorText(error) });
       throw error;
     } finally {
       agent.running = false;
+    }
+  }
+
+  private settle(sessionId: string, outcome: SessionOutcome): void {
+    for (const listener of this.settledListeners) {
+      try {
+        listener(sessionId, outcome);
+      } catch (error) {
+        this.options.log?.(`settled listener for ${sessionId} failed: ${errorText(error)}`);
+      }
     }
   }
 
@@ -377,7 +431,11 @@ export class ClaudeAgentPort {
       mcpServers: this.options.mcpServers(session),
       systemPrompt: systemPrompt ?? { type: "preset", preset: "claude_code" },
       ...(this.options.tools ? { tools: [...this.options.tools] } : {}),
-      ...(session.native.sessionId ? { resume: session.native.sessionId } : {}),
+      ...(session.native.sessionId
+        ? { resume: session.native.sessionId }
+        : session.native.forkOf
+          ? { resume: session.native.forkOf, forkSession: true }
+          : {}),
       stderr: (data: string) => this.options.log?.(`agent ${agent.id} stderr: ${data.trimEnd().slice(0, 500)}`),
     };
     let lastText = "";

@@ -21,6 +21,18 @@ export interface NativeSessionRef {
   sessionId?: string;
   cwd: string;
   configDir?: string;
+  /** A fork that has not run yet: its first turn forks this native session (resume + forkSession). */
+  forkOf?: string;
+}
+
+/** A session forked from its parent: it continues the parent's conversation and reports back when it goes idle. */
+export interface SessionFork {
+  /** One fork call: every fork it made shares the group. */
+  groupId: string;
+  /** 1-based position in the call, and how many forks the call made. */
+  index: number;
+  total: number;
+  task: string;
 }
 
 /**
@@ -42,6 +54,7 @@ export interface SessionRecord {
   parentId?: string;
   /** A lane: the session that started it. A lane has no parent; nothing reports back to its launcher on its own. */
   launchedBy?: string;
+  fork?: SessionFork;
   runId: string;
   host: { id: string; kind: string };
   workspace?: string;
@@ -75,6 +88,8 @@ export interface SessionSearchHit {
 }
 
 export interface NewSession {
+  /** A preset id (a fork's id is written into the conversation it continues). Default: a new id. */
+  id?: string;
   title: string;
   runtime: string;
   model?: string;
@@ -82,6 +97,7 @@ export interface NewSession {
   native: NativeSessionRef;
   parentId?: string;
   launchedBy?: string;
+  fork?: SessionFork;
   workspace?: string;
   labels?: Record<string, string>;
 }
@@ -117,9 +133,10 @@ export class FileSessionStore {
 
   create(input: NewSession): SessionRecord {
     const now = new Date().toISOString();
+    if (input.id && this.records.has(input.id)) throw new Error(`Session ${input.id} already exists in ${this.root}.`);
     const record: SessionRecord = {
       schemaVersion: 1,
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       title: input.title,
       state: "running",
       createdAt: now,
@@ -131,6 +148,7 @@ export class FileSessionStore {
       native: input.native,
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.launchedBy ? { launchedBy: input.launchedBy } : {}),
+      ...(input.fork ? { fork: input.fork } : {}),
       runId: this.origin.runId,
       host: this.origin.host,
       ...(input.workspace ? { workspace: input.workspace } : {}),
