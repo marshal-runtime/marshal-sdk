@@ -37,6 +37,8 @@ export function sdkBaseLayer(input: {
   runtimeTools?: boolean;
   /** Tools the embedder registered (MarshalHostOptions.directTools), named as sessions see them. */
   directTools?: readonly { name: string; description: string }[];
+  /** The backend's own tools sessions keep (for Claude: Bash, Read, Write, Edit...). */
+  nativeTools?: readonly { name: string; description: string }[];
 }): PromptLayer {
   return {
     surface: "cloud-headless",
@@ -47,6 +49,7 @@ export function sdkBaseLayer(input: {
       ...(input.browser
         ? [{ name: "mcp__playwright__*", description: "A headless browser: open pages and local HTML files, resize, scroll, screenshot." }]
         : []),
+      ...(input.nativeTools ?? []),
     ],
     sections: [
       ...input.sections,

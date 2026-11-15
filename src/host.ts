@@ -31,7 +31,7 @@ import {
   type MarshalHostPorts,
   type MarshalHostTelemetryEvent,
 } from "./host-options.js";
-import { DISABLED_NATIVE_TOOLS, NATIVE_SUBAGENT_ALLOWLIST } from "./native-tools.js";
+import { CLAUDE_NATIVE_PROMPT_TOOLS, DISABLED_NATIVE_TOOLS, NATIVE_SUBAGENT_ALLOWLIST } from "./native-tools.js";
 import { repositoryRulesPrompt } from "./repo-rules.js";
 import { createHostPrompts, sdkBaseLayer, type HostPromptOptions, type HostPrompts, type PromptLayer } from "./prompt.js";
 import { SessionForks, forksPromptSection } from "./forks.js";
@@ -469,6 +469,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       ...(rulesSection ? { repoRules: rulesSection } : {}),
       runtimeTools,
       directTools,
+      ...((provider?.id ?? "claude") === "claude" && !options.query ? { nativeTools: CLAUDE_NATIVE_PROMPT_TOOLS } : {}),
     }),
     options.prompt,
     log,

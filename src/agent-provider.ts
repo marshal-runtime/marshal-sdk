@@ -208,6 +208,33 @@ const SESSION_TOOLS: Record<string, { title: string; description: string; risk: 
       },
     },
   },
+  setSessionTodos: {
+    title: "Set this session's plan",
+    description:
+      "Replace this session's progress list with the full ordered list: short checkable steps, exactly one in_progress. Kept with the session (todos.json in its state), so people who open the run see the plan and where it got.",
+    risk: "low",
+    input: {
+      type: "object",
+      required: ["todos"],
+      properties: {
+        todos: {
+          type: "array",
+          maxItems: 100,
+          items: {
+            type: "object",
+            required: ["title"],
+            properties: {
+              id: string(200),
+              title: string(500),
+              status: { enum: ["pending", "in_progress", "in-progress", "done", "blocked"] },
+            },
+          },
+        },
+        goalLabel: string(500),
+        startNewGoal: { type: "boolean" },
+      },
+    },
+  },
   getSessionTranscript: {
     title: "Read a session's transcript",
     description: "The latest messages of a session on this host (default 30), each with its sender when someone else sent it.",
@@ -266,6 +293,11 @@ const SESSION_TOOL_OUTPUTS: Record<string, object> = {
         launchedBy: { type: "string" },
       }),
     },
+  }),
+  setSessionTodos: output(["success"], {
+    success: { type: "boolean" },
+    count: { type: "integer" },
+    error: { type: "string" },
   }),
   getSessionTranscript: output([], {
     success: { type: "boolean" },
@@ -384,6 +416,16 @@ export function createSessionToolsProvider(port: ClaudeAgentPort, store: FileSes
               ...(session.launchedBy ? { launchedBy: session.launchedBy } : {}),
             }));
           return { output: { success: true, results } };
+        }
+        case "setSessionTodos": {
+          if (!caller || !store.get(caller)) return { output: { success: false, error: "Only a session can set its own plan." } };
+          const todos = (Array.isArray(input.todos) ? input.todos : []).map((todo: Record<string, unknown>, index: number) => ({
+            id: typeof todo.id === "string" ? todo.id : String(index + 1),
+            title: text(todo.title, "title"),
+            status: todo.status === "in-progress" ? "in_progress" : typeof todo.status === "string" ? todo.status : "pending",
+          }));
+          store.setTodos(caller, { todos, ...(typeof input.goalLabel === "string" ? { goalLabel: input.goalLabel } : {}), updatedAt: new Date().toISOString() });
+          return { output: { success: true, count: todos.length } };
         }
         case "getSessionTranscript": {
           const sessionId = text(input.sessionId, "sessionId");

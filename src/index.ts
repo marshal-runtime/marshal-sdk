@@ -212,6 +212,7 @@ export {
   type PromptMemoryEntry,
   type SessionPromptContext,
 } from "./prompt.js";
+export { cloudRunLayer, type CloudRunPromptInput } from "./prompt-cloud.js";
 export {
   createMarshalPermissions,
   createMemoryPermissionSettings,
