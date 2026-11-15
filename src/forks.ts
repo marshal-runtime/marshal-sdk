@@ -319,13 +319,15 @@ export interface SubagentSummary {
 }
 
 /** What a session of this host reads about splitting work: forks, lanes and messages, under the desktop's names. */
-export function forksPromptSection(): { id: string; text: string } {
+export function forksPromptSection(
+  call = "mcp__marshal__runtime_exec {targetType: 'operation', target: '<name>', input}",
+): { id: string; text: string } {
   return {
     id: "sdk-forks",
     text: [
       "## Forks, lanes and messages on this host",
       "",
-      "These are runtime capabilities: call them with mcp__marshal__runtime_exec {targetType: 'operation', target: '<name>', input}.",
+      `These are runtime capabilities: call them with ${call}.`,
       "- `marshal.tool.forkSubagents {tasks: [{task, name?, model?, reasoningEffort?}]}`: split independent work into forks that continue this conversation; each fork's final message comes back to you as a new message when it goes idle, so end your turn after forking unless you kept a part.",
       "- `marshal.tool.listSubagents`, `marshal.tool.messageSubagent {sessionId, message, deliveryMode?}`, `marshal.tool.messageForks {message, groupId?}`: follow and steer them; deliveryMode 'interrupt' stops a fork's turn and delivers now.",
       "- In a fork: `marshal.tool.listForkSiblings` to avoid overlap; `marshal.tool.messageParent {message}` only for a blocking question.",

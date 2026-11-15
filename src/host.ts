@@ -25,6 +25,17 @@ import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decis
 import { createModelServices, createModelsProvider, type ModelServices, type ModelsConfig } from "./models/index.js";
 import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type ExtensionSkill } from "./extension-skills.js";
 import { createForkToolsProvider } from "./fork-provider.js";
+import {
+  assertHostPrivate,
+  composeBrokers,
+  createNotificationsProvider,
+  importPolicyOf,
+  withSecrets,
+  workspaceScope,
+  type DirectTool,
+  type MarshalHostPorts,
+  type MarshalHostTelemetryEvent,
+} from "./host-options.js";
 import { DISABLED_NATIVE_TOOLS, NATIVE_SUBAGENT_ALLOWLIST } from "./native-tools.js";
 import { repositoryRulesPrompt } from "./repo-rules.js";
 import { createHostPrompts, sdkBaseLayer, type HostPromptOptions, type HostPrompts, type PromptLayer } from "./prompt.js";
@@ -64,7 +75,11 @@ export interface MarshalHostExtensionState {
   fromDefaults: boolean;
 }
 
-export interface MarshalHostOptions {
+/**
+ * Everything a host passes in. The ports (MarshalHostPorts, docs/host-options.md) are what the desktop passes its own
+ * runtime host; each one is optional and absent keeps the unattended defaults.
+ */
+export interface MarshalHostOptions extends MarshalHostPorts {
   /** Where sessions work: the checkout or scratch folder of this run. */
   workspacePath: string;
   /** Host-private folder outside the workspace: runtime state and the session store. */
@@ -197,12 +212,27 @@ export interface MarshalHost {
  */
 export async function createMarshalHost(options: MarshalHostOptions): Promise<MarshalHost> {
   const log = options.log ?? (() => undefined);
+  const telemetry = (name: string, details: Record<string, unknown> = {}) => {
+    try {
+      options.telemetry?.({ name, details } satisfies MarshalHostTelemetryEvent);
+    } catch (error) {
+      log(`telemetry ${name} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   const workspacePath = fs.realpathSync(options.workspacePath);
   fs.mkdirSync(options.stateRoot, { recursive: true });
   const stateRoot = fs.realpathSync(options.stateRoot);
   if (stateRoot === workspacePath || stateRoot.startsWith(`${workspacePath}${path.sep}`)) {
     throw new Error("stateRoot must be outside the workspace: agents work in the workspace.");
   }
+  let runtimeRoot: string | undefined;
+  if (options.runtimeRoot) {
+    assertHostPrivate("runtimeRoot", options.runtimeRoot, workspacePath);
+    fs.mkdirSync(options.runtimeRoot, { recursive: true });
+    runtimeRoot = fs.realpathSync(options.runtimeRoot);
+    assertHostPrivate("runtimeRoot", runtimeRoot, workspacePath);
+  }
+  if (options.worktreeRoot) assertHostPrivate("worktreeRoot", options.worktreeRoot, workspacePath);
   const privateRoot = path.join(stateRoot, PRIVATE_DIRECTORY);
   fs.mkdirSync(privateRoot, { recursive: true });
   const runId = options.runId ?? randomUUID();
@@ -227,7 +257,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   let automations: HostAutomations | undefined;
   // A test's own query runs every turn; otherwise Claude is the default provider.
   const selection = options.provider ?? (options.query ? undefined : ({ id: "claude" } as const));
-  const provider = selection ? resolveProvider(selection, { env: options.env ?? definedEnv(process.env), privateRoot, log }) : undefined;
+  const hostEnv = options.env ?? definedEnv(process.env);
+  const provider = selection ? resolveProvider(selection, { env: withSecrets(hostEnv, options.secrets), privateRoot, log }) : undefined;
   if (provider) log(provider.description);
   const repoRules = options.repoRules !== false;
   const agents = new ClaudeAgentPort({
@@ -239,11 +270,14 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     env: provider?.env ?? options.env ?? definedEnv(process.env),
     defaultModel: options.model ?? provider?.defaultModel ?? DEFAULT_MODEL,
     ...(options.reasoningEffort ? { defaultReasoningEffort: options.reasoningEffort } : {}),
+    ...(options.permissions?.canUseTool ? { permissionHandler: options.permissions.canUseTool } : {}),
+    ...(options.settings ? { settings: () => options.settings!.read() } : {}),
     workspaceName: path.basename(workspacePath),
     systemPrompt: (session) => prompts?.forSession(session),
     mcpServers: (session) => serversFor(session),
     log,
     onSessionEvent: (type, payload) => {
+      telemetry(type, { sessionId: payload.sessionId, state: payload.state, ...(payload.parentId ? { parentId: payload.parentId } : {}) });
       automations?.emit(type, payload).catch((error: unknown) => log(`automations on ${type}: ${String(error)}`));
     },
   });
@@ -261,11 +295,28 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   // marshal.link.call answers through a private loopback link that starts on first use (after the extensions activate).
   let linkRelay: LinkRelay | undefined;
   const forks = new SessionForks(agents, sessions, { log });
-  const models = createModelServices(options.models, { env: options.env ?? process.env, ...(options.modelsFetch ? { fetch: options.modelsFetch } : {}) });
+  const models = createModelServices(options.models, { env: withSecrets(options.env ?? process.env, options.secrets), ...(options.modelsFetch ? { fetch: options.modelsFetch } : {}) });
+  const importPolicy = importPolicyOf(options.trustedTypeScript);
+  const broker =
+    composeBrokers([kit?.permissionBroker, options.permissions?.broker], options.ui?.applicationAuthority) ?? createAllowAllPermissionBroker();
+  const hostScope = workspaceScope(workspacePath);
   const runtime = await createAgentRuntime({
-    workspacePath,
+    // With a runtimeRoot the runtime's own folder is host-private (the desktop's layout) and every call works in the
+    // workspace the resolver names; without one the runtime keeps its state inside the workspace.
+    ...(runtimeRoot
+      ? { workspacePath: runtimeRoot, stateDirectory: "state", resolveWorkspace: options.resolveWorkspace ?? (() => hostScope) }
+      : {
+          workspacePath,
+          stateDirectory: `.marshal/runtime/${createHash("sha256").update(HARNESS_ID).digest("hex").slice(0, 16)}`,
+          ...(options.resolveWorkspace ? { resolveWorkspace: options.resolveWorkspace } : {}),
+        }),
     protectedLifecycleResultRoot: privateRoot,
-    stateDirectory: `.marshal/runtime/${createHash("sha256").update(HARNESS_ID).digest("hex").slice(0, 16)}`,
+    ...(options.worktreeRoot ? { worktreeRoot: options.worktreeRoot } : {}),
+    ...(importPolicy ? { importPolicy } : {}),
+    ...(options.compositionRegistry ? { compositionRegistry: options.compositionRegistry } : {}),
+    ...(options.permissions?.approval ? { permissionApproval: options.permissions.approval } : {}),
+    ...(options.permissions?.resolveGrants ? { resolvePermissionGrants: options.permissions.resolveGrants } : {}),
+    ...(options.permissions?.patterns ? { permissionPatterns: options.permissions.patterns } : {}),
     identity: { harnessId: HARNESS_ID },
     principal: {
       id: `${HARNESS_ID}:${runId}`,
@@ -273,7 +324,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       ...(kit && Object.keys(kit.claims).length ? { claims: kit.claims } : {}),
     },
     // An unattended host has nobody to approve; what a run may do is decided by what is installed on it.
-    permissionBroker: kit?.permissionBroker ?? createAllowAllPermissionBroker(),
+    permissionBroker: broker,
     // The Brain extension requires the code-intelligence service.
     codeIntelligence: kit?.codeIntelligence ?? false,
     extensions: extensions.length
@@ -281,12 +332,13 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
           allowedRoots: extensions.map((extension) => extension.packageRoot),
           discoveryRoots: extensions.map((extension) => extension.packageRoot),
           // An extension's tabs and panels stay unplaced here; its capabilities still activate.
-          uiPlacementsRequired: false,
+          uiPlacementsRequired: options.ui?.placementsRequired ?? false,
           restore: false,
         }
       : false,
-    serviceContainer: createRuntimeServiceContainer(),
+    serviceContainer: options.serviceContainer ?? createRuntimeServiceContainer(),
     providerSources: [
+      ...(options.providerSources ?? []),
       () => createAgentProvider(agents, (id) => id !== undefined && sessions.get(id) !== undefined),
       () => createSessionToolsProvider(agents, sessions),
       () => createForkToolsProvider(forks),
@@ -294,17 +346,21 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       () => createDecisionsProvider(decisions),
       () => createModelsProvider(models),
       () => createLinkCallProvider(() => linkRelay),
+      ...(options.notifications ? [() => createNotificationsProvider(options.notifications!)] : []),
       createRuntimeBuiltinsSource({
         typescript: true,
         artifacts: true,
         effects: false,
+        extensionAuthoring: false,
+        authoredUiPromotion: false,
+        ...options.builtins,
         // runtime.schedules.* on this host's durable scheduler (agent.wake and the automation task kinds).
         scheduling: true,
         scheduler: hostAutomations.scheduler,
-        reactUi: false,
-        declarativeUi: false,
-        extensionAuthoring: false,
-        authoredUiPromotion: false,
+        reactUi: options.ui?.reactUi ?? false,
+        declarativeUi: options.ui?.declarativeUi ?? false,
+        ...(options.nodeExecutable ? { nodeExecutable: options.nodeExecutable } : {}),
+        ...(importPolicy ? { importPolicy } : {}),
       }),
       ...(kit?.providerSources ?? []),
       ...(extensionSkills.length && !runtimeReadsSkills ? [extensionSkillSource(extensionSkills)] : []),
@@ -312,6 +368,15 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   } as never);
   // The core kernel takes the caller's own invocation context, so the Brain sees the same principal.
   kit?.bind((runtime as unknown as { core: never }).core);
+  const lifecycleSubscription = options.telemetry
+    ? (runtime as unknown as { core?: { observeLifecycle?(listener: (event: { type: string }) => void): { dispose(): void } } }).core?.observeLifecycle?.(
+        (event) => telemetry(`runtime.${event.type}`),
+      )
+    : undefined;
+  const settingsSubscription = options.settings?.subscribe?.((next) => {
+    log(`settings changed: model ${next.model ?? "(default)"}, effort ${next.reasoningEffort ?? "(default)"}`);
+    telemetry("settings.changed", { model: next.model, reasoningEffort: next.reasoningEffort });
+  });
 
   const guidance: string[] = [];
   const installedExtensions: { identity: string; version: string }[] = [];
@@ -352,6 +417,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         skills: declared.skills,
         fromDefaults,
       });
+      telemetry("extension.installed", { identity: installed.identity, version: String(record.version), fromDefaults });
       log(`extension ${installed.identity}@${record.version}${fromDefaults ? " (default)" : ""} ${record.status}, ${record.health}: ${declared.capabilities.length} capabilities, ${declared.skills.length} skills`);
       installedExtensions.push({ identity: installed.identity, version: String(record.version) });
       if (record.agentGuidance) guidance.push(`${installed.identity}: ${JSON.stringify(record.agentGuidance)}`);
@@ -385,15 +451,23 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const browserServer =
     options.browser === false
       ? undefined
-      : playwrightServer(typeof options.browser === "object" ? options.browser : {}, log);
+      : playwrightServer(typeof options.browser === "object" ? options.browser : {}, log, options.nodeExecutable);
   const skillsSection = extensionSkillsPrompt(extensionSkills);
   const rulesSection = repoRules ? repositoryRulesPrompt(workspacePath, options.provider?.id ?? "claude") : "";
+  const directTools = options.directTools ?? [];
+  const runtimeTools = options.runtimeTools !== false;
+  const forksCall =
+    !runtimeTools && directTools.some((direct) => direct.name === "runtimeInvoke")
+      ? "mcp__marshal__runtimeInvoke {capability: '<name>', input}"
+      : undefined;
   prompts = createHostPrompts(
     sdkBaseLayer({
       browser: browserServer !== undefined,
       extensionGuidance: guidance,
-      sections: [...(kit?.promptSection ? [kit.promptSection] : []), forksPromptSection(), ...(skillsSection ? [skillsSection] : [])],
+      sections: [...(kit?.promptSection ? [kit.promptSection] : []), forksPromptSection(forksCall), ...(skillsSection ? [skillsSection] : [])],
       ...(rulesSection ? { repoRules: rulesSection } : {}),
+      runtimeTools,
+      directTools,
     }),
     options.prompt,
     log,
@@ -408,10 +482,31 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       };
       return { content: result.content, ...(result.isError ? { isError: true } : {}) } as never;
     };
-    const marshal = createSdkMcpServer({
-      name: "marshal",
-      version: "0.1.0",
-      tools: [
+    const directContext = {
+      sessionId: session.id,
+      workspacePath,
+      trustedTypeScript: importPolicy !== undefined,
+      call: (name: string, args: unknown) => adapter.callTool(name, args, undefined as never) as never,
+      invoke: async (capability: string, input: unknown = {}) => {
+        const result = (await adapter.callTool("runtime_exec", { targetType: "operation", target: capability, input }, undefined as never)) as {
+          structuredContent?: Record<string, any>;
+        };
+        const response = result.structuredContent ?? {};
+        if (response.status !== "success") throw new Error(`${capability} failed: ${JSON.stringify(response.error ?? response).slice(0, 2000)}`);
+        return response.result?.output;
+      },
+      readResource: (uri: string) => adapter.readResource(uri) as never,
+    };
+    const embedderTools = directTools.map((direct: DirectTool) =>
+      tool(direct.name, direct.description, direct.inputSchema, async (args) => {
+        try {
+          return (await direct.handler(args as Record<string, unknown>, directContext)) as never;
+        } catch (error) {
+          return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], isError: true } as never;
+        }
+      }),
+    );
+    const runtimeToolList = [
         tool(
           "runtime_search",
           RUNTIME_MCP_TOOLS[0]!.description ?? "",
@@ -454,13 +549,20 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
             }
           },
         ),
-      ],
+      ];
+    const marshal = createSdkMcpServer({
+      name: "marshal",
+      version: "0.1.0",
+      tools: [...(runtimeTools ? runtimeToolList : []), ...embedderTools],
     });
     return {
       marshal,
       ...(browserServer ? { playwright: browserServer } : {}),
       // Providers other than the Claude Agent SDK take these tools directly; that SDK reads only string keys.
-      [PROVIDER_TOOLS]: marshalProviderTools(call as never, (uri) => adapter.readResource(uri) as never, RUNTIME_MCP_TOOLS as never),
+      [PROVIDER_TOOLS]: [
+        ...(runtimeTools ? marshalProviderTools(call as never, (uri) => adapter.readResource(uri) as never, RUNTIME_MCP_TOOLS as never) : []),
+        ...directProviderTools(directTools, directContext),
+      ],
     };
   };
 
@@ -552,6 +654,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     }
   }
 
+  telemetry("host.started", { runId, extensions: extensionStates.length, provider: provider?.id ?? "test", runtimeRoot: runtimeRoot !== undefined });
   return {
     runId,
     sessions,
@@ -578,6 +681,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     emit: (event, payload = {}) => hostAutomations.emit(event, payload),
     async dispose(): Promise<void> {
       eventSubscription?.dispose();
+      lifecycleSubscription?.dispose();
+      settingsSubscription?.();
       await hostAutomations.stop();
       await decisions.stop();
       await link?.close();
@@ -607,7 +712,7 @@ function definedEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined));
 }
 
-function playwrightServer(browser: MarshalHostBrowser, log: (line: string) => void): Record<string, unknown> | undefined {
+function playwrightServer(browser: MarshalHostBrowser, log: (line: string) => void, nodeExecutable?: string): Record<string, unknown> | undefined {
   try {
     // @playwright/mcp's exports map hides cli.js, so resolving "@playwright/mcp/cli.js" always throws.
     const require = createRequire(import.meta.url);
@@ -617,12 +722,28 @@ function playwrightServer(browser: MarshalHostBrowser, log: (line: string) => vo
     const executablePath = browser.executablePath ?? (process.env.MARSHAL_SDK_CHROME || undefined);
     const noSandbox = browser.noSandbox ?? process.env.MARSHAL_SDK_CHROME_NO_SANDBOX === "1";
     return {
-      command: process.execPath,
+      // In a packaged app process.execPath is the app binary, not node.
+      command: nodeExecutable ?? process.execPath,
       args: [cli, "--headless", "--isolated", ...(executablePath ? ["--executable-path", executablePath] : []), ...(noSandbox ? ["--no-sandbox"] : [])],
     };
   } catch (error) {
     log(`no browser for sessions: @playwright/mcp not usable (${error instanceof Error ? error.message : String(error)})`);
     return undefined;
   }
+}
+
+/** Embedder direct tools for providers that take tools directly (JSON Schema from the zod shape). */
+function directProviderTools(directTools: readonly DirectTool[], context: Parameters<DirectTool["handler"]>[1]): unknown[] {
+  return directTools.map((direct) => ({
+    name: direct.name,
+    description: direct.description,
+    parameters: z.toJSONSchema(z.object(direct.inputSchema)),
+    handler: async (args: unknown) => {
+      const result = await direct.handler((args ?? {}) as Record<string, unknown>, context);
+      const joined = result.content.map((item) => item.text).join("\n");
+      if (result.isError) throw new Error(joined);
+      return joined;
+    },
+  }));
 }
 

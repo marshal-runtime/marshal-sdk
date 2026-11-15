@@ -1,5 +1,22 @@
 export { createMarshalHost, type MarshalHost, type MarshalHostExtension, type MarshalHostLinkOptions, type MarshalHostOrgOptions, type MarshalHostOptions } from "./host.js";
 export {
+  composeBrokers,
+  desktopDirectTools,
+  TRUSTED_TYPESCRIPT_IMPORT_POLICY,
+  type DirectTool,
+  type DirectToolContext,
+  type DirectToolResult,
+  type MarshalHostApplicationAuthority,
+  type MarshalHostNotification,
+  type MarshalHostPermissions,
+  type MarshalHostPorts,
+  type MarshalHostSettings,
+  type MarshalHostSettingsPort,
+  type MarshalHostTelemetryEvent,
+  type MarshalHostUiOptions,
+} from "./host-options.js";
+export type { RuntimePermissionHandler, RuntimePermissionRequest, RuntimePermissionResult } from "./providers.js";
+export {
   ClaudeAgentPort,
   type AgentLaunchOptions,
   type AgentLaunchRequest,

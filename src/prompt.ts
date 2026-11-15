@@ -258,27 +258,36 @@ export interface HostPromptOptions extends PromptLayer {
   session?: (session: SessionRecord) => PromptLayer | undefined;
 }
 
+const RUNTIME_PROMPT_TOOLS = [
+  { name: "mcp__marshal__runtime_search", description: "Find Marshal runtime capabilities and read their schemas." },
+  {
+    name: "mcp__marshal__runtime_exec",
+    description:
+      "Run a capability ({targetType: 'operation', target, input}) or TypeScript that calls context.runtime.invoke ({targetType: 'inline_module', source, input}).",
+  },
+  {
+    name: "mcp__marshal__runtime_read_resource",
+    description: "Read a runtime resource by URI: an extension's skill (skill://...) and its references.",
+  },
+];
+
 /** The SDK's own layer: the cloud-headless surface, the tools this host really has and what it holds. */
 export function sdkBaseLayer(input: {
   browser: boolean;
   extensionGuidance: readonly string[];
   sections: readonly { id: string; text: string }[];
   repoRules?: string;
+  /** Whether sessions see the runtime's own tools (MarshalHostOptions.runtimeTools). Default true. */
+  runtimeTools?: boolean;
+  /** Tools the embedder registered (MarshalHostOptions.directTools), named as sessions see them. */
+  directTools?: readonly { name: string; description: string }[];
 }): PromptLayer {
   return {
     surface: "cloud-headless",
     role: "worker",
     tools: [
-      { name: "mcp__marshal__runtime_search", description: "Find Marshal runtime capabilities and read their schemas." },
-      {
-        name: "mcp__marshal__runtime_exec",
-        description:
-          "Run a capability ({targetType: 'operation', target, input}) or TypeScript that calls context.runtime.invoke ({targetType: 'inline_module', source, input}).",
-      },
-      {
-        name: "mcp__marshal__runtime_read_resource",
-        description: "Read a runtime resource by URI: an extension's skill (skill://...) and its references.",
-      },
+      ...(input.runtimeTools === false ? [] : RUNTIME_PROMPT_TOOLS),
+      ...(input.directTools ?? []).map((direct) => ({ name: `mcp__marshal__${direct.name}`, description: direct.description })),
       ...(input.browser
         ? [{ name: "mcp__playwright__*", description: "A headless browser: open pages and local HTML files, resize, scroll, screenshot." }]
         : []),
