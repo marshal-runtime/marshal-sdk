@@ -104,6 +104,8 @@ same identity replaces its default.
 | `brain` | `@marshal/brain` | always (the kit's Brain) | `kit.brain.packageRoot`, `$MARSHAL_SDK_BRAIN_PACKAGE`, the SDK's `extensions/brain` (where `image/pack.mjs` puts it), or the organization |
 | `zygTools` | `@zyg/marshal-runtime-extension` | `"profile": "zyg"` (a Zyg host) | `$MARSHAL_SDK_ZYG_EXTENSION` or the organization |
 
+- **`@marshal/org` is told which organization to join:** its configuration gets `{discovery, profile?}` from the
+  manifest's `org`, under any configuration the manifest gives it.
 - **Opting out:** `"defaults": {"zygTools": false}` turns one off; Marley is a Zyg host that does this.
   `"defaults": false` turns all of them off. With the CLI, use `init --no-default zygTools` or `init --no-defaults`.
 - **The Brain goes through the kit.** The default adds `brain` to the kit's parts, with the package found, so it gets

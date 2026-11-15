@@ -402,7 +402,7 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
     defaults.push(resolved);
   }
 
-  const all = [...defaults.filter((extension) => extension.identity !== BRAIN_EXTENSION), ...listed, ...fromProfile];
+  const all = [...defaults.filter((extension) => extension.identity !== BRAIN_EXTENSION), ...listed, ...fromProfile].map((extension) => withOrgConfiguration(extension, manifest.org));
   const seen = new Map<string, string>();
   for (const extension of all) {
     const earlier = seen.get(extension.identity);
@@ -455,6 +455,13 @@ async function fetchDefault(resolver: ExtensionResolver, org: ManifestOrg, spec:
   } catch {
     return undefined;
   }
+}
+
+/** @marshal/org learns which organization to join from the manifest; configuration the manifest gives it wins. */
+function withOrgConfiguration(extension: ResolvedExtension, org: ManifestOrg | undefined): ResolvedExtension {
+  if (extension.identity !== ORG_EXTENSION || !org) return extension;
+  const given = record(extension.configuration) ?? {};
+  return { ...extension, configuration: { discovery: org.discovery, ...(org.profile ? { profile: org.profile } : {}), ...given } };
 }
 
 function finish(

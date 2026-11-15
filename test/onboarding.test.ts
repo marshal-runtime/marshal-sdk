@@ -227,6 +227,16 @@ test("built-in defaults: the org extension with an org, the kit's Brain, Zyg's t
     ["@zyg/marshal-runtime-extension", "default"],
   ], "the Brain loads through the kit, not as a listed package");
   assert.deepEqual(zyg.kit, { parts: ["brain"], brain: { packageRoot: brain } });
+  assert.deepEqual(zyg.extensions[0]!.configuration, { discovery: ORG }, "the org extension is told which organization to join");
+  const orgPackage = zyg.extensions[0]!.packageRoot;
+  const configured = await resolve({
+    org: { discovery: ORG, profile: { deny: ["@zyg/x"] } },
+    defaults: { brain: false },
+    extensions: [{ path: orgPackage, configuration: { discovery: "https://other.example.com", label: "${env:ORG_LABEL}" } }],
+  }, { ORG_LABEL: "team" });
+  assert.deepEqual(configured.extensions.map((extension) => [extension.identity, extension.origin, extension.configuration]), [
+    ["@marshal/org", "listed", { discovery: "https://other.example.com", profile: { deny: ["@zyg/x"] }, label: "team" }],
+  ], "configuration the manifest gives @marshal/org wins over the org's discovery");
 
   // Marley: a Zyg host that opts out of Zyg's tools.
   const marley = await resolve({ profile: "zyg", org: { discovery: ORG }, defaults: { zygTools: false }, kit: ["sessions"], extensions: [] });
