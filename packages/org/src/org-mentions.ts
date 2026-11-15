@@ -5,9 +5,13 @@ import {
   type UserPrincipal,
 } from "@marshal/agent-runtime-org";
 
-import type { OrgDirectorySearchResult, OrgMentionRequest, OrgMentionResult } from "./contract/org-types";
 import { createLogger } from "../host-deps";
 import { grantableRoles, isGrantableRole } from "./common/org-roles";
+import type {
+  OrgDirectorySearchResult,
+  OrgMentionRequest,
+  OrgMentionResult,
+} from "./contract/org-types";
 import { classifyOrgFailure } from "./org-errors";
 import type { OrgFlags } from "./org-service";
 import type { OrgSessionSharing } from "./org-session-sharing";

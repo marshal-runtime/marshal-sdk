@@ -6,9 +6,9 @@ import {
   type UserPrincipal,
 } from "@marshal/agent-runtime-org";
 
-import { type OrgShareRestrictedItem } from "./contract/org-types";
 import { isHiddenInternalControlMessage, type SessionMessage } from "../host-deps";
 import { scrubSecrets } from "../host-deps";
+import { type OrgShareRestrictedItem } from "./contract/org-types";
 
 /** The contract caps one message at 64 KiB and a title at 256 characters. */
 const MAX_MESSAGE_BYTES = 64 * 1024;

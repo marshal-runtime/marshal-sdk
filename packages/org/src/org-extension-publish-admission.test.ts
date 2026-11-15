@@ -11,8 +11,8 @@ vi.mock("../../../electron/platform-security", async () => {
 });
 vi.mock("../../../electron/safe-storage-file", () => ({ loadOrCreateKey: () => null }));
 
-import type { OrgOnboardingManifest } from "./common/org-onboarding";
 import { testDouble } from "../../../electron/testing/harness";
+import type { OrgOnboardingManifest } from "./common/org-onboarding";
 import { createOrgExtensionAdmission, createOrgTrustedExtensions } from "./org-extension-admission";
 import { OrgOnboarding, type OrgOnboardingDeps } from "./org-onboarding";
 import { sha256Hex } from "./org-onboarding-archive";

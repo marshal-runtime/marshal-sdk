@@ -6,9 +6,15 @@ import {
   type OrgTranscriptMessage,
 } from "@marshal/agent-runtime-org";
 
-import type { OrgRemoteNotificationSummary, OrgRemoteResult, OrgRemoteSessionDetail, OrgRemoteSessionError, OrgRemoteSessionSummary } from "./contract/org-types";
 import { createLogger } from "../host-deps";
 import { ORG_SDK_RUNTIME } from "../host-deps";
+import type {
+  OrgRemoteNotificationSummary,
+  OrgRemoteResult,
+  OrgRemoteSessionDetail,
+  OrgRemoteSessionError,
+  OrgRemoteSessionSummary,
+} from "./contract/org-types";
 import { OrgNotSignedInError, type OrgFlags } from "./org-service";
 
 const log = createLogger("OrgRemoteSessions");

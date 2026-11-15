@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createLogger } from "../host-deps";
+import { stripYamlQuotes } from "../host-deps";
 import {
   ORG_SKILL_NAME,
   ORG_SKILL_VERSION,
@@ -23,7 +24,6 @@ import {
   type OrgSkillsResult,
   type OrgSkillUpdateRequest,
 } from "./common/org-skills";
-import { stripYamlQuotes } from "../host-deps";
 import { extractTgz, OrgArchiveError, verifyArchiveBytes } from "./org-onboarding-archive";
 import {
   MAX_SKILL_FILES,

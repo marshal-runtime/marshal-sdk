@@ -9,10 +9,10 @@ import type {
 } from "@marshal/agent-runtime-org";
 import { z } from "zod";
 
-import type { OrgSharedLiveView } from "./contract/org-types";
 import type { SessionMessage } from "../host-deps";
 import { createLogger } from "../host-deps";
 import { orgMessageIdFor, scrubText, toOrgTranscriptMessage } from "./cloud-session-sanitizer";
+import type { OrgSharedLiveView } from "./contract/org-types";
 import { isShareable, remoteMessageLocalId } from "./org-shared-sessions";
 import { streamableReplyText } from "./org-shared-stream";
 

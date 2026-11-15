@@ -11,9 +11,18 @@ import {
   type OrgSessionUpload,
 } from "@marshal/agent-runtime-org";
 
-import type { OrgSessionWorkspaceMappingResult, OrgSetSessionWorkspaceRequest, OrgShareRestrictedItem, OrgShareWorkspace, OrgShareWorkspacesResult, OrgWorkspaceMapping, OrgSessionSharePreviewResult, OrgSessionShareResult } from "./contract/org-types";
 import { createLogger } from "../host-deps";
 import { sanitizeSessionForOrg, type ShareableSession } from "./cloud-session-sanitizer";
+import type {
+  OrgSessionWorkspaceMappingResult,
+  OrgSetSessionWorkspaceRequest,
+  OrgShareRestrictedItem,
+  OrgShareWorkspace,
+  OrgShareWorkspacesResult,
+  OrgWorkspaceMapping,
+  OrgSessionSharePreviewResult,
+  OrgSessionShareResult,
+} from "./contract/org-types";
 import { isOrgAnalysisSession } from "./org-audit-analysis";
 import { classifyOrgFailure } from "./org-errors";
 import type { OrgFlags } from "./org-service";

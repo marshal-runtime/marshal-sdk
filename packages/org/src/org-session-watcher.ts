@@ -1,5 +1,5 @@
-import type { OrgSessionChange, OrgSessionWatchResult } from "./contract/org-types";
 import { createLogger } from "../host-deps";
+import type { OrgSessionChange, OrgSessionWatchResult } from "./contract/org-types";
 import type { OrgFlags } from "./org-service";
 
 const log = createLogger("OrgSessionWatcher");

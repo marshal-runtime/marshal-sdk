@@ -4,6 +4,7 @@ import path from "node:path";
 import { computeRuntimeExtensionIntegrity } from "@marshal/runtime/extensions";
 
 import { createLogger } from "../host-deps";
+import type { MarshalRuntimeApi } from "../host-deps";
 import {
   compareExtensionVersions,
   parseOrgCatalogEntry,
@@ -22,7 +23,6 @@ import {
   type OrgOnboardingScope,
   type OrgPublishableResult,
 } from "./common/org-onboarding";
-import type { MarshalRuntimeApi } from "../host-deps";
 import { packExtensionDirectory, previewExtensionPack } from "./org-extension-pack";
 import { OrgArchiveError } from "./org-onboarding-archive";
 

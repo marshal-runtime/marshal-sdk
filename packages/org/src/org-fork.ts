@@ -3,10 +3,15 @@ import { gunzipSync } from "node:zlib";
 
 import { collectEnvelope, type OrgClient } from "@marshal/agent-runtime-org";
 
-import type { CreateFromNativeStateError, OrgForkSessionError, OrgForkSessionRequest, OrgForkSessionResult } from "./contract/org-types";
 import { createLogger } from "../host-deps";
 import { MAX_NATIVE_STATE_BYTES } from "../host-deps";
 import type { RuntimeNativeSessionState } from "../host-deps";
+import type {
+  CreateFromNativeStateError,
+  OrgForkSessionError,
+  OrgForkSessionRequest,
+  OrgForkSessionResult,
+} from "./contract/org-types";
 import { classifyOrgFailure } from "./org-errors";
 import type { OrgFlags } from "./org-service";
 

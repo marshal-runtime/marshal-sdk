@@ -13,11 +13,15 @@ import {
   type OrgRunStatus,
 } from "@marshal/agent-runtime-org";
 
-import type { OrgRemoteResult, OrgRemoteSessionDetail, OrgRemoteSessionError } from "./contract/org-types";
 import { createLogger } from "../host-deps";
 import { RuntimeIdempotencyStore } from "../host-deps";
 import { RuntimeApiError } from "../host-deps";
 import { wrapUntrusted } from "../host-deps";
+import type {
+  OrgRemoteResult,
+  OrgRemoteSessionDetail,
+  OrgRemoteSessionError,
+} from "./contract/org-types";
 import { OrgNotSignedInError, type OrgFlags } from "./org-service";
 
 const log = createLogger("OrgSessionAudit");

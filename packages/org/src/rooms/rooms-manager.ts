@@ -550,7 +550,11 @@ export class OrgRoomsManager {
   }
 
   /** Owner only: POST /v1/rooms/:id/grants. The desktop grants through the org's sharing screens; an SDK host calls this. */
-  async grant(roomId: string, principal: `user:${string}`, role: "viewer" | "collaborator" | "driver"): Promise<void> {
+  async grant(
+    roomId: string,
+    principal: `user:${string}`,
+    role: "viewer" | "collaborator" | "driver",
+  ): Promise<void> {
     await this.http("POST", ROOM_ROUTES.grants(roomId), { principal, role });
   }
 

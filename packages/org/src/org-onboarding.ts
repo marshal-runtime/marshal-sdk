@@ -6,6 +6,7 @@ import path from "node:path";
 import { computeRuntimeExtensionIntegrity } from "@marshal/runtime/extensions";
 
 import { createLogger } from "../host-deps";
+import type { MarshalRuntimeApi, MarshalRuntimeScope } from "../host-deps";
 import {
   ORG_ONBOARDING_VAULT_CAPABILITIES,
   compareExtensionVersions,
@@ -20,7 +21,6 @@ import {
   type OrgOnboardingScope,
   type OrgOnboardingStatusResult,
 } from "./common/org-onboarding";
-import type { MarshalRuntimeApi, MarshalRuntimeScope } from "../host-deps";
 import type { ApplyOrgAgentDefaults } from "./org-agent-defaults";
 import { extractTgz, verifyArchiveBytes } from "./org-onboarding-archive";
 
