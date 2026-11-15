@@ -27,6 +27,10 @@
   ],
   "exclude": [
     "packages/providers/src/**/*.test.ts",
-    "packages/providers/src/testing"
+    "packages/providers/src/testing",
+    // SessionManager and the modules that moved with it are typechecked by the desktop against its real
+    // types (docs/engine.md); here they only compile, because the desktop-only host types are open shapes.
+    "packages/providers/src/engine",
+    "src/session-engine.ts"
   ]
 }

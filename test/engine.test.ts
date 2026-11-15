@@ -21,7 +21,7 @@ import {
 // imports of desktop services became ports. This drives it end to end with a host made of plain functions
 // and a provider double: no Electron, no desktop, no model.
 
-function testHost(appData: string, calls: string[]): EngineHostServices {
+function testHost(appData: string, calls: string[]): Partial<EngineHostServices> {
   const record = (name: string) => (..._args: unknown[]) => {
     calls.push(name);
   };
