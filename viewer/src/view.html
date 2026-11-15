@@ -940,18 +940,20 @@
   $("search").addEventListener("input", (event) => {
     clearTimeout(searchTimer);
     const query = event.target.value.trim();
-    searchTimer = setTimeout(async () => {
-      state.query = query;
-      if (!query) { state.hits = null; renderSessions(); return; }
-      try {
-        state.hits = (await call("sdksessions.search", { query, limit: 30 })).hits || [];
-        renderSessions();
-        setView("sessions");
-      } catch (error) {
-        showError($("sessions"), error);
-      }
-    }, 250);
+    searchTimer = setTimeout(() => runSearch(query), 250);
   });
+
+  async function runSearch(query) {
+    state.query = query;
+    if (!query) { state.hits = null; renderSessions(); return; }
+    try {
+      state.hits = (await call("sdksessions.search", { query, limit: 30 })).hits || [];
+      renderSessions();
+      setView("sessions");
+    } catch (error) {
+      showError($("sessions"), error);
+    }
+  }
 
   // Refresh hosts and the open run's sessions while the tab is open, so new runs and state changes show up.
   setInterval(async () => {
@@ -970,7 +972,7 @@
       await ready;
       const out = await loadHosts();
       const opened = hostContext.toolInput || {};
-      const wanted = opened.hostId || opened.runId || opened.sessionId ? opened : out.focus || {};
+      const wanted = opened.hostId || opened.runId || opened.sessionId || opened.query ? opened : out.focus || {};
       const hostId = wanted.hostId && state.hosts.some((entry) => entry.id === wanted.hostId) ? wanted.hostId : "local";
       if (["transcript", "telemetry", "files"].includes(wanted.tab)) state.tab = wanted.tab;
       const wantsPages = wanted.tab === "pages";
@@ -991,6 +993,10 @@
         else if (!wanted.runId) setView("runs");
       } else {
         setView("runs");
+      }
+      if (typeof wanted.query === "string" && wanted.query.trim()) {
+        $("search").value = wanted.query.trim();
+        await runSearch(wanted.query.trim());
       }
     } catch (error) {
       showError($("hosts"), error);
