@@ -125,7 +125,17 @@ const copyTree = (from, to) => {
 };
 
 fs.mkdirSync(path.join(staging, "dist", "src"), { recursive: true });
-copyTree(path.join(root, "dist", "src"), path.join(staging, "dist", "src"));
+// All of dist but its tests: dist/src imports the bundles beside it (dist/host-runtime.js and the other
+// packages/* bundles) and dist/packages/prompt, so shipping dist/src alone fails at the first import.
+for (const entry of fs.readdirSync(path.join(root, "dist"), { withFileTypes: true })) {
+  if (entry.name === "test") continue;
+  const source = path.join(root, "dist", entry.name);
+  if (entry.isDirectory()) {
+    fs.mkdirSync(path.join(staging, "dist", entry.name), { recursive: true });
+    copyTree(source, path.join(staging, "dist", entry.name));
+  }
+  else fs.copyFileSync(source, path.join(staging, "dist", entry.name));
+}
 
 // An extension with a package.json ships what npm would publish from it (a source checkout such as the Brain's
 // carries its .git and tests otherwise); a built folder without one is copied whole.
@@ -167,7 +177,7 @@ fs.writeFileSync(
       main: sdk.main,
       bin: sdk.bin,
       engines: { node: ">=24.14.0" },
-      files: ["dist/src", "extensions", "inventory.json"],
+      files: ["dist", "extensions", "inventory.json"],
       dependencies: Object.fromEntries(Object.entries(dependencies).sort(([left], [right]) => left.localeCompare(right))),
       bundleDependencies: bundled,
     },
