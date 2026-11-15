@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 
+import { GIT_SAFE_ALIAS_SUBCOMMANDS } from "../common/git-safe-aliases";
 import type {
   ReviewerValidationAuthorizationResult,
   ReviewerValidationPermissionRequest,
 } from "../common/goal-infrastructure-contract";
 import type { PermissionAction } from "../common/marshal-constants";
+import { createLogger } from "../common/marshal-logger";
+import { CONFIG_KEY_TO_DISPLAY_NAME } from "../common/marshal-permission-servers";
+import { toMcpServerKey } from "../common/mcp-server-key-normalization";
 import type {
   PermissionsConfig,
   ReviewerSessionPermissionScope,
@@ -14,17 +18,15 @@ import {
   PERMISSION_KIND_TUPLE,
   REVIEWER_SESSION_CAPABILITIES,
 } from "../common/permission-contract";
-import { createLogger } from "../common/marshal-logger";
-import { CONFIG_KEY_TO_DISPLAY_NAME } from "../common/marshal-permission-servers";
-import { toMcpServerKey } from "../common/mcp-server-key-normalization";
-import { GIT_SAFE_ALIAS_SUBCOMMANDS } from "../common/git-safe-aliases";
-import type { AuditDecisionSource, AuditLogger } from "./audit-contract";
 import type {
   IPermissionPolicy,
   IReviewerValidationAuthorizationPort,
   IReviewerValidationExecutorPort,
 } from "./approval-contract";
 import type { ApprovalDecision, ApprovalRequest } from "./approval-contract";
+import type { AuditDecisionSource, AuditLogger } from "./audit-contract";
+import type { SettingsManager } from "./host-contract";
+import type { TenantPolicyProvider } from "./host-contract";
 import { migrateToolPermissionKeys } from "./migrate-tool-permission-keys";
 import { migrateToolsFromAllow } from "./migrate-tools-from-allow";
 import { grantFolderForPath, isPathWithinDir } from "./permission-path-scope";
@@ -58,14 +60,12 @@ import type {
 } from "./policy-rules/types";
 import { hasRemoteAuthVector } from "./remote-auth-permission-guard";
 import { checkSensitivePath, type SensitivePathHit } from "./sensitive-path-permission-guard";
-import type { SettingsManager } from "./host-contract";
 import {
   getShellMode,
   isPureQuotedLiteral,
   POWERSHELL_INERT_TOKENS,
   type ShellMode,
 } from "./shell-syntax-permission-utils";
-import type { TenantPolicyProvider } from "./host-contract";
 
 const FALLBACK_PERMISSIONS: PermissionsConfig = {
   autoApproveReadOnly: false,

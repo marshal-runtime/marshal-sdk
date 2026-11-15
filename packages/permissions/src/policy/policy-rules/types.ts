@@ -1,8 +1,8 @@
 import type { PermissionsConfig } from "../../common/permission-contract";
-import type { AuditDecisionSource } from "../audit-contract";
 import type { ApprovalRequest } from "../approval-contract";
-import type { PermissionDecision } from "../permission-policy";
+import type { AuditDecisionSource } from "../audit-contract";
 import type { TenantPolicyProvider } from "../host-contract";
+import type { PermissionDecision } from "../permission-policy";
 
 export type ServerConfig = NonNullable<PermissionsConfig["servers"]>[string];
 
