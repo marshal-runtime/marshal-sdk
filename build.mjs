@@ -1,4 +1,4 @@
-import { cpSync, readdirSync, rmSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,4 +22,3 @@ await build({
   sourcemap: true,
   logLevel: "warning",
 });
-cpSync(path.join(root, "src", "desktop-placements.json"), path.join(root, "dist", "src", "desktop-placements.json"));

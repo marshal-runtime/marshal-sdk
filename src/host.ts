@@ -22,7 +22,6 @@ import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
 import { createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
 import { createAutomationsProvider, HostAutomations } from "./automations.js";
 import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decisions.js";
-import desktopPlacements from "./desktop-placements.json" with { type: "json" };
 import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type ExtensionSkill } from "./extension-skills.js";
 import { createForkToolsProvider } from "./fork-provider.js";
 import { SessionForks, forksPromptSection } from "./forks.js";
@@ -244,8 +243,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       ? {
           allowedRoots: extensions.map((extension) => extension.packageRoot),
           discoveryRoots: extensions.map((extension) => extension.packageRoot),
-          // The desktop's placements, declared inert: an extension that adds a tab activates here too.
-          uiPlacements: desktopPlacements.placements as never,
+          // An extension's tabs and panels stay unplaced here; its capabilities still activate.
           uiPlacementsRequired: false,
           restore: false,
         }
