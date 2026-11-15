@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { QueryFn } from "./agent-port.js";
+import type { KitOptions, SessionsPublishOptions } from "./kit/index.js";
 import { writeRunLogs, type RunSummaryJson } from "./run-contract.js";
 
 export type PageDepth = "quick" | "single" | "deep";
@@ -33,6 +34,8 @@ export interface PageRunOptions {
   quickModel?: string;
   /** Kit parts on the host (Brain, memory, sessions), as createMarshalHost's kit. Default: none. */
   kit?: readonly KitPartName[];
+  /** Publish the run's sessions to the team Brain's session index (adds the Brain and sessions kit parts). */
+  publish?: SessionsPublishOptions;
   /** The page request. Default: page/operator-request.md, then the positioning brief from page/brief.json. */
   idea?: string;
   /** Critic rounds for depth single (1 to 4; Page Studio's default is 2). */
@@ -109,7 +112,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     env,
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { reasoningEffort: options.effort } : {}),
-    ...(options.kit?.length ? { kit: [...options.kit] } : {}),
+    ...hostKit(options.kit, options.publish),
     ...(options.fake ? { query: fakeQuery, browser: false } : {}),
     log,
   });
@@ -260,6 +263,7 @@ export interface PageEditOptions {
   effort?: string;
   quickModel?: string;
   kit?: readonly KitPartName[];
+  publish?: SessionsPublishOptions;
   fake?: boolean;
   env?: Record<string, string>;
   host?: { id: string; kind: string };
@@ -304,7 +308,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     env,
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { reasoningEffort: options.effort } : {}),
-    ...(options.kit?.length ? { kit: [...options.kit] } : {}),
+    ...hostKit(options.kit, options.publish),
     ...(options.fake ? { query: fakeQuery, browser: false } : {}),
     log,
   });
@@ -671,6 +675,10 @@ const USAGE = `marshal-sdk page-run: one Page Studio page from an agent-sandbox 
   --depth <quick|single|deep>  (default single)   --rounds <1-4>   --idea <text | @file>
   --model <id>  --effort <low|medium|high|xhigh|max>   --quick-model <id>   --required-skill <name> (repeatable)
   --kit <brain,memory,sessions>  kit parts on the host (default: $MARSHAL_SDK_KIT, else none)
+  --publish-sessions <team|email,...>  publish the run's sessions to the team Brain's session index, for the team or
+                     those people (default: $MARSHAL_SDK_PUBLISH_SESSIONS, else off); adds the Brain and sessions kit
+  --publish-context <text>  one line in front of each published session's first prompt, e.g. the run id and the
+                     state folder's GCS path (default: $MARSHAL_SDK_PUBLISH_CONTEXT)
   --workspace <dir>  the sessions' working folder (default: the folder holding --input)
   --claude-config-dir <dir>  run the backend on that Claude account and drop ANTHROPIC_API_KEY
   --offline          do not read the product from the public store
@@ -727,6 +735,7 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
     ...(one("rounds") ? { rounds: Number(one("rounds")) } : {}),
     ...(one("quick-model") ? { quickModel: one("quick-model")! } : {}),
     ...(kitArgument(one("kit")) ? { kit: kitArgument(one("kit"))! } : {}),
+    ...publishArgument(one("publish-sessions"), one("publish-context")),
     ...(idea ? { idea: idea.startsWith("@") ? fs.readFileSync(idea.slice(1), "utf8") : idea } : {}),
     requiredSkills: values.get("required-skill") ?? [],
     offline: flags.has("offline"),
@@ -747,6 +756,21 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
   return summary.error ? 1 : 0;
 }
 
+/** The host's kit: the parts asked for, plus the Brain and sessions when the run publishes its sessions. */
+export function hostKit(kit: readonly KitPartName[] | undefined, publish: SessionsPublishOptions | undefined): { kit?: KitOptions } {
+  if (!publish) return kit?.length ? { kit: { parts: [...kit] } } : {};
+  const parts = new Set<KitPartName>([...(kit ?? []), "brain", "sessions"]);
+  return { kit: { parts: [...parts], sessions: { publish } } };
+}
+
+function publishArgument(audience: string | undefined, context: string | undefined): { publish?: SessionsPublishOptions } {
+  const raw = (audience ?? process.env.MARSHAL_SDK_PUBLISH_SESSIONS ?? "").trim();
+  if (!raw || raw === "off") return {};
+  const line = (context ?? process.env.MARSHAL_SDK_PUBLISH_CONTEXT ?? "").trim();
+  const people = raw === "team" ? [] : raw.split(",").map((email) => email.trim()).filter(Boolean);
+  return { publish: { audience: people.length ? { people } : "team", ...(line ? { context: line } : {}) } };
+}
+
 function kitArgument(value: string | undefined): KitPartName[] | undefined {
   const raw = value ?? process.env.MARSHAL_SDK_KIT ?? "";
   const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
@@ -762,6 +786,7 @@ const EDIT_USAGE = `marshal-sdk page-edit: one edit turn on a page a page-run ma
   --request <text | @file>  the change in plain words                                                  (required)
   --page-id <id>     default: the page the run made
   --model <id>  --effort <level>  --quick-model <id>  --kit <brain,memory,sessions>  --fake
+  --publish-sessions <team|email,...>  --publish-context <text>   (as page-run)
   --claude-config-dir <dir>  --host-id <id>  --host-kind <kind>
 
 Exit code 0 when the edited page was written, 1 otherwise (summary.json carries the error).
@@ -810,6 +835,7 @@ export async function pageEditCommand(argv: readonly string[]): Promise<number> 
     ...(values.get("effort") ? { effort: values.get("effort")! } : {}),
     ...(values.get("quick-model") ? { quickModel: values.get("quick-model")! } : {}),
     ...(kit ? { kit } : {}),
+    ...publishArgument(values.get("publish-sessions"), values.get("publish-context")),
     fake: flags.has("fake"),
     host: { id: values.get("host-id") ?? "marshal-sdk", kind: values.get("host-kind") ?? "local" },
     log: (line) => process.stderr.write(`[marshal-sdk page-edit ${new Date().toISOString().slice(11, 19)}] ${line}\n`),

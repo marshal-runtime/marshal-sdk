@@ -140,9 +140,32 @@ by the broker with `kit_write_disabled`.
 | ------------------------------ | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Team memory proposals          | `kit.memory.writes: true`       | Registers `memory.remember {fact, links?, key?}`, which calls the Brain's `memory.propose` through a `brainRoutes[<workspace>].memory: true` route (optional `kit.memory.anchorPath`) |
 | Sharing sessions to the index  | `kit.sessions.ingest: true`     | Registers `sessions.share {sessionId, people?}`, which sends the session's user and assistant messages (tool output dropped, each capped) to `sessions.cloud_share` |
+| Publishing every session       | `kit.sessions.publish: true \| {audience?, context?}` | Implies ingest. After each finished turn (`session.idle`/`session.failed`) the host shares that session, one upload per session at a time, and once more at `dispose()`. Needs the `brain` part |
 | Search feedback                | `kit.brain.feedback: true`      | Allows `knowledge.feedback` (the Brain's search-quality log)                                                                                            |
 
-Both write paths are tested against fakes only (`test/kit.test.ts`); nothing was written to production.
+Memory writes are tested against fakes only (`test/kit.test.ts`).
+
+### Publishing sessions (R33)
+
+SDK hosts publish their sessions into the same store as zyg-agents runs and the sessions people share from Marshal:
+the Brain's session index (zyg-agents `docs/brain-sessions.md`: Spanner `brain-sessions`, written by `session_ingest`,
+searched by `session_search`). Nothing new on the Brain side; the host calls `sessions.cloud_share` as the desktop does.
+
+- **What goes up:** user and assistant messages, each with the tool calls (name and input, cut to 2,048 characters) made
+  before it; never tool output. The Brain redacts again on its side. Sessions over ~700 KB go as ordered parts.
+- **Owner and source** come from the Brain caller, never from the payload: in `desktop` mode the person whose ADC the
+  host holds (the run's starter, R18.1), source `marshal`.
+- **Audience:** `"team"` by default, or `{people: [emails]}`. The owner always sees their own.
+- **`context`:** one line put in front of the first prompt (a string, or a function of the session record): where the
+  session ran and where its full state is. The Brain stores no tool output and has no "fetch the whole session" call, so a
+  person who finds a session follows this line to the state folder (the GCS `agent/marshal-state/`) to open, watch or
+  continue it.
+- `page-run` / `page-edit`: `--publish-sessions team|<emails>` and `--publish-context <text>` (or
+  `MARSHAL_SDK_PUBLISH_SESSIONS` / `MARSHAL_SDK_PUBLISH_CONTEXT`) add the `brain` and `sessions` parts and turn it on.
+
+Proof (2026-11-16, production index, audience Omer only): a haiku session on a headless host was published after its
+turn; a second host's `sessions.cloud_search` returned it as the top hit (owner `omer.machluf@zyg.com`, source
+`marshal`, judge 1.00) with the context line in the snippet.
 
 **What identity a memory written by a service carries.** `memory.propose` stores a `memory_link` in state
 `proposed` with `capturedBy: marshal-agent`:
@@ -161,8 +184,8 @@ zyg-agents' own memories use keys `v1:agent-<category>/<slug>`; personal ones us
 
 **What a shared session written by a service carries.** The shared index stores a person's share under their
 email with `source: marshal`, and a zyg-agents job's under `zyg-agents`. An SDK sandbox signing as a service
-account has no defined owner today, so the front may refuse it or file it under the service. Decide that before
-turning ingest on.
+account has no defined owner today, so the front may refuse it or file it under the service. Publish from a host
+whose Brain caller is a person (`desktop` mode) until that is decided.
 
 The decisions:
 

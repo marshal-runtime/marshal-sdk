@@ -7,6 +7,30 @@ export interface SessionsKitOptions {
    * the Brain's `sessions.cloud_share`). Off by default: it writes to the production index.
    */
   ingest?: boolean;
+  /**
+   * Publish every session of this host to the team Brain's session index after each finished turn, so Marshal
+   * finds it with session search (the store zyg-agents runs and Marshal shares live in). Implies `ingest`.
+   * The owner is whoever the Brain caller is (the person in desktop mode); the source is `marshal`.
+   */
+  publish?: boolean | SessionsPublishOptions;
+}
+
+export type ShareAudience = "team" | { people: readonly string[] };
+
+export interface SessionsPublishOptions {
+  /** Who may find the published sessions. Default: the team. */
+  audience?: ShareAudience;
+  /**
+   * One line put in front of the session's first prompt, so a person who finds it knows where it ran and where
+   * its full state is (e.g. `agent-sandbox run 812 · state gs://…/agent/marshal-state/`).
+   */
+  context?: string | ((session: SessionRecord) => string | undefined);
+}
+
+export function publishOptions(options: SessionsKitOptions | undefined): SessionsPublishOptions | undefined {
+  const publish = options?.publish;
+  if (!publish) return undefined;
+  return publish === true ? {} : publish;
 }
 
 export interface FoundSession {
@@ -28,6 +52,9 @@ const RRF_K = 60;
 const MERGE_DEPTH = 20;
 const MAX_MESSAGE_CHARS = 16_000;
 const MAX_SHARE_MESSAGES = 5_000;
+const MAX_TOOL_INPUT_CHARS = 2_048;
+const MAX_TOOLS_PER_MESSAGE = 200;
+const MAX_PART_BYTES = 700_000;
 
 const FOUND = {
   type: "object",
@@ -135,7 +162,7 @@ export function createSessionsProvider(
         };
       },
     },
-    ...(options.ingest && call
+    ...((options.ingest || publishOptions(options)) && call
       ? {
           "sessions.share": {
             title: "Share a session of this host to the team Brain",
@@ -162,12 +189,14 @@ export function createSessionsProvider(
               const session = store.get(requireText(input.sessionId, "sessionId", 256));
               if (!session) throw Object.assign(new Error(`No session ${input.sessionId} on this host.`), { code: "not_found" });
               const people = Array.isArray(input.people) ? (input.people as string[]) : [];
+              const publish = publishOptions(options);
+              const line = typeof publish?.context === "function" ? publish.context(session) : publish?.context;
+              const payload = sharePayload(session, store, line ? { context: line } : {});
+              const access = shareAccess(publish?.audience, people);
+              const parts = shareParts(payload.messages);
               const answer = (await call(
                 "sessions.cloud_share",
-                {
-                  session: sharePayload(session, store),
-                  access: people.length ? { audience: "people", emails: people } : { audience: "team" },
-                },
+                parts.length > 1 ? { session: { ...payload, messages: [] }, access, parts } : { session: payload, access },
                 context,
               )) as Record<string, unknown>;
               return { shared: true, ...(typeof answer.status === "string" ? { status: answer.status } : {}), details: answer };
@@ -178,17 +207,39 @@ export function createSessionsProvider(
   });
 }
 
-/** What a share uploads: user and assistant messages only, each capped; the Brain redacts again on its side. */
-export function sharePayload(session: SessionRecord, store: FileSessionStore) {
-  const messages = store
+export interface SharedMessage {
+  role: "user" | "assistant";
+  text: string;
+  at: string;
+  tools?: { name: string; input?: string }[];
+}
+
+/**
+ * What a share uploads: user and assistant messages, each capped, with the tool calls (name and input, never
+ * output) made before each assistant message, as zyg-agents runs are stored. The Brain redacts again on its side.
+ */
+export function sharePayload(session: SessionRecord, store: FileSessionStore, options: { context?: string } = {}) {
+  const transcript = store
     .messages(session.id)
     .filter((message) => (message.role === "user" || message.role === "assistant") && message.content.trim())
-    .slice(-MAX_SHARE_MESSAGES)
-    .map((message) => ({
-      role: message.role as "user" | "assistant",
-      text: message.content.slice(0, MAX_MESSAGE_CHARS),
-      at: message.timestamp,
-    }));
+    .slice(-MAX_SHARE_MESSAGES);
+  const calls = toolCalls(store, session.id);
+  let next = 0;
+  const messages: SharedMessage[] = transcript.map((message) => {
+    const shared: SharedMessage = { role: message.role as "user" | "assistant", text: message.content.slice(0, MAX_MESSAGE_CHARS), at: message.timestamp };
+    if (message.role === "assistant") {
+      const tools: { name: string; input?: string }[] = [];
+      while (next < calls.length && calls[next]!.at <= message.timestamp) tools.push(calls[next++]!.tool);
+      if (tools.length) shared.tools = tools.slice(-MAX_TOOLS_PER_MESSAGE);
+    }
+    return shared;
+  });
+  if (next < calls.length) {
+    const last = [...messages].reverse().find((message) => message.role === "assistant");
+    if (last) last.tools = [...(last.tools ?? []), ...calls.slice(next).map((call) => call.tool)].slice(-MAX_TOOLS_PER_MESSAGE);
+  }
+  const first = messages.find((message) => message.role === "user");
+  if (options.context?.trim() && first) first.text = `${options.context.trim()}\n\n${first.text}`.slice(0, MAX_MESSAGE_CHARS);
   return {
     id: session.id,
     source: "marshal",
@@ -198,6 +249,47 @@ export function sharePayload(session: SessionRecord, store: FileSessionStore) {
     updatedAt: session.updatedAt,
     messages,
   };
+}
+
+/** Tool calls in the session's events, oldest first: assistant `tool_use` blocks with their input. */
+function toolCalls(store: FileSessionStore, id: string): { at: string; tool: { name: string; input?: string } }[] {
+  const calls: { at: string; tool: { name: string; input?: string } }[] = [];
+  for (const entry of store.events(id)) {
+    const event = entry.event as { type?: string; parent_tool_use_id?: unknown; message?: { content?: unknown } } | undefined;
+    if (event?.type !== "assistant" || !Array.isArray(event.message?.content)) continue;
+    for (const block of event.message.content as { type?: string; name?: unknown; input?: unknown }[]) {
+      if (block?.type !== "tool_use" || typeof block.name !== "string") continue;
+      const input = block.input === undefined ? undefined : JSON.stringify(block.input).slice(0, MAX_TOOL_INPUT_CHARS);
+      calls.push({ at: entry.at, tool: { name: block.name.slice(0, 200), ...(input ? { input } : {}) } });
+    }
+  }
+  return calls;
+}
+
+/** The Brain reads at most 1 MB per request: a bigger session goes as ordered parts. */
+export function shareParts(messages: readonly SharedMessage[], budget = MAX_PART_BYTES): { offset: number; messages: SharedMessage[] }[] {
+  const parts: { offset: number; messages: SharedMessage[] }[] = [];
+  let current: SharedMessage[] = [];
+  let bytes = 0;
+  let offset = 0;
+  messages.forEach((message, index) => {
+    const size = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
+    if (current.length && bytes + size > budget) {
+      parts.push({ offset, messages: current });
+      current = [];
+      bytes = 0;
+      offset = index;
+    }
+    current.push(message);
+    bytes += size;
+  });
+  if (current.length || !parts.length) parts.push({ offset, messages: current });
+  return parts;
+}
+
+export function shareAccess(audience: ShareAudience | undefined, people: readonly string[] = []) {
+  const emails = people.length ? people : audience && audience !== "team" ? audience.people : [];
+  return emails.length ? { audience: "people" as const, emails: [...emails] } : { audience: "team" as const };
 }
 
 function localHit(session: SessionRecord, snippet: string): FoundSession {
