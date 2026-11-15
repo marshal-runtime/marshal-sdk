@@ -44,6 +44,15 @@ export interface OrgPublishOptions {
   envelopes?: boolean;
   /** Reads a session's native state; default reads `<configDir or ~/.claude>/projects/<cwd>/<native id>.jsonl`. */
   nativeState?: (record: SessionRecord) => Uint8Array | undefined;
+  /** Only these local sessions. */
+  sessionIds?: readonly string[];
+  /**
+   * The caller drives these sessions from the org (src/org-bridge.ts) and holds their leases: a checkpoint still
+   * releases the lease (the org records a checkpoint only on release), then takes it again at once.
+   */
+  holdLease?: boolean;
+  /** The org inbox message a local user message ran, so the org names its author (live sessions). */
+  inboxMessageId?: (sessionId: string, index: number) => string | undefined;
 }
 
 export interface OrgPublishResult {
@@ -90,9 +99,10 @@ export async function publishToOrg(options: OrgPublishOptions): Promise<OrgPubli
   const wantEnvelopes = options.envelopes !== false;
   const canEnvelope = wantEnvelopes && options.client.supports("leases") && options.client.supports("cloudRuns");
   const results: OrgPublishResult[] = [];
-  const records = options.store.list(options.runId ? { runId: options.runId } : {});
+  const only = options.sessionIds ? new Set(options.sessionIds) : undefined;
+  const records = options.store.list(options.runId ? { runId: options.runId } : {}).filter((record) => !only || only.has(record.id));
   for (const record of records) {
-    const orgSessionId = `${ID_PREFIX}${record.id}`;
+    const orgSessionId = orgSessionIdOf(record.id);
     const entry: LedgerEntry = ledger[record.id] ?? { orgSessionId, messageCount: 0, sent: 0 };
     const result: OrgPublishResult = {
       sessionId: record.id,
@@ -116,7 +126,7 @@ export async function publishToOrg(options: OrgPublishOptions): Promise<OrgPubli
       const fresh = entry.messageCount === 0;
       const pending: OrgTranscriptMessage[] = [
         ...(fresh ? [headerMessage(record)] : []),
-        ...local.slice(entry.sent).map(toOrgMessage),
+        ...local.slice(entry.sent).map((message, offset) => toOrgMessage(message, options.inboxMessageId?.(record.id, entry.sent + offset))),
       ];
       let first = true;
       for (const page of pages(pending)) {
@@ -177,6 +187,7 @@ async function publishEnvelope(
     released = true;
   } finally {
     if (!released) await options.client.releaseLease(orgSessionId, { host: options.host }).catch(() => undefined);
+    if (options.holdLease) await options.client.acquireLease(orgSessionId, { host: options.host, ttlSeconds: LEASE_TTL_SECONDS });
   }
   entry.envelopeSha256 = sha256;
   return "uploaded";
@@ -224,9 +235,19 @@ function headerMessage(record: SessionRecord): OrgTranscriptMessage {
   return { role: "system", text: lines.join("\n"), at: record.createdAt };
 }
 
-function toOrgMessage(message: TranscriptMessage): OrgTranscriptMessage {
-  return { role: message.role, text: clip(message.content, MAX_MESSAGE_BYTES), at: message.timestamp };
+function toOrgMessage(message: TranscriptMessage, inboxMessageId?: string): OrgTranscriptMessage {
+  return {
+    role: message.role,
+    text: clip(message.content, MAX_MESSAGE_BYTES),
+    at: message.timestamp,
+    ...(inboxMessageId && message.role === "user" ? { messageId: inboxMessageId } : {}),
+  };
 }
+
+/** The org session id of a local session (`msdk-<id>`), and back; undefined for an org session this host did not publish. */
+export const orgSessionIdOf = (sessionId: string): string => `${ID_PREFIX}${sessionId}`;
+export const localSessionIdOf = (orgSessionId: string): string | undefined =>
+  orgSessionId.startsWith(ID_PREFIX) ? orgSessionId.slice(ID_PREFIX.length) : undefined;
 
 function clip(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text) <= maxBytes) return text;

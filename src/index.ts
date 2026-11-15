@@ -1,4 +1,4 @@
-export { createMarshalHost, type MarshalHost, type MarshalHostExtension, type MarshalHostLinkOptions, type MarshalHostOptions } from "./host.js";
+export { createMarshalHost, type MarshalHost, type MarshalHostExtension, type MarshalHostLinkOptions, type MarshalHostOrgOptions, type MarshalHostOptions } from "./host.js";
 export {
   ClaudeAgentPort,
   type AgentLaunchRequest,
@@ -55,11 +55,22 @@ export {
 } from "./session-messages.js";
 export {
   claudeNativePath,
+  localSessionIdOf,
+  orgSessionIdOf,
   publishToOrg,
   type OrgPublishClient,
   type OrgPublishOptions,
   type OrgPublishResult,
 } from "./org-publish.js";
+export {
+  createOrgBridge,
+  isTestOrg,
+  type OrgBridge,
+  type OrgBridgeClient,
+  type OrgBridgeOptions,
+  type OrgBridgeSession,
+  type OrgBridgeTurn,
+} from "./org-bridge.js";
 export {
   FileSessionStore,
   type NativeSessionRef,

@@ -29,6 +29,7 @@ import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { readPackageManifest } from "./onboarding.js";
 import { startLinkServer, type LinkServer } from "./link/server.js";
+import { createOrgBridge, type OrgBridge, type OrgBridgeOptions } from "./org-bridge.js";
 import { FileSessionStore, type SessionRecord } from "./session-store.js";
 
 const HARNESS_ID = "marshal-sdk";
@@ -84,7 +85,16 @@ export interface MarshalHostOptions {
   automations?: MarshalHostAutomationOptions;
   /** Where decisions, questions and gaps go to people, and where their answers come from (docs/kit.md). */
   routes?: readonly PersonRoute[];
+  /** Publish this host's sessions to a Marshal organization and run the instructions people post to them (docs/org-bridge.md). */
+  org?: MarshalHostOrgOptions;
 }
+
+/** The org bridge without what the host supplies; `host` defaults to the host's id. */
+export type MarshalHostOrgOptions = Omit<OrgBridgeOptions, "store" | "agents" | "host"> & {
+  host?: string;
+  /** Sync and poll on a timer from the start. Default true; tests pass false and call host.org.sync()/poll(). */
+  start?: boolean;
+};
 
 export interface MarshalHostAutomationOptions {
   /** The scheduler's clock. Tests pass a fake one with start: false and call host.automations.tick(). */
@@ -137,6 +147,8 @@ export interface MarshalHost {
   systemPrompt(): string | undefined;
   /** The link server, when the host was created with `link`. */
   readonly link?: { url: string; port: number };
+  /** The org bridge, when the host was created with `org`. */
+  readonly org?: OrgBridge;
   /** Automations: definitions, the scheduler behind runtime.schedules.*, and tick() for a fake clock. */
   readonly automations: HostAutomations;
   /** The decisions record of this host's sessions and its person routes (addRoute). */
@@ -411,6 +423,19 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     return result.structuredContent;
   };
 
+  let org: OrgBridge | undefined;
+  if (options.org) {
+    try {
+      const { start: startOrg, ...orgOptions } = options.org;
+      org = createOrgBridge({ ...orgOptions, store: sessions, agents, host: orgOptions.host ?? options.host?.id ?? HARNESS_ID, log: orgOptions.log ?? log });
+      if (startOrg !== false) org.start();
+    } catch (error) {
+      await agents.dispose().catch(() => undefined);
+      await runtime.dispose().catch(() => undefined);
+      throw error;
+    }
+  }
+
   let link: LinkServer | undefined;
   let names: Promise<string[]> | undefined;
   if (options.link) {
@@ -457,6 +482,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     extensions: extensionStates,
     skills: extensionSkills.map(({ content: _content, references: _references, ...skill }) => skill),
     ...(link ? { link: { url: link.url, port: link.port } } : {}),
+    ...(org ? { org } : {}),
     automations: hostAutomations,
     decisions,
     emit: (event, payload = {}) => hostAutomations.emit(event, payload),
@@ -465,6 +491,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       await hostAutomations.stop();
       await decisions.stop();
       await link?.close();
+      await org?.close();
       forks.dispose();
       await agents.dispose();
       await runtime.dispose();
