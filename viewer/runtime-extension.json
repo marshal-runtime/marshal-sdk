@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "identity": "@omer/marshal-sdk-sessions",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "displayName": "SDK sessions",
   "agentGuidance": {
     "purpose": "Runs of headless Marshal hosts (marshal-sdk) on this Mac or linked over the SDK link: runs, sessions, live transcripts, telemetry, files; send messages and pull data.",

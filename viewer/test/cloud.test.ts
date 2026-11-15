@@ -120,6 +120,24 @@ test("a cloud host lists Marshal runs and their older runs, and serves sessions,
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("a run elsewhere in the bucket is listed through its pointer under the prefix", async () => {
+  const { gcs, pullRoot, dir } = setup();
+  const root = path.join(gcs, "dev-bucket", "page-generation-runs", "901", "output");
+  const state = path.join(root, "agent", "marshal-state");
+  const store = new FileSessionStore(path.join(state, "state", "sessions"), { runId: "run-901", host: { id: "agent-sandbox", kind: "sandbox" } });
+  store.update(store.create({ title: "Page Studio · build", runtime: "claude", native: { kind: "claude", cwd: "/ws" } }).id, { state: "idle" });
+  fs.writeFileSync(path.join(state, "run.json"), JSON.stringify({ runId: "run-901", title: "SaffPro from the page generator", status: "done" }));
+  fs.mkdirSync(path.join(gcs, "dev-bucket", "runs", "index"), { recursive: true });
+  fs.writeFileSync(path.join(gcs, "dev-bucket", "runs", "index", "run-901.json"), JSON.stringify({ outputRoot: "gs://dev-bucket/page-generation-runs/901/output/" }));
+  const host = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot);
+  const runs = await host.cloudRuns(true);
+  const found = runs.find((run) => run.outputRoot === "gs://dev-bucket/page-generation-runs/901/output");
+  assert.equal(found?.marshal, true);
+  assert.equal(found?.run?.title, "SaffPro from the page generator");
+  assert.equal((await host.sessions("run-901")).length, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("pushToCloud replaces the preview, keeps the old one, writes the page record and an edit record, and the cloud shows the new version", async () => {
   const { pullRoot, runRoot, dir } = setup();
   const studioDir = path.join(dir, "studio");
