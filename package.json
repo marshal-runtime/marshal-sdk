@@ -5,22 +5,57 @@
   "description": "A Marshal host without the desktop app: the portable runtime, extensions, Marshal sessions on the Claude Agent SDK.",
   "type": "module",
   "main": "dist/src/index.js",
-  "bin": { "marshal-sdk": "dist/src/cli.js" },
+  "bin": {
+    "marshal-sdk": "dist/src/cli.js"
+  },
   "scripts": {
     "build": "node build.mjs",
     "test": "node build.mjs && node --test \"dist/test/*.test.js\"",
     "image": "node image/prepare.mjs",
-    "pack": "node image/pack.mjs"
+    "pack": "node image/pack.mjs",
+    "vendor:packs": "node scripts/vendor-packs.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.302",
-    "@marshal/agent-runtime-claude": "0.1.0",
-    "@marshal/agent-runtime-prompt": "0.1.0",
-    "@marshal/runtime": "0.1.0",
+    "@marshal/agent-runtime-claude": "file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-78.tgz",
+    "@marshal/agent-runtime-org": "file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-87.tgz",
+    "@marshal/agent-runtime-prompt": "file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-83.tgz",
+    "@marshal/runtime": "file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@playwright/mcp": "0.0.68",
     "playwright-core": "1.59.0-alpha-1771104257000",
     "zod": "4.3.6"
   },
-  "engines": { "node": ">=22.14.0" }
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "devDependencies": {
+    "esbuild": "^0.27.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "@marshal/agent-runtime-claude": "file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-78.tgz",
+      "@marshal/agent-runtime-code-intelligence": "file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-72.tgz",
+      "@marshal/agent-runtime-composer": "file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz",
+      "@marshal/agent-runtime-conformance": "file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-72.tgz",
+      "@marshal/agent-runtime-core": "file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz",
+      "@marshal/agent-runtime-delegation": "file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-88.tgz",
+      "@marshal/agent-runtime-effects": "file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-72.tgz",
+      "@marshal/agent-runtime-extensions": "file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz",
+      "@marshal/agent-runtime-host": "file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-88.tgz",
+      "@marshal/agent-runtime-manifest": "file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-72.tgz",
+      "@marshal/agent-runtime-org": "file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-87.tgz",
+      "@marshal/agent-runtime-permissions": "file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-72.tgz",
+      "@marshal/agent-runtime-prompt": "file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-83.tgz",
+      "@marshal/agent-runtime-provider-artifacts": "file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-72.tgz",
+      "@marshal/agent-runtime-provider-kit": "file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-72.tgz",
+      "@marshal/agent-runtime-typescript": "file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-72.tgz",
+      "@marshal/agent-runtime-ui": "file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-85.tgz",
+      "@marshal/runtime": "file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz"
+    }
+  }
 }
