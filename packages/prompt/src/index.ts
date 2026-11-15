@@ -13,10 +13,12 @@ import {
   type V2CoreOptions,
 } from "@marshal/agent-runtime-prompt";
 
-
 // Same escaper as the desktop's foundation/prompt/prompt-boundary.ts (packages/providers keeps it unexported).
 function makeClosingTagEscaper(tagName: string): (body: string | null | undefined) => string {
-  const closeTagRe = new RegExp(`<\\s*\\/\\s*${tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b[^>]*>`, "gi");
+  const closeTagRe = new RegExp(
+    `<\\s*\\/\\s*${tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b[^>]*>`,
+    "gi",
+  );
   return (body) => (body ?? "").replace(closeTagRe, () => `<\\/${tagName}>`);
 }
 
@@ -59,7 +61,10 @@ export interface SessionPromptContext {
   /** A skills index section. */
   readonly skills?: string;
   /** The memory block: rendered inside the untrusted-memory wrapper, never as trusted text. */
-  readonly memories?: { readonly entries: readonly PromptMemoryEntry[]; readonly omittedCount?: number };
+  readonly memories?: {
+    readonly entries: readonly PromptMemoryEntry[];
+    readonly omittedCount?: number;
+  };
   /** Anything else the host composed itself (the desktop passes its whole session context here). */
   readonly text?: string;
 }
@@ -104,7 +109,13 @@ export interface PromptLayer {
   readonly override?: string | ((assembled: AssembledAgentPrompt) => string | undefined);
 }
 
-const PACKAGE_ROLE = { main: "main", lane: "main", fork: "subagent", reviewer: "reviewer", worker: "worker" } as const;
+const PACKAGE_ROLE = {
+  main: "main",
+  lane: "main",
+  fork: "subagent",
+  reviewer: "reviewer",
+  worker: "worker",
+} as const;
 
 const SDK_ROLE_TEXT: Partial<Record<HostPromptRole, string>> = {
   fork: `## Your role: fork
@@ -116,7 +127,10 @@ You are a top-level session another session started for separate work. Nothing r
 };
 
 /** Merge a session's layer over the host's: scalars from the session when set, sections and tools added. */
-export function mergePromptLayers(host: PromptLayer | undefined, session: PromptLayer | undefined): PromptLayer {
+export function mergePromptLayers(
+  host: PromptLayer | undefined,
+  session: PromptLayer | undefined,
+): PromptLayer {
   if (!session) return host ?? {};
   if (!host) return session;
   const merged: Record<string, unknown> = { ...host };
@@ -125,7 +139,9 @@ export function mergePromptLayers(host: PromptLayer | undefined, session: Prompt
   }
   return {
     ...(merged as PromptLayer),
-    ...(host.sections || session.sections ? { sections: [...(host.sections ?? []), ...(session.sections ?? [])] } : {}),
+    ...(host.sections || session.sections
+      ? { sections: [...(host.sections ?? []), ...(session.sections ?? [])] }
+      : {}),
     ...(host.core || session.core ? { core: { ...host.core, ...session.core } } : {}),
     ...(host.slots || session.slots ? { slots: { ...host.slots, ...session.slots } } : {}),
     ...(host.sessionContext || session.sessionContext
@@ -149,7 +165,10 @@ export function renderMemoryBlock(entries: readonly PromptMemoryEntry[], omitted
     .filter((entry) => typeof entry === "object" && entry !== null)
     .map((entry) => {
       const fact = escapeMemory(String(entry.fact ?? "").replace(LINE_BREAKS, " "));
-      const category = typeof entry.category === "string" && RENDERED_CATEGORIES.has(entry.category) ? entry.category : "unknown";
+      const category =
+        typeof entry.category === "string" && RENDERED_CATEGORIES.has(entry.category)
+          ? entry.category
+          : "unknown";
       const ms = typeof entry.createdAt === "string" ? Date.parse(entry.createdAt) : Number.NaN;
       const date = Number.isNaN(ms) ? "undated" : new Date(ms).toISOString().slice(0, 10);
       const prefix = typeof entry.source === "string" ? (entry.source.split("/", 1)[0] ?? "") : "";
@@ -167,7 +186,9 @@ export function renderMemoryBlock(entries: readonly PromptMemoryEntry[], omitted
     `</${UNTRUSTED_MEMORY_ELEMENT}>`,
   ];
   if (omitted > 0) {
-    block.push(`${omitted === 1 ? "1 more stored memory is" : `${omitted} more stored memories are`} not shown here; search them with recall before relying on memory.`);
+    block.push(
+      `${omitted === 1 ? "1 more stored memory is" : `${omitted} more stored memories are`} not shown here; search them with recall before relying on memory.`,
+    );
   }
   return block.join("\n");
 }
@@ -178,25 +199,35 @@ const SECTION_ID = /^[a-z0-9][a-z0-9._-]*$/;
 export function assembleHostPrompt(layer: PromptLayer = {}): AssembledAgentPrompt {
   const surface = layer.surface ?? "cloud-headless";
   const host = typeof surface === "string" ? "cloud" : "desktop";
-  const slots = typeof surface === "string" ? layer.slots : { ...layer.slots, ...surface.coreSlots };
+  const slots =
+    typeof surface === "string" ? layer.slots : { ...layer.slots, ...surface.coreSlots };
   const role = layer.role ?? "main";
   const roleText = layer.roleText ?? SDK_ROLE_TEXT[role];
   const extensions = layer.extensions;
   const context = layer.sessionContext ?? {};
-  const placed = (layer.sections ?? []).filter((section) => section.after !== undefined || section.before !== undefined);
-  const appended = (layer.sections ?? []).filter((section) => section.after === undefined && section.before === undefined);
+  const placed = (layer.sections ?? []).filter(
+    (section) => section.after !== undefined || section.before !== undefined,
+  );
+  const appended = (layer.sections ?? []).filter(
+    (section) => section.after === undefined && section.before === undefined,
+  );
   for (const section of layer.sections ?? []) {
     if (!SECTION_ID.test(section.id)) throw new Error(`Invalid prompt section id: ${section.id}`);
   }
 
   const extra: PromptSection[] = [
     ...(layer.soul ? [{ id: "soul", text: layer.soul }] : []),
-    ...(layer.knowledge ? [{ id: "knowledge", text: renderV2Section("knowledge", slots, host) }] : []),
+    ...(layer.knowledge
+      ? [{ id: "knowledge", text: renderV2Section("knowledge", slots, host) }]
+      : []),
     ...(extensions
       ? [
           {
             id: "extensions",
-            text: [renderV2Section("extensions", slots, host), typeof extensions === "object" ? (extensions.notable ?? "") : ""]
+            text: [
+              renderV2Section("extensions", slots, host),
+              typeof extensions === "object" ? (extensions.notable ?? "") : "",
+            ]
               .join("\n\n")
               .trim(),
           },
@@ -206,7 +237,14 @@ export function assembleHostPrompt(layer: PromptLayer = {}): AssembledAgentPromp
     ...(context.repoRules ? [{ id: "context.repo-rules", text: context.repoRules }] : []),
     ...(context.skills ? [{ id: "context.skills", text: context.skills }] : []),
     ...(context.text ? [{ id: "context.session", text: context.text }] : []),
-    ...(context.memories ? [{ id: "context.memory", text: renderMemoryBlock(context.memories.entries, context.memories.omittedCount) }] : []),
+    ...(context.memories
+      ? [
+          {
+            id: "context.memory",
+            text: renderMemoryBlock(context.memories.entries, context.memories.omittedCount),
+          },
+        ]
+      : []),
   ];
 
   const assembled = assembleAgentPrompt({
@@ -219,7 +257,11 @@ export function assembleHostPrompt(layer: PromptLayer = {}): AssembledAgentPromp
     surface:
       typeof surface === "string"
         ? surface
-        : { ...surface, ...(slots ? { coreSlots: slots } : {}), ...(roleText !== undefined ? { roleDelta: roleText } : {}) },
+        : {
+            ...surface,
+            ...(slots ? { coreSlots: slots } : {}),
+            ...(roleText !== undefined ? { roleDelta: roleText } : {}),
+          },
     role: PACKAGE_ROLE[role],
     ...(layer.workspaceDelta !== undefined ? { workspaceDelta: layer.workspaceDelta } : {}),
     ...(layer.orgDelta !== undefined ? { orgDelta: layer.orgDelta } : {}),
@@ -229,16 +271,25 @@ export function assembleHostPrompt(layer: PromptLayer = {}): AssembledAgentPromp
 
   // A cloud surface takes no role text from the host through the package; the role section is swapped here.
   let sections = assembled.sections.map((section) =>
-    typeof surface === "string" && roleText !== undefined && section.id === `role.${PACKAGE_ROLE[role]}`
+    typeof surface === "string" &&
+    roleText !== undefined &&
+    section.id === `role.${PACKAGE_ROLE[role]}`
       ? { id: section.id, text: roleText.trim() }
       : section,
   );
   for (const section of placed) {
     const anchor = section.after ?? section.before;
     const index = sections.findIndex((candidate) => candidate.id === anchor);
-    if (index < 0) throw new Error(`Prompt section "${section.id}" is placed at "${anchor}", which is not in the prompt`);
+    if (index < 0)
+      throw new Error(
+        `Prompt section "${section.id}" is placed at "${anchor}", which is not in the prompt`,
+      );
     const entry = { id: `host.${section.id}`, text: section.text.trim() };
-    sections = [...sections.slice(0, section.after !== undefined ? index + 1 : index), entry, ...sections.slice(section.after !== undefined ? index + 1 : index)];
+    sections = [
+      ...sections.slice(0, section.after !== undefined ? index + 1 : index),
+      entry,
+      ...sections.slice(section.after !== undefined ? index + 1 : index),
+    ];
   }
   sections = sections.filter((section) => section.text.length > 0);
   const seen = new Set<string>();
@@ -246,9 +297,14 @@ export function assembleHostPrompt(layer: PromptLayer = {}): AssembledAgentPromp
     if (seen.has(section.id)) throw new Error(`Duplicate prompt section id: ${section.id}`);
     seen.add(section.id);
   }
-  const result: AssembledAgentPrompt = { content: sections.map((section) => section.text).join("\n\n"), sections };
+  const result: AssembledAgentPrompt = {
+    content: sections.map((section) => section.text).join("\n\n"),
+    sections,
+  };
 
   if (layer.override === undefined) return result;
   const replaced = typeof layer.override === "string" ? layer.override : layer.override(result);
-  return replaced === undefined ? result : { content: replaced, sections: [{ id: "override", text: replaced }] };
+  return replaced === undefined
+    ? result
+    : { content: replaced, sections: [{ id: "override", text: replaced }] };
 }
