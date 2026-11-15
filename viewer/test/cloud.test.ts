@@ -207,6 +207,11 @@ test("pushToCloud replaces the preview, keeps the old one, writes the page recor
   const preview = fs.readFileSync(path.join(runRoot, "preview", "index.html"), "utf8");
   assert.match(preview, /every call/);
   assert.match(preview, /src="\.\.\/images\/[^"]+"/);
+  // The inlined copy their UI also serves carries the edit, with its pictures as data: URLs.
+  const inlined = fs.readFileSync(path.join(runRoot, "preview", "inline", "index.html"), "utf8");
+  assert.match(inlined, /every call/);
+  assert.match(inlined, /src="data:image\/[a-z]+;base64,/);
+  assert.doesNotMatch(inlined, /\.\.\/images\//);
   assert.equal(fs.readdirSync(path.join(runRoot, "images")).length, 1);
   const editsDir = path.join(runRoot, "agent", "edits");
   const backup = fs.readdirSync(editsDir).find((name) => !name.endsWith(".json"))!;

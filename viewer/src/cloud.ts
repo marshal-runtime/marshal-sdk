@@ -1,6 +1,7 @@
 // Cloud runs: page generations agent-sandbox ran on the Marshal SDK, kept in GCS under each run's output root.
 //
 //   <outputRoot>/preview/index.html          the page their page generator UI shows (pictures at ../images/<name>)
+//   <outputRoot>/preview/inline/index.html   the same page with its pictures inlined, which their UI also serves
 //   <outputRoot>/images/<name>               the page's pictures
 //   <outputRoot>/agent/marshal-state/        the run's Marshal state: run.json, state/sessions/ (SDK session
 //                                            store), data/ (PAGE_STUDIO_DIR: pages/, library/, polish/)
@@ -348,7 +349,8 @@ export interface PushResult {
 }
 
 /**
- * Writes the edited page where their page generator UI reads it (preview/index.html, pictures under images/), keeps
+ * Writes the edited page where their page generator UI reads it (preview/index.html, pictures under images/, and the
+ * inlined copy at preview/inline/index.html), keeps
  * the previous preview under agent/edits/, updates the page record in the run's Marshal state, and records the edit.
  */
 export async function pushToCloud(input: PushInput): Promise<PushResult> {
@@ -372,6 +374,14 @@ export async function pushToCloud(input: PushInput): Promise<PushResult> {
     await gcloud(["storage", "cp", ...finished.assets.map((name) => path.join(out, "assets", name)), `${root}/images/`], { timeoutMs: 300_000 });
   }
   await gcloud(["storage", "cp", "--content-type=text/html; charset=utf-8", "--cache-control=no-cache", path.join(out, "index.html"), previewUri], { timeoutMs: 60_000 });
+  // Their UI also serves a copy with the pictures inlined as base64 (preview/inline/index.html); without a new one it
+  // keeps showing the page from before the edit.
+  const inlineUri = `${root}/preview/inline/index.html`;
+  await gcloud(["storage", "cp", inlineUri, `${root}/${EDITS}/${stamp}-${who}/preview.inline.before.html`], { timeoutMs: 60_000 }).catch(() => undefined);
+  const inline = await previewHtml(root, out);
+  const inlineFile = path.join(out, "inline.html");
+  fs.writeFileSync(inlineFile, inline.html);
+  await gcloud(["storage", "cp", "--content-type=text/html; charset=utf-8", "--cache-control=no-cache", inlineFile, inlineUri], { timeoutMs: 120_000 });
 
   // agent-sandbox's runner keeps PAGE_STUDIO_DIR as page-studio/ and the finished page as sandbox-page.html (the
   // baseline its next edit turn diffs against); page-run folders keep it as data/.

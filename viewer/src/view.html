@@ -507,7 +507,8 @@
     const running = session.state === "running";
     const activity = state.detail && state.detail.activity;
     let text;
-    if (h.kind === "folder") text = (running ? "running · " : "") + "folder on this Mac (read-only) · updates as the run writes";
+    if (h.mode === "cloud") text = (running ? "running · " : "") + "cloud run in GCS (read-only here) · updates as the run uploads its state";
+    else if (h.kind === "folder") text = (running ? "running · " : "") + "folder on this Mac (read-only) · updates as the run writes";
     else if (h.status !== "online") text = "host offline";
     else if (h.mode === "store") text = "finished run · store-only host";
     else text = running ? "live · running" + (activity ? " · " + activity : "") : "live · idle, waiting for a message";
@@ -589,7 +590,8 @@
       return box.replaceChildren(el("div", { class: "composer" }, el("div", { class: "notice" }, "Read-only: this is a shared copy, and nothing runs it here to answer.")));
     }
     if (!isLive()) {
-      const why = host().kind === "folder" ? "Read-only: nothing runs this folder. Serve it with marshal-sdk serve and link the host to talk to it."
+      const why = host().mode === "cloud" ? "Read-only: this run is in the cloud. Continue in Marshal opens your own copy of a session; Pages lets you edit and push the page back."
+        : host().kind === "folder" ? "Read-only: nothing runs this folder. Serve it with marshal-sdk serve and link the host to talk to it."
         : host().status !== "online" ? "The host is offline." : "This host serves a finished run; there is nobody to answer.";
       return box.replaceChildren(el("div", { class: "composer" }, el("div", { class: "notice" }, why)));
     }
