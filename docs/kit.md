@@ -187,6 +187,27 @@ email with `source: marshal`, and a zyg-agents job's under `zyg-agents`. An SDK 
 account has no defined owner today, so the front may refuse it or file it under the service. Publish from a host
 whose Brain caller is a person (`desktop` mode) until that is decided.
 
+### Finding and opening shared sessions from another Marshal
+
+The Brain's index answers searches but holds no whole sessions. `sessions.search {query, scope: "cloud"}` returns
+the hits; a hit from a session published with a run context line also carries `runId` and `stateLocation`.
+`sessions.read {sessionId, stateLocation?, tail?}` opens one. It looks in this host's store first, then in the
+stores named with `--sessions-root`, and then in `<stateLocation>/sessions/<id>/transcript.jsonl`. That last read
+uses the person's gcloud credentials. `found: false` lists where it looked.
+
+A Marshal whose own Brain is too old to search the index (the desktop on Brain 0.1.0) can still find and open
+these sessions through a local kit host that serves the link. The SDK sessions viewer adds that host as a linked
+host:
+
+```bash
+marshal-sdk serve --workspace ws --state state --kit brain,sessions \
+  --brain-package <brain 0.2.0 package> --brain-caller you@zyg.com \
+  --sessions-root <another SDK state dir> --no-browser --token-file token --port 7790
+```
+
+The viewer then calls `POST /invoke` with `sessions.search` and `sessions.read`. This host runs no model; brain
+writes stay denied.
+
 The decisions:
 
 1. May a headless host propose team memories, and as whom (the service account, or the person it works for)?

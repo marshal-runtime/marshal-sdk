@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { MarshalHostOptions } from "./host.js";
+import type { KitOptions, KitPart } from "./kit/index.js";
 import { ONBOARDING_USAGE, onboardingCommand, withManifest } from "./onboarding-cli.js";
 import { startLinkServer } from "./link/server.js";
 import { useExtensionResolver } from "./onboarding.js";
@@ -37,6 +38,10 @@ Host options (exec, agent, serve):
   --claude-config-dir <dir>  run the backend on that Claude account and drop ANTHROPIC_API_KEY
   --host-id <id>  --host-kind <local|container|e2b>  --label key=value (repeatable)
   --no-browser               do not give sessions a headless browser
+  --kit brain,memory,sessions  the team Brain, team memory and past-session search, read-only (docs/kit.md)
+  --brain-package <dir>      the Brain extension (default: bundled, else $MARSHAL_SDK_BRAIN_PACKAGE)
+  --brain-caller <email>     who the Brain answers for (default: the gcloud account in desktop mode)
+  --sessions-root <dir>      another SDK store sessions.read may open sessions from; repeatable
 `;
 
 interface Arguments {
@@ -92,6 +97,7 @@ function hostOptions(args: Arguments): MarshalHostOptions {
   );
   const model = one(args, "model");
   const effort = one(args, "effort");
+  const kit = kitSelection(args);
   return {
     workspacePath: path.resolve(required(args, "workspace")),
     stateRoot: path.resolve(required(args, "state")),
@@ -102,7 +108,24 @@ function hostOptions(args: Arguments): MarshalHostOptions {
     browser: !args.flags.has("no-browser"),
     ...(model ? { model } : {}),
     ...(effort ? { reasoningEffort: effort } : {}),
+    ...(kit ? { kit } : {}),
     log: (line) => process.stderr.write(`[marshal-sdk] ${line}\n`),
+  };
+}
+
+/** `--kit` on exec, agent and serve: a read-only kit (writes stay denied; docs/kit.md). */
+function kitSelection(args: Arguments): KitOptions | undefined {
+  const raw = one(args, "kit") ?? process.env.MARSHAL_SDK_KIT ?? "";
+  const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return undefined;
+  for (const part of parts) if (!["brain", "memory", "sessions"].includes(part)) throw new Error(`--kit takes brain, memory and sessions, got ${part}.`);
+  const brainPackage = one(args, "brain-package");
+  const caller = one(args, "brain-caller");
+  const readRoots = (args.values.get("sessions-root") ?? []).map((dir) => path.resolve(dir));
+  return {
+    parts: parts as KitPart[],
+    ...(brainPackage || caller ? { brain: { ...(brainPackage ? { packageRoot: path.resolve(brainPackage) } : {}), ...(caller ? { callerEmail: caller } : {}) } } : {}),
+    ...(readRoots.length ? { sessions: { readRoots } } : {}),
   };
 }
 
