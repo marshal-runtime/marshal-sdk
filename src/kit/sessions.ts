@@ -222,11 +222,13 @@ export function createSessionsProvider(
         const state = typeof input.stateLocation === "string" ? input.stateLocation.trim() : "";
         if (state) {
           if (!/^gs:\/\/[a-z0-9._-]+\//.test(state)) throw Object.assign(new Error("stateLocation must be a gs:// folder."), { code: "invalid_input" });
-          const base = `${state.replace(/\/+$/, "")}/sessions`;
           const read = options.readCloudObject ?? gcloudCat;
-          tried.push(base);
-          const transcript = await read(`${base}/${id}/transcript.jsonl`);
-          if (transcript !== undefined) {
+          const root = state.replace(/\/+$/, "");
+          // agent/marshal-state/ holds the store as state/sessions (page-run) or host/sessions (agent-sandbox runner).
+          for (const base of [`${root}/state/sessions`, `${root}/host/sessions`, `${root}/sessions`]) {
+            tried.push(base);
+            const transcript = await read(`${base}/${id}/transcript.jsonl`);
+            if (transcript === undefined) continue;
             const index = await read(`${base}/index.json`);
             const session = index ? parseIndex(index).find((record) => record.id === id) : undefined;
             return readResult("cloud-state", base, session, parseLines(transcript), tail);
