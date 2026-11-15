@@ -138,6 +138,21 @@ test("a run elsewhere in the bucket is listed through its pointer under the pref
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("a run found in the org's session index (no pointer) is listed from its state location, in this host's bucket only", async () => {
+  const { gcs, pullRoot, dir } = setup();
+  const state = path.join(gcs, "dev-bucket", "page-generation-runs", "902", "output", "agent", "marshal-state");
+  const store = new FileSessionStore(path.join(state, "host", "sessions"), { runId: "run-902", host: { id: "agent-sandbox", kind: "sandbox" } });
+  store.update(store.create({ title: "Page Studio · build", runtime: "claude", native: { kind: "claude", cwd: "/ws" } }).id, { state: "idle" });
+  fs.writeFileSync(path.join(state, "page-run.json"), JSON.stringify({ runId: "run-902", pageId: PAGE_ID }));
+  const discover = async () => ["gs://dev-bucket/page-generation-runs/902/output", "gs://other-bucket/x/output"];
+  const host = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot, discover);
+  const runs = await host.cloudRuns(true);
+  assert.equal(runs.find((run) => run.outputRoot === "gs://dev-bucket/page-generation-runs/902/output")?.run?.runId, "run-902");
+  assert.equal(runs.some((run) => run.outputRoot.startsWith("gs://other-bucket")), false);
+  assert.equal((await host.sessions("run-902")).length, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("agent-sandbox's runner layout (host/sessions, page-studio/, page-run.json, sandbox-page.html) lists, opens and takes a push", async () => {
   const { gcs, pullRoot, dir } = setup();
   const root = path.join(gcs, "dev-bucket", "runs", "sandbox-902");

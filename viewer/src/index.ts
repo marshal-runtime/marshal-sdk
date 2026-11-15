@@ -81,7 +81,19 @@ export function createExtension(context: Context) {
   const linked = new Map(links.hosts.map((config) => [config.id, linkedHost(config)]));
   const clouds = configuredClouds(context.configuration);
   let cloudHosts: Map<string, ReturnType<typeof cloudHost>> | undefined;
-  const cloud = () => (cloudHosts ??= new Map(clouds.clouds.map((config) => [config.id, cloudHost(config, pullRoot())])));
+  // Agent-sandbox runs announce themselves in the org's session index ("agent-sandbox run <id> · state <gs://…>"); every linked
+  // kit host that searches it adds those runs' output roots to the cloud hosts' listing.
+  const fromIndex = async (): Promise<string[]> => {
+    const roots: string[] = [];
+    for (const host of linked.values()) {
+      for (const hit of host.shared ? await host.shared("agent-sandbox run", 30) : []) {
+        const root = hit.origin?.stateLocation?.replace(/\/+$/, "").replace(/\/agent\/marshal-state$/, "");
+        if (root && /^gs:\/\/[^/]+\/.+/.test(root) && !roots.includes(root)) roots.push(root);
+      }
+    }
+    return roots;
+  };
+  const cloud = () => (cloudHosts ??= new Map(clouds.clouds.map((config) => [config.id, cloudHost(config, pullRoot(), fromIndex)])));
   const allHosts = (input: Row): Host[] => [folderHost(configuredRoots(input)), ...cloud().values(), ...linked.values()];
   const hostFor = (input: Row): Host => {
     const id = typeof input.hostId === "string" && input.hostId ? input.hostId : LOCAL_HOST_ID;
