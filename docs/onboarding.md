@@ -146,6 +146,12 @@ refuses, naming it.
   "(default)" next to the listed Page Studio, and Page Studio answers.
 - The same host with `--no-default zygTools` (Marley) brings up the Brain and Page Studio only.
 
+`docs/onboarding-proof/installed-tarball-proof.txt` (2026-11-15, Node 24.14, no model):
+- `image/pack.mjs` packed Page Studio with the Brain default, and `npm install` put the tarball into an empty folder.
+- With `MARSHAL_SDK_BRAIN_PACKAGE` unset, the Brain came up from `<install>/node_modules/@marshal/sdk/extensions/brain`,
+  marked "(default)", and Page Studio answered.
+- A `kit: ["memory"]` manifest found the same bundled Brain.
+
 Node 22.14 cannot run the Brain (`no such module: fts5`, see docs/kit.md), so a Brain default needs Node 24.
 
 Tests (`test/onboarding.test.ts`):

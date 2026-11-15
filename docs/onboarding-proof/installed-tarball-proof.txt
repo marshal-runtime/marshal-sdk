@@ -1,0 +1,24 @@
+# installed from /tmp/fork-onboard/t3/pack/marshal-sdk-0.0.1.tgz into an empty folder; MARSHAL_SDK_BRAIN_PACKAGE unset
+$ cat marshal-sdk.json
+{"version":1,"extensions":[{"path":"/tmp/fork-onboard/t3/install/node_modules/@marshal/sdk/extensions/page-studio"}]}
+
+$ env -u MARSHAL_SDK_BRAIN_PACKAGE node <install>/node_modules/@marshal/sdk/dist/src/cli.js exec --workspace ws --state state --capability pagestudio.pages
+[marshal-sdk] manifest /private/tmp/fork-onboard/t3/run/marshal-sdk.json: @marshal/brain@0.1.0 (default), @zyg/page-studio@0.1.0
+(node:91413) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[marshal-sdk] extension @marshal/brain@0.1.0 (default) enabled, healthy: 3 capabilities, 0 skills
+[marshal-sdk] extension @zyg/page-studio@0.1.0 enabled, healthy: 37 capabilities, 7 skills
+{
+  "result": {
+    "pages": [
+      {
+        "id": "rawdog--new-page-7n8n5",
+        "title": "RAWDOG · One agent + critic",
+        "brand": "RAWDOG",
+        "version": 1,
+        "updatedAt": "1970-01-01T00:00:00.000Z",
+
+# kit ["memory"] with no package named: the kit finds the bundled Brain too
+[marshal-sdk] manifest /private/tmp/fork-onboard/t3/run/marshal-sdk.json: @zyg/page-studio@0.1.0
+[marshal-sdk] extension @marshal/brain@0.1.0 enabled, healthy: 3 capabilities, 0 skills
+[marshal-sdk] extension @zyg/page-studio@0.1.0 enabled, healthy: 37 capabilities, 7 skills
