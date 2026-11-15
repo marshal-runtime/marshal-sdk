@@ -32,6 +32,7 @@ export {
 export { createForkToolsProvider } from "./fork-provider.js";
 export { SessionForks, forkReport, type ForkGroupResult, type ForkTask, type SubagentSummary } from "./forks.js";
 export { manifestPath, withManifest } from "./onboarding-cli.js";
+export { orgExtensionResolver, type OrgExtensionResolverOptions } from "./org-extensions.js";
 export {
   BRAIN_EXTENSION,
   DEFAULT_EXTENSIONS,
