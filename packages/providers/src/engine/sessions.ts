@@ -691,6 +691,24 @@ function lastAssistantText(messages: readonly Message[], maxChars: number): stri
   return undefined;
 }
 
+function truncateForkResult(text: string): string {
+  return text.length > FORK_RESULT_MAX_CHARS ? `${text.slice(0, FORK_RESULT_MAX_CHARS)}…` : text;
+}
+
+/** The newest assistant reply with text that came after the newest message that gave the session work. */
+function latestReplyAfterWork(messages: readonly Message[]): Message | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message) continue;
+    if (message.role === "assistant") {
+      if (!message.error && message.content.trim()) return message;
+    } else if (isSubagentReadinessWorkMessage(message)) {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 const FORK_CALL_TOOL_NAMES = [
   FORK_SUBAGENTS_TOOL_NAME,
   "runtimeInvoke",
@@ -1991,8 +2009,22 @@ export class SessionManager
     const interrupted = this.consumeParentInterruptedSubagentIdle(childSessionData.id);
     if (interrupted) return;
     if (!(options?.wasBusy ?? this.isSessionBusy(childSessionData.id))) return;
-    const readinessGeneration = this.getSubagentReadinessGeneration(childSessionData);
+    const outcome = options?.outcome ?? "idle";
+    let readinessGeneration = this.getSubagentReadinessGeneration(childSessionData);
     if (!readinessGeneration) return;
+    // A fork reports each reply it ends a turn on, and only its own: its history starts with the
+    // parent's conversation. Keying on the reply (not the last message that asked for work) keeps
+    // a turn the runtime starts on its own, such as a background-command notice, from being
+    // swallowed as a repeat (2026-11-16: fork c26e32f8's real report never reached its parent).
+    let forkReply: Message | undefined;
+    if (childSessionData.fork) {
+      if (outcome === "idle" && this.subagentLaunchPromptAwaiting.has(childSessionData.id)) return;
+      forkReply = latestReplyAfterWork(
+        this.store.loadSessionData(childSessionData.id)?.messages ?? childSessionData.messages,
+      );
+      if (forkReply) readinessGeneration = `${readinessGeneration}:${forkReply.id}`;
+      else if (outcome === "idle") return;
+    }
     const parentSessionId = childSessionData.parentSessionId;
     if (this.userStoppedSessions.has(childSessionData.id)) return;
     const parentLifecycleToken = this.captureParentReadinessLifecycle(parentSessionId);
@@ -2020,7 +2052,6 @@ export class SessionManager
     if (this.hasRecordedSubagentReadiness(parent, childSessionData, readinessGeneration)) return;
     const messageId = `subagent-ready:${parent.id}:${childSessionData.id}:${readinessGeneration}`;
     const timestamp = new Date(now).toISOString();
-    const outcome = options?.outcome ?? "idle";
     const detail = options?.detail?.trim().slice(0, 500);
     const lifecycleSummary =
       outcome === "failed"
@@ -2032,12 +2063,7 @@ export class SessionManager
             : "is idle and ready for follow-up.";
     // A fork reports back through its final message, so the parent gets the
     // result with the notice instead of having to read the child's transcript.
-    const forkResult = childSessionData.fork
-      ? lastAssistantText(
-          this.store.loadSessionData(childSessionData.id)?.messages ?? childSessionData.messages,
-          FORK_RESULT_MAX_CHARS,
-        )
-      : undefined;
+    const forkResult = forkReply ? truncateForkResult(forkReply.content.trim()) : undefined;
     const readinessMessage: Message = {
       id: messageId,
       role: "system",
