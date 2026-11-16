@@ -13,7 +13,10 @@ export class SessionPublisher {
     private readonly log: (line: string) => void = () => undefined,
   ) {}
 
+  private closed = false;
+
   schedule(sessionId: string): void {
+    if (this.closed) return;
     if (this.running.has(sessionId)) {
       this.again.add(sessionId);
       return;
@@ -28,6 +31,12 @@ export class SessionPublisher {
   /** Waits until every scheduled upload, and any it queued, has finished. */
   async flush(): Promise<void> {
     while (this.running.size) await Promise.all([...this.running.values()]);
+  }
+
+  /** Finishes every upload, then takes no more: what is scheduled after this has no Brain left to reach. */
+  async close(): Promise<void> {
+    await this.flush();
+    this.closed = true;
   }
 
   /** The last upload of each session: when, and whether the Brain took it. */
