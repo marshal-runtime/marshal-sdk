@@ -344,7 +344,18 @@ const SESSION_TOOL_OUTPUTS: Record<string, object> = {
  * Sessions talking to sessions, under the desktop's self-tool names (electron/self-tools.ts: startLane, messageSession,
  * searchSessions, getSessionTranscript), so an agent prompted for the desktop calls the same names here.
  */
-export function createSessionToolsProvider(port: ClaudeAgentPort, store: SessionStore, extra: { orgSearch?: OrgSessionSearch } = {}): CapabilityProvider {
+export function createSessionToolsProvider(
+  port: ClaudeAgentPort,
+  store: SessionStore,
+  extra: {
+    orgSearch?: OrgSessionSearch;
+    /**
+     * The label that bounds what a session sees (createMarshalHost `sessionScopeLabel`): searchSessions and getSessionTranscript return only sessions
+     * (local and org) whose label equals the caller's, and a caller without the label (or with no session) sees none.
+     */
+    scopeLabel?: string;
+  } = {},
+): CapabilityProvider {
   const descriptors = Object.entries(SESSION_TOOLS).map(([operation, spec]) => ({
     protocolVersion: RUNTIME_PROTOCOL_VERSION,
     name: `${TOOL_PREFIX}${operation}`,
@@ -361,6 +372,13 @@ export function createSessionToolsProvider(port: ClaudeAgentPort, store: Session
     const session = caller ? store.get(caller) : undefined;
     return session ? { kind: "session", sessionId: session.id, name: session.title } : { kind: "host", name: port.hostId };
   };
+  const scopeOf = (caller: string | undefined): { value: string | undefined } | undefined => {
+    if (extra.scopeLabel === undefined) return undefined;
+    const value = caller ? store.get(caller)?.labels?.[extra.scopeLabel] : undefined;
+    return { value: value || undefined };
+  };
+  const inScope = (scope: { value: string | undefined } | undefined, labels: Readonly<Record<string, string>> | undefined): boolean =>
+    scope === undefined || (scope.value !== undefined && labels?.[extra.scopeLabel!] === scope.value);
   return {
     id: "marshal.session-tools",
     version: VERSION,
@@ -417,8 +435,10 @@ export function createSessionToolsProvider(port: ClaudeAgentPort, store: Session
           const workspace = typeof input.workspace === "string" ? input.workspace.toLowerCase() : undefined;
           const query = text(input.query, "query");
           const scope = input.scope === "local" || input.scope === "cloud" ? input.scope : "all";
+          const bound = scopeOf(caller);
           const local = (scope === "cloud" ? [] : await store.search(query, 500))
             .filter(({ session }) => session.id !== caller)
+            .filter(({ session }) => inScope(bound, session.labels))
             .filter(({ session }) => input.includeSubagents !== false || !session.parentId)
             .filter(({ session }) => !since || session.updatedAt >= since)
             .filter(({ session }) => !until || session.createdAt <= until)
@@ -445,6 +465,7 @@ export function createSessionToolsProvider(port: ClaudeAgentPort, store: Session
               ? []
               : (await extra.orgSearch.search({ query, limit: 500, ...(since ? { since } : {}), ...(until ? { until } : {}) }))
                   .filter(({ row }) => row.id !== caller && !held.has(row.id))
+                  .filter(({ row }) => inScope(bound, row.labels))
                   .filter(({ row }) => !workspace || `${row.ws} ${row.impl}`.toLowerCase().includes(workspace))
                   .map(({ row, snippet, score }) => ({
                     sessionId: row.id,
@@ -474,11 +495,14 @@ export function createSessionToolsProvider(port: ClaudeAgentPort, store: Session
         }
         case "getSessionTranscript": {
           const sessionId = text(input.sessionId, "sessionId");
-          const session = store.get(sessionId);
+          const bound = scopeOf(caller);
+          const found = store.get(sessionId);
+          // A session outside the caller's scope reads exactly like one that does not exist.
+          const session = found && inScope(bound, found.labels) ? found : undefined;
           const lastN = typeof input.lastN === "number" && input.lastN > 0 ? input.lastN : 30;
           if (!session) {
-            const row = extra.orgSearch ? await extra.orgSearch.row(sessionId) : undefined;
-            if (!row) return { output: { success: false, error: "Session not found" } };
+            const row = !found && extra.orgSearch ? await extra.orgSearch.row(sessionId) : undefined;
+            if (!row || !inScope(bound, row.labels)) return { output: { success: false, error: "Session not found" } };
             const all = await extra.orgSearch!.messages(row);
             const messages = all.slice(-lastN).map((message) => ({
               role: message.role,

@@ -192,7 +192,11 @@ const TOOLS: Record<string, ToolSpec> = {
 };
 
 /** Forks under the desktop's self-tool names, as `marshal.tool.*` capabilities every session and the host can call. */
-export function createForkToolsProvider(forks: SessionForks): CapabilityProvider {
+/**
+ * `requireCaller`: forkSubagents, listSubagents, messageSubagent and messageForks act only for a calling session of this host (on its own children). Without it, a
+ * call with no session (the host's own scope) reaches every subagent; a host serving several tenants (`sessionScopeLabel`) sets it.
+ */
+export function createForkToolsProvider(forks: SessionForks, options: { requireCaller?: boolean } = {}): CapabilityProvider {
   const descriptors = Object.entries(TOOLS).map(([operation, spec]) => ({
     protocolVersion: RUNTIME_PROTOCOL_VERSION,
     name: `${PREFIX}${operation}`,
@@ -215,7 +219,7 @@ export function createForkToolsProvider(forks: SessionForks): CapabilityProvider
       const caller = forks.known(callerSessionId(context));
       switch (name.slice(PREFIX.length)) {
         case "forkSubagents": {
-          const parent = caller ?? (typeof input.sessionId === "string" ? input.sessionId : undefined);
+          const parent = caller ?? (!options.requireCaller && typeof input.sessionId === "string" ? input.sessionId : undefined);
           if (!parent) return { output: { success: false, error: "No calling session: pass sessionId to fork a session from the host." } };
           try {
             const tasks: ForkTask[] = (Array.isArray(input.tasks) ? input.tasks : []).map((task: Record<string, unknown>) => ({
@@ -237,8 +241,10 @@ export function createForkToolsProvider(forks: SessionForks): CapabilityProvider
           }
         }
         case "listSubagents":
+          if (options.requireCaller && !caller) return { output: { success: false, subagents: [], error: "No calling session" } };
           return { output: { success: true, subagents: forks.subagents(caller) } };
         case "messageSubagent":
+          if (options.requireCaller && !caller) return { output: { sessionId: String(input.sessionId ?? ""), success: false, accepted: false, messageId: "", error: "No calling session" } };
           return {
             output: await forks.messageSubagent(caller, text(input.sessionId, "sessionId"), text(input.message, "message"), {
               deliveryMode: input.deliveryMode === "interrupt" ? "interrupt" : "queue",
@@ -248,7 +254,7 @@ export function createForkToolsProvider(forks: SessionForks): CapabilityProvider
             }),
           };
         case "messageForks": {
-          const parent = caller ?? (typeof input.sessionId === "string" ? input.sessionId : undefined);
+          const parent = caller ?? (!options.requireCaller && typeof input.sessionId === "string" ? input.sessionId : undefined);
           if (!parent) return { output: { success: false, results: [], error: "No calling session: pass sessionId (the parent) from the host." } };
           const targets = forks.forkIds(parent, typeof input.groupId === "string" ? input.groupId : undefined);
           if (targets.length === 0) return { output: { success: false, results: [], error: "No forks match" } };
