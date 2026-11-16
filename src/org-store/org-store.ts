@@ -120,6 +120,7 @@ export class OrgStore {
       await this.publish(rootId).catch((error) => this.options.log?.("org-store.publish_failed", { rootId, error: error instanceof Error ? error.message : String(error) }));
     }
     await Promise.all([...this.running]);
+    await this.transcripts.drainAll();
   }
 
   /** Publishes one root session: transcripts, then `session.json`, then its row, then the day's shard. Returns undefined when it has no directory. */

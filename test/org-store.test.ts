@@ -186,6 +186,7 @@ describe("OrgTranscriptStore, the Agent SDK sessionStore on a bucket", () => {
     await bound.append(key, [{ type: "assistant", uuid: "a1" }, { type: "user", uuid: "u2" }]);
     await bound.append({ ...key, subpath: "subagents/agent-1" }, [{ type: "user", uuid: "s1" }]);
     const dir = org.locate(id)!;
+    await org.transcripts.drain(id);
     assert.equal((await objects.list(`${dir}/native/_batches/`)).length, 3);
     const before = await bound.load(key);
     assert.deepEqual(before!.map((entry) => entry.uuid), ["u1", "a1", "u2"]);
@@ -201,6 +202,39 @@ describe("OrgTranscriptStore, the Agent SDK sessionStore on a bucket", () => {
     assert.deepEqual((await bound.load(key))!.map((entry) => entry.uuid), ["u1", "a1", "u2", "u3"]);
     await bound.delete!(key);
     assert.equal(await bound.load(key), null);
+  });
+
+  test("R31: append returns before the cloud write; load, compose and close wait for it; a failed write is kept and retried", async () => {
+    let delay = 400;
+    let failures = 1;
+    const base = fsObjectStore(tmp("wb"));
+    const objects = {
+      ...base,
+      get: base.get.bind(base),
+      read: base.read.bind(base),
+      list: base.list.bind(base),
+      listInfo: base.listInfo.bind(base),
+      compose: base.compose.bind(base),
+      delete: base.delete.bind(base),
+      async put(name: string, data: Uint8Array | string, options?: never) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (failures > 0 && name.includes("_batches")) { failures--; throw new Error("503"); }
+        return base.put(name, data, options);
+      },
+    };
+    const sessions = new FileSessionStore(tmp("wb-s"), origin());
+    const org = new OrgStore({ objects, impl: marley }, sessions);
+    const record = sessions.create({ title: "t", runtime: "claude", labels: { procedure: "marley-chat", env: "staging", brand: "brand-1" }, native: { sessionId: "n1" } } as never);
+    const bound = org.transcripts.bind(record.id);
+    const started = Date.now();
+    await bound.append(key, [{ type: "user", uuid: "u1" }]);
+    await bound.append(key, [{ type: "assistant", uuid: "a1" }]);
+    assert.ok(Date.now() - started < 100, "append does not wait for the cloud");
+    assert.deepEqual((await bound.load(key))!.map((entry) => entry.uuid), ["u1", "a1"], "a load sees what this process appended, in order, after the failed write was retried");
+    delay = 0;
+    await bound.append(key, [{ type: "user", uuid: "u2" }]);
+    await org.close();
+    assert.deepEqual((await bound.load(key))!.map((entry) => entry.uuid), ["u1", "a1", "u2"]);
   });
 
   test("more than 31 batches compose in chunks", async () => {

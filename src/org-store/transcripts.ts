@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { ObjectStore } from "../object-store.js";
+import { PreconditionFailedError, type ObjectStore } from "../object-store.js";
 import type { BackendTranscriptStore } from "../session-store.js";
 
 type Entry = { type: string; uuid?: string; [k: string]: unknown };
@@ -35,6 +35,8 @@ export interface OrgTranscriptOptions {
  */
 export class OrgTranscriptStore implements BackendTranscriptStore {
   private counter = 0;
+  /** Per Marshal session: batches the SDK handed over that have not reached the store yet, uploaded in the background in order. */
+  private readonly queues = new Map<string, { items: Array<{ object: string; body: string }>; running: Promise<void> | null }>();
 
   constructor(private readonly options: OrgTranscriptOptions) {}
 
@@ -50,8 +52,58 @@ export class OrgTranscriptStore implements BackendTranscriptStore {
     return new BoundTranscripts(this, this.options, marshalSessionId);
   }
 
+  /**
+   * The Agent SDK awaits `append` before it hands a turn's result over, so a store that writes to the cloud inside `append` puts a cloud round trip
+   * (and its retries) into every turn. Here `append` only queues the batch; it is uploaded right after, off the turn, in order.
+   */
+  enqueue(marshalSessionId: string, object: string, body: string): void {
+    const queue = this.queues.get(marshalSessionId) ?? { items: [], running: null };
+    this.queues.set(marshalSessionId, queue);
+    queue.items.push({ object, body });
+    if (!queue.running) queue.running = this.upload(marshalSessionId, queue);
+  }
+
+  private async upload(marshalSessionId: string, queue: { items: Array<{ object: string; body: string }>; running: Promise<void> | null }): Promise<void> {
+    await Promise.resolve();
+    try {
+      while (queue.items.length > 0) {
+        const item = queue.items[0]!;
+        try {
+          await this.options.objects.put(item.object, item.body, { contentType: "application/x-ndjson", ifGenerationMatch: 0 });
+        } catch (error) {
+          if (error instanceof PreconditionFailedError) {
+            queue.items.shift(); // the object is already there (a retry whose first answer was lost)
+            continue;
+          }
+          this.options.log?.("org-store.batch_upload_failed", { sessionId: marshalSessionId, error: error instanceof Error ? error.message : String(error) });
+          return; // kept in order at the head; the next drain (compose, close) tries again
+        }
+        queue.items.shift();
+      }
+    } finally {
+      queue.running = null;
+    }
+  }
+
+  /** Waits until every batch queued so far for the session is in the store; a batch that failed is tried once more. */
+  async drain(marshalSessionId: string): Promise<void> {
+    const queue = this.queues.get(marshalSessionId);
+    if (!queue) return;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (!queue.running && queue.items.length > 0) queue.running = this.upload(marshalSessionId, queue);
+      await queue.running;
+      if (queue.items.length === 0) break;
+    }
+    if (queue.items.length === 0) this.queues.delete(marshalSessionId);
+  }
+
+  async drainAll(): Promise<void> {
+    await Promise.all([...this.queues.keys()].map((id) => this.drain(id)));
+  }
+
   /** Folds every member's batches of one Marshal session into its composed file. Safe to repeat and to interrupt. */
   async compose(marshalSessionId: string): Promise<void> {
+    await this.drain(marshalSessionId);
     const dir = this.options.locate(marshalSessionId);
     if (!dir) return;
     const objects = this.options.objects;
@@ -98,11 +150,12 @@ class BoundTranscripts implements BackendTranscriptStore {
     if (entries.length === 0) return;
     const member = encodeURIComponent(this.member(key));
     const object = `${this.dir()}/native/_batches/${member}/${this.owner.nextBatchName()}`;
-    await this.options.objects.put(object, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n", { contentType: "application/x-ndjson", ifGenerationMatch: 0 });
+    this.owner.enqueue(this.marshalSessionId, object, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   }
 
   async load(key: Key): Promise<Entry[] | null> {
     if (await this.options.isCurrent?.(key.sessionId)) return null;
+    await this.owner.drain(this.marshalSessionId);
     const member = this.member(key);
     let dir = this.dir();
     let found = await this.read(dir, member);
