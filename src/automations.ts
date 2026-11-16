@@ -569,7 +569,7 @@ export class HostAutomations {
     if (body.input !== undefined && (!body.input || typeof body.input !== "object" || Array.isArray(body.input))) throw invalid("extension.input must be an object.");
     const source = this.options.extensions?.resolve(id, tenant);
     if (!source) throw invalid(`Extension ${id} is not available to this host${tenant ? ` for ${tenant}` : ""}.`);
-    resolveAgent(source.packageRoot, agent);
+    resolveAgent(source.packageRoot, agent, {}, (identity) => this.options.extensions?.resolve(identity, tenant)?.packageRoot);
     return { id, agent, ...(body.input ? { input: { ...body.input } } : {}) };
   }
 
@@ -702,7 +702,7 @@ export class HostAutomations {
       const resolved = resolveAgent(source.packageRoot, automation.extension.agent, {
         ...(automation.model ? { model: automation.model } : {}),
         ...(automation.reasoningEffort ? { effort: automation.reasoningEffort } : {}),
-      });
+      }, (identity) => this.options.extensions?.resolve(identity, automation.tenant)?.packageRoot);
       const slots = resolved.profile.context;
       const context = slots.length ? ((await this.options.contextFor?.({ ...(automation.tenant ? { tenant: automation.tenant } : {}), slots, automation })) ?? {}) : {};
       const fields = agentLaunchFields(resolved, context);
