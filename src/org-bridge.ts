@@ -19,7 +19,7 @@ import type { OrgClient, OrgSessionMessage, UserPrincipal } from "@marshal/agent
 
 import { localSessionIdOf, publishToOrg, type OrgPublishOptions, type OrgPublishResult } from "./org-publish.js";
 import type { DeliveryResult, SessionEnvelope } from "./session-messages.js";
-import type { FileSessionStore, SessionRecord } from "./session-store.js";
+import type { SessionStore, SessionRecord } from "./session-store.js";
 
 export type OrgBridgeClient = Pick<
   OrgClient,
@@ -38,10 +38,10 @@ export type OrgBridgeClient = Pick<
 >;
 
 /**
- * Where the bridge reads sessions: the host's FileSessionStore, or anything with the same reads. `refresh` runs before
+ * Where the bridge reads sessions: the host's SessionStore, or anything with the same reads. `refresh` runs before
  * each read pass (src/org-host-sessions.ts reads through capabilities), `nativeState` supplies checkpoints.
  */
-export type OrgBridgeStore = Pick<FileSessionStore, "root" | "list" | "messages"> & {
+export type OrgBridgeStore = Pick<SessionStore, "root" | "list" | "messages"> & {
   refresh?(): Promise<void>;
   nativeState?: (record: SessionRecord) => Uint8Array | undefined;
 };
@@ -288,7 +288,7 @@ export function createOrgBridge(options: OrgBridgeOptions): OrgBridge {
     for (let index = before; index < local.length; index += 1) {
       const candidate = local[index]!;
       if (candidate.role !== "user" || taken.has(index)) continue;
-      // A store that keeps the sender (FileSessionStore) must name this person; one reached through capabilities has only the text.
+      // A store that keeps the sender (SessionStore) must name this person; one reached through capabilities has only the text.
       if (candidate.from && (candidate.from.kind !== "person" || candidate.from.personId !== message.author)) continue;
       if (!candidate.content.endsWith(message.text)) continue;
       inbox[sessionId] = { ...(inbox[sessionId] ?? {}), [index]: message.id };

@@ -47,7 +47,7 @@ import { startLinkServer, type LinkLivePort, type LinkServer } from "./link/serv
 import { createOrgBridge, type OrgBridge, type OrgBridgeOptions } from "./org-bridge.js";
 import { httpLinkRelay, type LinkRelay } from "./org-host-room.js";
 import { ConversationRoomRoute } from "./rooms-route.js";
-import { FileSessionStore, type SessionRecord } from "./session-store.js";
+import { FileSessionStore, type SessionRecord, type SessionStore } from "./session-store.js";
 
 const HARNESS_ID = "marshal-sdk";
 const SDK_VERSION = "0.0.1";
@@ -126,6 +126,12 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * the org, no person's token needed. Published when a session goes idle or fails; `allow` decides which runs leave.
    */
   runRecords?: Omit<RunRecordsOptions, "store">;
+  /**
+   * Where this host keeps its sessions. Default: files under `stateRoot` (one machine). A cloud store
+   * (`CloudSessionStore.open`, docs/cloud-sessions.md) keeps them in Postgres and an object store for every host of a
+   * tenant, with the backend's transcripts, so a session resumes on any machine. Called once with this run's origin.
+   */
+  sessionStore?: (origin: { runId: string; host: { id: string; kind: string } }) => SessionStore;
   /** Which provider answers each non-chat model service: decide, embed, speech (docs/models.md). */
   models?: ModelsConfig;
   /** Test hook: the HTTP client model services use. */
@@ -191,7 +197,7 @@ export interface MarshalHostBrowser {
 
 export interface MarshalHost {
   readonly runId: string;
-  readonly sessions: FileSessionStore;
+  readonly sessions: SessionStore;
   readonly agents: ClaudeAgentPort;
   /** Forks of this host's sessions: fork, list, message; each fork reports to its parent when it goes idle. */
   readonly forks: SessionForks;
@@ -256,10 +262,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   fs.mkdirSync(privateRoot, { recursive: true });
   const runId = options.runId ?? randomUUID();
   const hostSessionId = `host-${runId}`;
-  const sessions = new FileSessionStore(path.join(stateRoot, SESSIONS_DIRECTORY), {
-    runId,
-    host: options.host ?? { id: HARNESS_ID, kind: "local" },
-  });
+  const origin = { runId, host: options.host ?? { id: HARNESS_ID, kind: "local" } };
+  const sessions: SessionStore = options.sessionStore ? options.sessionStore(origin) : new FileSessionStore(path.join(stateRoot, SESSIONS_DIRECTORY), origin);
   const runRecordsPublisher = options.runRecords ? new RunRecordsPublisher({ log, ...options.runRecords, store: sessions }) : undefined;
   const kitOptions = normalizeKit(options.kit);
   const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath }) : undefined;

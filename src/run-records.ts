@@ -6,7 +6,7 @@ import path from "node:path";
 import { SessionPublisher } from "./kit/publisher.js";
 import { claudeNativePath } from "./org-publish.js";
 import { scrubText } from "./org-scrub.js";
-import type { FileSessionStore, SessionRecord } from "./session-store.js";
+import type { SessionStore, SessionRecord } from "./session-store.js";
 
 /**
  * Run records: a host's sessions written as runs in the format the organization's run index reads
@@ -59,7 +59,7 @@ export interface RunRecordSink {
 }
 
 export interface RunRecordsOptions {
-  store: Pick<FileSessionStore, "get" | "list" | "events" | "messages">;
+  store: Pick<SessionStore, "get" | "list" | "events" | "messages">;
   sink: RunRecordSink;
   /** The host's environment, from its own config (never a session label): stamped on every run as `labels.env`. */
   env: RunEnv;
@@ -172,7 +172,7 @@ export function runIdOf(root: SessionRecord, group: RunGroup): string {
 }
 
 /** The root of a session: follow `parentId` while the parent is in the store. */
-export function rootOf(store: Pick<FileSessionStore, "get">, record: SessionRecord): SessionRecord {
+export function rootOf(store: Pick<SessionStore, "get">, record: SessionRecord): SessionRecord {
   let current = record;
   const seen = new Set<string>([current.id]);
   while (current.parentId) {

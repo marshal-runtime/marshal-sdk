@@ -2,13 +2,23 @@ import path from "node:path";
 
 import { createAllowAllPermissionBroker, type CapabilityProvider, type PermissionBroker } from "@marshal/runtime";
 
-import type { FileSessionStore } from "../session-store.js";
+import type { SessionStore } from "../session-store.js";
 import { brainConfiguration, brainPackageRoot, type BrainKitOptions } from "./brain.js";
 import { kernelCall, type KernelLike } from "./call.js";
+import { createKnowledgeProvider, type KnowledgeKitOptions } from "./knowledge.js";
 import { createMemoryProvider, type MemoryKitOptions } from "./memory.js";
 import { createSessionsProvider, publishOptions, type SessionsKitOptions } from "./sessions.js";
 
 export * from "./brain.js";
+export {
+  brainKnowledgeProvider,
+  createKnowledgeProvider,
+  type KnowledgeHit,
+  type KnowledgeKitOptions,
+  type KnowledgeProvider,
+  type KnowledgeScope,
+  type KnowledgeTarget,
+} from "./knowledge.js";
 export { createMemoryProvider, type MemoryKitOptions, type RecalledMemory } from "./memory.js";
 export {
   createSessionsProvider,
@@ -26,13 +36,15 @@ export {
 } from "./sessions.js";
 export { kernelCall, type CapabilityCall, type KernelLike } from "./call.js";
 
-export type KitPart = "brain" | "memory" | "sessions";
+export type KitPart = "brain" | "memory" | "sessions" | "knowledge";
 
 export interface KitOptions {
   parts: readonly KitPart[];
   brain?: BrainKitOptions;
   memory?: MemoryKitOptions;
   sessions?: SessionsKitOptions;
+  /** A host-chosen knowledge provider in a fixed tenant scope (part `knowledge`); it cannot be combined with the Brain parts, which bring their own knowledge.* capabilities. */
+  knowledge?: KnowledgeKitOptions;
 }
 
 /** `["brain", "memory", "sessions"]`, or the parts with their options. */
@@ -90,7 +102,7 @@ export function normalizeKit(selection: KitSelection | undefined): KitOptions | 
 
 export function prepareKit(input: {
   kit: KitOptions;
-  sessions: FileSessionStore;
+  sessions: SessionStore;
   workspacePath: string;
   env?: NodeJS.ProcessEnv;
 }): PreparedKit {
@@ -99,6 +111,8 @@ export function prepareKit(input: {
   // Memory recall reads the Brain's team memories; it cannot exist without the Brain.
   const brainOn = requested.has("brain") || requested.has("memory");
   const parts = new Set<KitPart>([...requested, ...(brainOn ? (["brain"] as const) : [])]);
+  if (parts.has("knowledge") && !kit.knowledge) throw new Error("The kit part knowledge needs kit.knowledge: { provider, scope }.");
+  if (parts.has("knowledge") && brainOn) throw new Error("The kit parts knowledge and brain/memory both serve knowledge.search; choose one.");
   const brain = kit.brain ?? {};
   const memoryWrites = parts.has("memory") && kit.memory?.writes === true;
   const publishes = parts.has("sessions") && brainOn && publishOptions(kit.sessions) !== undefined;
@@ -125,6 +139,10 @@ export function prepareKit(input: {
   const providerSources: (() => CapabilityProvider)[] = [];
   if (parts.has("memory") && call) {
     const provider = createMemoryProvider(call, kit.memory ?? {});
+    providerSources.push(() => provider);
+  }
+  if (parts.has("knowledge") && kit.knowledge) {
+    const provider = createKnowledgeProvider(kit.knowledge);
     providerSources.push(() => provider);
   }
   if (parts.has("sessions")) {

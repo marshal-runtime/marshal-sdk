@@ -219,7 +219,23 @@ export {
 } from "./org-host-room.js";
 export { HostSessions, type CapabilityCall, type HostSessionsOptions } from "./org-host-sessions.js";
 export {
+  CloudSessionStore,
+  CloudTranscriptStore,
+  SCHEMA_STATEMENTS as CLOUD_STORE_SCHEMA,
+  applySchema as applyCloudStoreSchema,
+  fsObjectStore,
+  gcsObjectStore,
+  type CloudSessionStoreOptions,
+  type CloudTranscriptStoreOptions,
+  type GcsObjectStoreOptions,
+  type ObjectStore,
+  type SqlClient,
+} from "./cloud-store/index.js";
+export {
   FileSessionStore,
+  type BackendTranscriptStore,
+  type SessionPlan,
+  type SessionStore,
   type NativeSessionRef,
   type SessionFilter,
   type SessionRecord,

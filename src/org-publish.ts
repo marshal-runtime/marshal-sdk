@@ -13,7 +13,7 @@ import type {
 } from "@marshal/agent-runtime-org";
 
 import { scrubText } from "./org-scrub.js";
-import type { FileSessionStore, SessionRecord, TranscriptMessage } from "./session-store.js";
+import type { SessionStore, SessionRecord, TranscriptMessage } from "./session-store.js";
 
 /** What publishing needs from an organization client; `OrgClient` satisfies it, a test passes a fake. */
 export type OrgPublishClient = Pick<
@@ -23,7 +23,7 @@ export type OrgPublishClient = Pick<
 
 export interface OrgPublishOptions {
   client: OrgPublishClient;
-  store: Pick<FileSessionStore, "root" | "list" | "messages">;
+  store: Pick<SessionStore, "root" | "list" | "messages">;
   /**
    * Who owns the published sessions: the person the run was for. The organization accepts a session only from its
    * owner, so `client` must hold that person's token (see the report for what a service needs).
