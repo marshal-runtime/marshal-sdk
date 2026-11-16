@@ -101,5 +101,5 @@ overnight tracking folder (`reports/marshal-sdk/lane-b/prompt-*.md`).
 | Knowledge: the company Brain | kit section (`knowledge.*`) | kit section; publishing noted when on |
 | Skills / Extensions | extension skills + raw guidance | unchanged |
 | Your role | worker | worker (Page Studio's own task text sets each agent's job) |
-| — | — | **This run**: job, run id, starter, limits, run contract (out/, logs/), state location, published sessions, no messages to people |
-| — | — | **Page Studio on this host**: `pagestudio.snapshot` / `applyOps` / `render`, skills first, facts only from the input pack |
+| — | — | **This run**: job, run id, starter, run contract (out/, logs/), state location, published sessions, no messages to people |
+| — | — | **Page Studio on this host** (only when `pageStudio` is set; `page-run` and `page-edit` leave it off, because Page Studio itself decides the process) |
