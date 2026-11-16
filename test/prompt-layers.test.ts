@@ -91,3 +91,20 @@ test("a host launch composes layers directly and adds its own text after them", 
   assert.equal(composePromptLayers(layers, "Per-turn host text."), "I am Marley.\n\nShared rules.\n\nPer-turn host text.");
   assert.equal(layers[0]!.version, "1.0.0");
 });
+
+test("layerVars fill {{name}} in the layers in one pass; unknown names, values and the profile's own prompt stay as written", () => {
+  const personaRoot = pack("vars", { identity: "@marley/vars", contributes: { promptLayers: [{ id: "a", file: "a.md" }] } }, { "a.md": "Hi {{agent}}, {{agent}} {{missing}} {{nested}}" });
+  const agentRoot = pack("varsagent", {
+    identity: "@marley/varsagent",
+    contributes: { agents: [{ id: "x", profile: { prompt: "own.md", layers: ["@marley/vars#a"], layerVars: { agent: "Marley", nested: "{{agent}}" }, extensions: ["@marley/vars"] }, outputs: [], ports: [] }] },
+  }, { "own.md": "own {{agent}}" });
+  const resolved = resolveAgent(agentRoot, "x", {}, { "@marley/vars": personaRoot });
+  assert.equal(resolved.profile.prompt, "Hi Marley, Marley {{missing}} {{agent}}\n\nown {{agent}}");
+  const other = resolveAgent(
+    pack("varsagent2", { identity: "@marley/varsagent", contributes: { agents: [{ id: "x", profile: { prompt: "own.md", layers: ["@marley/vars#a"], layerVars: { agent: "Other" }, extensions: ["@marley/vars"] }, outputs: [], ports: [] }] } }, { "own.md": "own {{agent}}" }),
+    "x", {}, { "@marley/vars": personaRoot });
+  assert.notEqual(profileFingerprint(resolved.profile), profileFingerprint(other.profile));
+  assert.throws(() => readExtensionAgents(agent(undefined, { layerVars: { a: "b" } })), /layerVars needs layers/);
+  assert.throws(() => readExtensionAgents(agent(["@marley/persona#soul"], { layerVars: { "bad name": "b" } })), /not a variable name/);
+  assert.throws(() => readExtensionAgents(agent(["@marley/persona#soul"], { layerVars: { a: 1 } })), /must be a string/);
+});

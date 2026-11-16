@@ -93,7 +93,8 @@ export function readPromptLayer(contributed: ExtensionPromptLayers, id: string):
     const known = contributed.layers.map((layer) => layer.id).join(", ") || "none";
     return fail(`${contributed.identity} has no prompt layer "${id}" (it contributes: ${known}).`);
   }
-  const text = readPackageFile(contributed.packageRoot, entry.file, `${entry.ref}`);
+  // A layer is a block of text: line endings are normalised and the blank space around it is not part of it (the join adds its own).
+  const text = readPackageFile(contributed.packageRoot, entry.file, `${entry.ref}`).replace(/\r\n/g, "\n").trim();
   return { ref: entry.ref, version: contributed.version, text, sha256: createHash("sha256").update(text).digest("hex") };
 }
 
@@ -121,9 +122,38 @@ export function resolvePromptLayers(refs: readonly string[], sources: PromptLaye
   });
 }
 
-/** The composed system prompt: the layers in order, then `own` (a profile's own text), joined by a blank line. */
-export function composePromptLayers(layers: readonly Pick<ComposedLayer, "text">[], own?: string): string {
-  return [...layers.map((layer) => layer.text), ...(own === undefined ? [] : [own])].join(LAYER_SEPARATOR);
+const VAR_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+const MAX_VARS = 64;
+const MAX_VAR_BYTES = 32_768;
+/** Variables a profile fills into its layers: `{{name}}` becomes the value. */
+export type LayerVars = Readonly<Record<string, string>>;
+
+/** Validates a profile's `layerVars`. */
+export function checkLayerVars(raw: unknown, label: string): Record<string, string> | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return fail(`${label} must be an object of strings.`);
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > MAX_VARS) fail(`${label} has more than ${MAX_VARS} variables.`);
+  for (const [name, value] of entries) {
+    if (!VAR_NAME.test(name)) fail(`${label}: "${name}" is not a variable name.`);
+    if (typeof value !== "string") fail(`${label}: "${name}" must be a string.`);
+    if (Buffer.byteLength(value as string) > MAX_VAR_BYTES) fail(`${label}: "${name}" is larger than ${MAX_VAR_BYTES} bytes.`);
+  }
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+/** Fills `{{name}}` in one pass: a value is inserted as written (never filled again), and a name with no value stays as it is. */
+export function fillLayerVars(text: string, vars: LayerVars): string {
+  return text.replace(/\{\{([A-Za-z0-9][A-Za-z0-9_.-]{0,63})\}\}/g, (whole, name: string) => (Object.hasOwn(vars, name) ? (vars[name] as string) : whole));
+}
+
+/**
+ * The composed system prompt: the layers in order (with `vars` filled into each), then `own` (a profile's own text, never filled),
+ * joined by a blank line.
+ */
+export function composePromptLayers(layers: readonly Pick<ComposedLayer, "text">[], own?: string, vars?: LayerVars): string {
+  const texts = layers.map((layer) => (vars ? fillLayerVars(layer.text, vars) : layer.text));
+  return [...texts, ...(own === undefined ? [] : [own])].join(LAYER_SEPARATOR);
 }
 
 /** A portable package-relative path: no absolute path, backslash, empty, "." or ".." segment. */
