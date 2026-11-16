@@ -196,6 +196,23 @@ test("a browser that cannot launch skips the screenshots with a warning instead 
   assert.deepEqual(ok, { shots: [{ name: "mobile" }] });
 });
 
+test("a required skill Page Studio loads into its own prompts is not reported missing", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "page-run-loaded-"));
+  const store = new FileSessionStore(path.join(root, "sessions"), { runId: "r1", host: { id: "t", kind: "local" } });
+  store.create({ title: "writer", runtime: "claude", model: "m", native: { kind: "claude", cwd: root }, labels: {} });
+
+  const summary = writeRunLogs({
+    logDir: path.join(root, "logs"),
+    storeRoot: path.join(root, "sessions"),
+    sessions: store.list({ runId: "r1" }),
+    requiredSkills: ["lp-design", "lp-roles", "page-builder-qa"],
+    loadedSkills: ["lp-design", "lp-roles", "lp-review"],
+  });
+
+  assert.deepEqual(summary.skills_used, [], "used still means a Skill tool call");
+  assert.deepEqual(summary.skills_missing, ["page-builder-qa"]);
+});
+
 test("page-run's dry path writes the whole run contract from an input folder, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 90_000 }, async () => {
   const input = inputFolder();
   const work = path.dirname(input);
@@ -214,7 +231,8 @@ test("page-run's dry path writes the whole run contract from an input folder, wi
   assert.ok(marshal.sections.includes("hero") && marshal.sections.includes("proof"), marshal.sections.join(","));
   for (const file of ["run.jsonl", "summary.json", "query/system_prompt.md", "query/task.md", "query/options.json"]) assert.ok(fs.existsSync(path.join(logs, file)), file);
   for (const file of ["shots/mobile.png", "shots/desktop.png"]) assert.ok(fs.existsSync(path.join(out, file)), file);
-  assert.deepEqual(summary.skills_missing, ["lp-design"]);
+  assert.deepEqual(summary.skills_missing, [], "Page Studio loads lp-design into its own prompts");
+  assert.ok((summary.marshal as { pageStudio: { skills?: string[] } }).pageStudio.skills?.includes("lp-design"));
   assert.ok(summary.results.length >= 2, "the whole-page writer and the critic ran as sessions");
   const build = (summary.marshal as { pageStudio: { version?: string; contentHash?: string; drift?: string } }).pageStudio;
   assert.match(build.contentHash ?? "", /^[0-9a-f]{64}$/, "the run records the Page Studio build it ran");

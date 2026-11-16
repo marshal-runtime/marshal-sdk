@@ -49,6 +49,8 @@ export interface RunLogsInput {
   error?: string;
   /** Skills the caller's manifest requires; the ones no session called land in skills_missing. */
   requiredSkills?: readonly string[];
+  /** Skills an engine loads into its own prompts (Page Studio): required ones it loads are not missing. */
+  loadedSkills?: readonly string[];
   launchIssues?: readonly string[];
   marshal?: Record<string, unknown>;
 }
@@ -114,7 +116,7 @@ export function writeRunLogs(input: RunLogsInput): RunSummaryJson {
     skills,
     skills_required: required,
     skills_used: used,
-    skills_missing: required.filter((name) => !used.includes(name)),
+    skills_missing: required.filter((name) => !used.includes(name) && !(input.loadedSkills ?? []).includes(name)),
     subagent_skills_used: subagentUsed,
     launch_issues: [...(input.launchIssues ?? [])],
     message_counts: messageCounts,
