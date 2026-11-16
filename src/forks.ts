@@ -25,7 +25,7 @@ import {
 
 import type { ClaudeAgentPort, SessionOutcome } from "./agent-port.js";
 import type { DeliveryMode, DeliveryResult, MessageSender } from "./session-messages.js";
-import type { FileSessionStore, SessionRecord } from "./session-store.js";
+import type { SessionStore, SessionRecord } from "./session-store.js";
 
 export const MAX_FORKS_PER_CALL = 8;
 const FORK_TOOL = "forkSubagents";
@@ -77,7 +77,7 @@ export class SessionForks {
 
   constructor(
     private readonly port: ClaudeAgentPort,
-    private readonly store: FileSessionStore,
+    private readonly store: SessionStore,
     private readonly options: ForksOptions = {},
   ) {
     this.stopReporting = port.onSettled((sessionId, outcome) => this.report(sessionId, outcome));

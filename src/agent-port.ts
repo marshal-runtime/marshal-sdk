@@ -12,7 +12,7 @@ import {
   type SessionEnvelope,
   type SessionTransport,
 } from "./session-messages.js";
-import type { FileSessionStore, SessionFork, SessionRecord, TranscriptMessage } from "./session-store.js";
+import type { SessionStore, SessionFork, SessionRecord, TranscriptMessage } from "./session-store.js";
 import { nativeSubagentHook } from "./native-tools.js";
 import { toClaudePermissionResult, toRuntimePermissionRequest, type RuntimePermissionHandler } from "./providers.js";
 
@@ -201,7 +201,7 @@ export interface AgentPortOptions {
   query: QueryFn;
   /** The runtime the sessions run on (the provider id: claude, codex, cursor, openai); recorded as the session's runtimeId. Default claude. */
   runtimeId?: string;
-  store: FileSessionStore;
+  store: SessionStore;
   /** Working directory of every session, and the directory the backend files its native history under. */
   cwd: string;
   /** Environment of the backend process: credentials and config dir are the host's choice, never the agent's. */
@@ -663,16 +663,29 @@ export class ClaudeAgentPort {
         item = agent.queue.shift();
       }
       agent.running = false;
-      this.announce("session.idle", this.options.store.update(agent.id, { state: "idle" }));
+      const idle = this.options.store.update(agent.id, { state: "idle" });
+      if (this.options.store.flush) await this.persist(agent.id);
+      this.announce("session.idle", idle);
       this.settle(agent.id, { state: "idle", ...(agent.lastReply !== undefined ? { reply: agent.lastReply } : {}) });
     } catch (error) {
       dropQueue(agent);
       agent.running = false;
-      this.announce("session.failed", this.options.store.update(agent.id, { state: "failed", lastError: errorText(error) }));
+      const failed = this.options.store.update(agent.id, { state: "failed", lastError: errorText(error) });
+      if (this.options.store.flush) await this.persist(agent.id);
+      this.announce("session.failed", failed);
       this.settle(agent.id, { state: "failed", error: errorText(error) });
       throw error;
     } finally {
       agent.running = false;
+    }
+  }
+
+  /** Everything the session wrote is durable before it reads as idle; a failure is logged and kept for the next flush. */
+  private async persist(sessionId: string): Promise<void> {
+    try {
+      await this.options.store.flush?.();
+    } catch (error) {
+      this.options.log?.(`session ${sessionId}: the store could not write everything yet: ${errorText(error)}`);
     }
   }
 
@@ -711,6 +724,8 @@ export class ClaudeAgentPort {
     turnId: string = randomUUID(),
   ): Promise<string | undefined> {
     const store = this.options.store;
+    // A session adopted from another host (or an earlier run) is read from the store before it continues.
+    if (store.hydrate) await store.hydrate(agent.id);
     const session = this.session(agent.id);
     store.appendMessage(agent.id, { role: "user", content: message, ...(from ? { from } : {}) });
     const abort = new AbortController();
@@ -739,6 +754,9 @@ export class ClaudeAgentPort {
         ? { permissionMode: "default", canUseTool: claudeCanUseTool(permissionHandler, agent.id) }
         : { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true }),
       settingSources: this.options.projectSettings ? ["project"] : [],
+      // The store keeps the backend's transcript: the Agent SDK mirrors each batch to it while the turn runs and, when a
+      // session resumes, restores it from there before the backend starts, whatever machine that is.
+      ...(store.transcripts && (this.options.runtimeId ?? "claude") === "claude" ? { sessionStore: store.transcripts } : {}),
       // A live process keeps the servers it started with, so they are made only when one starts (openProcess).
       mcpServers: live ? {} : this.mcpServersOf(session, launch),
       // A launch's own prompt (a fork's included) is rendered fresh on every request: recorded once, a resumed or

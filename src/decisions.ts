@@ -6,7 +6,7 @@ import { RUNTIME_PROTOCOL_VERSION, type CapabilityProvider, type InvocationConte
 
 import type { ClaudeAgentPort } from "./agent-port.js";
 import { callerSessionId } from "./agent-provider.js";
-import type { FileSessionStore } from "./session-store.js";
+import type { SessionStore } from "./session-store.js";
 
 export type DecisionKind = "decision" | "question" | "gap";
 
@@ -92,7 +92,7 @@ export class DecisionDesk {
   private readonly file: string;
 
   constructor(
-    private readonly sessions: FileSessionStore,
+    private readonly sessions: SessionStore,
     private readonly port: ClaudeAgentPort,
     private readonly log?: (line: string) => void,
   ) {

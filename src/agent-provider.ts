@@ -10,7 +10,7 @@ import {
 
 import type { AgentSummary, ClaudeAgentPort } from "./agent-port.js";
 import type { MessageSender } from "./session-messages.js";
-import type { FileSessionStore } from "./session-store.js";
+import type { SessionStore } from "./session-store.js";
 
 const VERSION = "1.0.0";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -343,7 +343,7 @@ const SESSION_TOOL_OUTPUTS: Record<string, object> = {
  * Sessions talking to sessions, under the desktop's self-tool names (electron/self-tools.ts: startLane, messageSession,
  * searchSessions, getSessionTranscript), so an agent prompted for the desktop calls the same names here.
  */
-export function createSessionToolsProvider(port: ClaudeAgentPort, store: FileSessionStore): CapabilityProvider {
+export function createSessionToolsProvider(port: ClaudeAgentPort, store: SessionStore): CapabilityProvider {
   const descriptors = Object.entries(SESSION_TOOLS).map(([operation, spec]) => ({
     protocolVersion: RUNTIME_PROTOCOL_VERSION,
     name: `${TOOL_PREFIX}${operation}`,
@@ -414,8 +414,7 @@ export function createSessionToolsProvider(port: ClaudeAgentPort, store: FileSes
           const since = typeof input.since === "string" ? input.since : undefined;
           const until = typeof input.until === "string" ? input.until : undefined;
           const workspace = typeof input.workspace === "string" ? input.workspace.toLowerCase() : undefined;
-          const results = store
-            .search(text(input.query, "query"), 500)
+          const results = (await store.search(text(input.query, "query"), 500))
             .filter(({ session }) => session.id !== caller)
             .filter(({ session }) => input.includeSubagents !== false || !session.parentId)
             .filter(({ session }) => !since || session.updatedAt >= since)

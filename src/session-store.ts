@@ -153,7 +153,59 @@ export interface SessionEnvironment {
   skills: string[];
 }
 
-export class FileSessionStore {
+/**
+ * What the agent port, the host and the kits need from a session store. `FileSessionStore` keeps everything on disk;
+ * `CloudSessionStore` (cloud-store/) keeps it in Postgres and an object store for every host of one tenant.
+ *
+ * Reads are synchronous: a store answers from what it has loaded (a cloud store loads every record of its tenant when
+ * it opens and a session's messages and events when `hydrate` is called, which the port does before a session's turn).
+ * Writes are applied at once in memory and written behind; `flush` resolves when everything written so far is durable.
+ */
+export interface SessionStore {
+  /** Where this store's run began: every session it creates carries it. */
+  readonly origin: { runId: string; host: { id: string; kind: string } };
+  /** A local folder the store keeps files in (a cloud store: its cache), for readers that open session files directly. */
+  readonly root: string;
+  create(input: NewSession): SessionRecord;
+  get(id: string): SessionRecord | undefined;
+  update(id: string, patch: Partial<Omit<SessionRecord, "id" | "schemaVersion">>): SessionRecord;
+  addUsage(id: string, usage: Partial<SessionUsage>): SessionRecord;
+  list(filter?: SessionFilter): SessionRecord[];
+  appendMessage(id: string, message: Omit<TranscriptMessage, "id" | "timestamp">): TranscriptMessage;
+  messages(id: string, limit?: number): TranscriptMessage[];
+  setTodos(id: string, plan: SessionPlan): void;
+  todos(id: string): SessionPlan | undefined;
+  events(id: string): { seq: number; at: string; event: unknown }[];
+  appendEvent(id: string, event: unknown): void;
+  touch(id: string): void;
+  activity(id: string): { eventCount: number; lastEventAt?: string; environment?: SessionEnvironment };
+  setEnvironment(id: string, environment: SessionEnvironment): void;
+  /** Word search over titles, labels and transcripts, best first. A cloud store answers from its database. */
+  search(query: string, limit?: number): SessionSearchHit[] | Promise<SessionSearchHit[]>;
+  /** Load a session's messages and events when they are not in memory yet. A no-op for a store that has them. */
+  hydrate?(id: string): Promise<void>;
+  /** Resolves when every write so far is durable; rejects with what failed (the writes stay queued for the next flush). */
+  flush?(): Promise<void>;
+  /** The backend's own transcript store for this host's sessions (Claude Agent SDK `sessionStore`), when it keeps one. */
+  readonly transcripts?: BackendTranscriptStore;
+}
+
+export interface SessionPlan {
+  todos: { id: string; title: string; status: string }[];
+  goalLabel?: string;
+  updatedAt: string;
+}
+
+/** The Claude Agent SDK's `SessionStore` adapter shape (alpha), restated so this module needs no SDK import. */
+export interface BackendTranscriptStore {
+  append(key: { projectKey: string; sessionId: string; subpath?: string }, entries: { type: string; uuid?: string; [k: string]: unknown }[]): Promise<void>;
+  load(key: { projectKey: string; sessionId: string; subpath?: string }): Promise<{ type: string; uuid?: string; [k: string]: unknown }[] | null>;
+  listSessions?(projectKey: string): Promise<Array<{ sessionId: string; mtime: number }>>;
+  delete?(key: { projectKey: string; sessionId: string; subpath?: string }): Promise<void>;
+  listSubkeys?(key: { projectKey: string; sessionId: string }): Promise<string[]>;
+}
+
+export class FileSessionStore implements SessionStore {
   private readonly records = new Map<string, SessionRecord>();
   private readonly counts = new Map<string, number>();
   private readonly lastEventAt = new Map<string, string>();
@@ -202,7 +254,7 @@ export class FileSessionStore {
     };
     fs.mkdirSync(path.join(this.root, record.id), { recursive: true });
     this.records.set(record.id, record);
-    this.flush();
+    this.writeIndex();
     return record;
   }
 
@@ -214,7 +266,7 @@ export class FileSessionStore {
     const current = this.require(id);
     const next: SessionRecord = { ...current, ...patch, updatedAt: new Date().toISOString() };
     this.records.set(id, next);
-    this.flush();
+    this.writeIndex();
     return next;
   }
 
@@ -265,13 +317,13 @@ export class FileSessionStore {
   }
 
   /** The session's plan (`marshal.tool.setSessionTodos`), replaced whole; `todos.json` beside its transcript. */
-  setTodos(id: string, plan: { todos: { id: string; title: string; status: string }[]; goalLabel?: string; updatedAt: string }): void {
+  setTodos(id: string, plan: SessionPlan): void {
     const target = path.join(this.root, id, TODOS_FILE);
     fs.writeFileSync(`${target}.tmp`, `${JSON.stringify(plan, null, 2)}\n`);
     fs.renameSync(`${target}.tmp`, target);
   }
 
-  todos(id: string): { todos: { id: string; title: string; status: string }[]; goalLabel?: string; updatedAt: string } | undefined {
+  todos(id: string): SessionPlan | undefined {
     try {
       // SF-4: our own file; a corrupt one reads as no plan.
       return JSON.parse(fs.readFileSync(path.join(this.root, id, TODOS_FILE), "utf8")) as never;
@@ -346,7 +398,7 @@ export class FileSessionStore {
     return record;
   }
 
-  private flush(): void {
+  private writeIndex(): void {
     const file = path.join(this.root, INDEX_FILE);
     const temporary = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify([...this.records.values()], null, 1));

@@ -155,7 +155,7 @@ async function main(): Promise<void> {
     const output = transcript
       ? { session: store.get(transcript), messages: store.messages(transcript) }
       : search
-        ? store.search(search)
+        ? await store.search(search)
         : store.list(one(args, "run") ? { runId: one(args, "run")! } : {});
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     return;

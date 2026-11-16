@@ -14,7 +14,7 @@ import {
 import { agentLaunchFields, fillTask, resolveAgent, type ContextValues } from "./agent-entries.js";
 import type { ClaudeAgentPort } from "./agent-port.js";
 import { callerSessionId } from "./agent-provider.js";
-import type { FileSessionStore } from "./session-store.js";
+import type { SessionStore } from "./session-store.js";
 
 /** Task kinds this host runs from `runtime.schedules.*`, besides the runtime's own `agent.wake`. */
 export const AUTOMATION_RUN_TASK = "marshal.automation.run";
@@ -215,7 +215,7 @@ export interface HostAutomationsOptions {
   /** Folder for automations.json and the runtime schedule store. */
   root: string;
   port: ClaudeAgentPort;
-  sessions: FileSessionStore;
+  sessions: SessionStore;
   /** The scheduler's clock; tests pass a fake one and call tick(). */
   now?: () => Date;
   tickMs?: number;

@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { FileSessionStore, SessionRecord, TranscriptMessage } from "../session-store.js";
+import type { SessionStore, SessionRecord, TranscriptMessage } from "../session-store.js";
 import { boundedLimit, kitProvider, requireText, untrusted, type CapabilityCall } from "./call.js";
 
 export interface SessionsKitOptions {
@@ -95,7 +95,7 @@ const FOUND = {
  * session index (Marshal shares and zyg-agents runs), merged by rank. `sessions.share` exists only with ingest on.
  */
 export function createSessionsProvider(
-  store: FileSessionStore,
+  store: SessionStore,
   call: CapabilityCall | undefined,
   options: SessionsKitOptions = {},
 ) {
@@ -137,8 +137,7 @@ export function createSessionsProvider(
         const local =
           scope === "cloud"
             ? []
-            : store
-                .search(query, MERGE_DEPTH + 1)
+            : (await store.search(query, MERGE_DEPTH + 1))
                 .filter((hit) => hit.session.id !== caller)
                 .slice(0, MERGE_DEPTH)
                 .map((hit) => localHit(hit.session, hit.snippet));
@@ -294,7 +293,7 @@ export interface SharedMessage {
  * What a share uploads: user and assistant messages, each capped, with the tool calls (name and input, never
  * output) made before each assistant message, as zyg-agents runs are stored. The Brain redacts again on its side.
  */
-export function sharePayload(session: SessionRecord, store: FileSessionStore, options: { context?: string } = {}) {
+export function sharePayload(session: SessionRecord, store: SessionStore, options: { context?: string } = {}) {
   const transcript = store
     .messages(session.id)
     .filter((message) => (message.role === "user" || message.role === "assistant") && message.content.trim())
@@ -329,7 +328,7 @@ export function sharePayload(session: SessionRecord, store: FileSessionStore, op
 }
 
 /** Tool calls in the session's events, oldest first: assistant `tool_use` blocks with their input. */
-function toolCalls(store: FileSessionStore, id: string): { at: string; tool: { name: string; input?: string } }[] {
+function toolCalls(store: SessionStore, id: string): { at: string; tool: { name: string; input?: string } }[] {
   const calls: { at: string; tool: { name: string; input?: string } }[] = [];
   for (const entry of store.events(id)) {
     const event = entry.event as { type?: string; parent_tool_use_id?: unknown; message?: { content?: unknown } } | undefined;
