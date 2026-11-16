@@ -190,6 +190,11 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * Marley: the parent's last finished turn, resumed on the brand VM.
    */
   forkPoint?: ForkPointOf;
+  /**
+   * Whether a fork's final message (or error) is queued into its parent session when the fork goes idle (default true). Marley sets false: its server
+   * relays a fork's outcome to the parent's conversation itself, and a queued notice would start a turn in the parent's live process it did not plan.
+   */
+  forkReports?: boolean;
   /** Keep sessions' Claude Code processes alive between turns (the port's live mode); `liveFor` picks which sessions. */
   live?: AgentPortOptions["live"];
   liveFor?: AgentPortOptions["liveFor"];
@@ -435,7 +440,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const decisions = new DecisionDesk(sessions, agents, log);
   // marshal.link.call answers through a private loopback link that starts on first use (after the extensions activate).
   let linkRelay: LinkRelay | undefined;
-  const forks = new SessionForks(agents, sessions, { log, ...(options.forkPoint ? { forkPoint: options.forkPoint } : {}) });
+  const forks = new SessionForks(agents, sessions, { log, ...(options.forkPoint ? { forkPoint: options.forkPoint } : {}), ...(options.forkReports === false ? { reportToParent: false } : {}) });
   const models = createModelServices(options.models, { env: withSecrets(options.env ?? process.env, options.secrets), ...(options.modelsFetch ? { fetch: options.modelsFetch } : {}) });
   const importPolicy = importPolicyOf(options.trustedTypeScript);
   const broker =
