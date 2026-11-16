@@ -64,6 +64,8 @@ export interface PageRunOptions {
 }
 
 export interface SandboxInput {
+  /** The brief's brand_id (else brand.json's), the id a brand-data provider serves the brand under. */
+  brandId: string;
   productId: string;
   productDir: string;
   brandName: string;
@@ -100,8 +102,8 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   };
   // Page Studio reads its folder and its Chrome from the process: it runs inside this process.
   process.env.PAGE_STUDIO_DIR = env.PAGE_STUDIO_DIR = studioDir;
-  // A brand-data provider in the sandbox (@zyg/brand-data-pack) serves this run's input pack.
-  process.env[INPUT_PACK_ENV] = env[INPUT_PACK_ENV] ??= inputDir;
+  // A brand-data provider in the sandbox (@zyg/brand-data-pack) serves this run's product pack (facts.md, pictures.json).
+  process.env[INPUT_PACK_ENV] = env[INPUT_PACK_ENV] ??= input.productDir;
   const chrome = await resolveChrome();
   if (chrome) {
     process.env.MARSHAL_SDK_CHROME = env.MARSHAL_SDK_CHROME = chrome;
@@ -158,14 +160,17 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     // With a brand-data provider loaded, Page Studio asks it for the brand (the same path as on the desktop);
     // without one it imports the input pack folder directly.
     const provider = host.extensions.some((loaded) => loaded.capabilities.includes(BRAND_PACK_CAPABILITY));
-    const learned = await call(
-      "pagestudio.brand.learn",
-      provider
-        ? { pageId: boardId, brand: input.brandName, ...(input.productHandle ? { product: input.productHandle } : {}) }
-        : { pageId: boardId, pack: input.productDir },
-    );
-    log(`brand data from ${provider ? BRAND_PACK_CAPABILITY : "the input pack folder"}`);
-    log(`brand board ${boardId}: ${learned.pictures} pictures, ${learned.facts} chars of facts`);
+    let learned = provider
+      ? await call("pagestudio.brand.learn", { pageId: boardId, brand: input.brandId || input.brandName, product: input.productId })
+      : undefined;
+    if (learned?.ok === false) {
+      warnings.push(`brand data: ${BRAND_PACK_CAPABILITY} failed (${String(learned.code ?? learned.error)}); imported the input pack folder instead`);
+      log(`brand data: ${BRAND_PACK_CAPABILITY} failed: ${String(learned.error ?? learned.code)}`);
+    }
+    const via = learned && learned.ok !== false ? BRAND_PACK_CAPABILITY : "the input pack folder";
+    if (!learned || learned.ok === false) learned = await call("pagestudio.brand.learn", { pageId: boardId, pack: input.productDir });
+    warnings.push(...(Array.isArray(learned?.warnings) ? learned.warnings.map(String) : []));
+    log(`brand board ${boardId} from ${via}: ${JSON.stringify(learned).slice(0, 300)}`);
     fs.writeFileSync(path.join(logs, "query", "system_prompt.md"), host.systemPrompt() ?? "");
     fs.writeFileSync(path.join(logs, "query", "task.md"), idea);
     fs.writeFileSync(
@@ -512,6 +517,7 @@ export function readSandboxInput(inputDir: string): SandboxInput {
   const positioning = typeof brief.positioning?.brief_markdown === "string" ? brief.positioning.brief_markdown.trim() : "";
   const idea = [request, positioning && `The positioning this page sells:\n${positioning}`].filter(Boolean).join("\n\n");
   return {
+    brandId: String(brief.brand_id ?? brand.brand_id ?? "").trim(),
     productId,
     productDir,
     brandName: String(brief.brand_name ?? brand.name ?? "").trim() || domain,
