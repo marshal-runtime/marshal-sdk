@@ -37,18 +37,39 @@ export const REMOTE_HOST_TOOLS: readonly string[] = [
 
 const HOST_TOOLS = new Set(REMOTE_HOST_TOOLS);
 
+/**
+ * The host tools an embedder lets its remote sessions reach (`remoteHostTools`): a subset of REMOTE_HOST_TOOLS, all of them when not given. A host
+ * that serves several tenants from one session store (Marley: every brand on one agent server) keeps the session tools (searchSessions,
+ * getSessionTranscript, messageSubagent, ...) out, because they read and reach every session of the store. An unknown name is a configuration error.
+ */
+export function remoteHostToolSet(allowed: readonly string[] | undefined): ReadonlySet<string> {
+  if (allowed === undefined) return HOST_TOOLS;
+  const unknown = allowed.filter((name) => !HOST_TOOLS.has(name));
+  if (unknown.length) throw new Error(`remoteHostTools: not a remote host tool: ${unknown.join(", ")} (REMOTE_HOST_TOOLS lists them)`);
+  return new Set(allowed);
+}
+
+/** The host tool a runtime call names (an `operation` whose target is in REMOTE_HOST_TOOLS, or a runtime_search for one by name), else undefined. */
+export function hostToolOf(name: string, args: unknown): string | undefined {
+  const input = (args ?? {}) as { targetType?: unknown; target?: unknown; name?: unknown };
+  if (name === "runtime_exec" && input.targetType === "operation" && typeof input.target === "string" && HOST_TOOLS.has(input.target)) return input.target;
+  if (name === "runtime_search" && typeof input.name === "string" && HOST_TOOLS.has(input.name)) return input.name;
+  return undefined;
+}
+
 /** True when a runtime call names one of the host's own tools (an `operation` whose target is in REMOTE_HOST_TOOLS). */
 export function isHostToolCall(name: string, args: unknown): boolean {
-  if (name !== "runtime_exec") return false;
-  const input = (args ?? {}) as { targetType?: unknown; target?: unknown };
-  return input.targetType === "operation" && typeof input.target === "string" && HOST_TOOLS.has(input.target);
+  return name === "runtime_exec" && hostToolOf(name, args) !== undefined;
 }
 
 /** True when a runtime_search asks for one host tool's schema by name. */
 export function isHostToolSearch(name: string, args: unknown): boolean {
-  if (name !== "runtime_search") return false;
-  const input = (args ?? {}) as { name?: unknown };
-  return typeof input.name === "string" && HOST_TOOLS.has(input.name);
+  return name === "runtime_search" && hostToolOf(name, args) !== undefined;
+}
+
+/** A host tool the embedder did not allow (`remoteHostTools`): refused on the host, never forwarded to the remote runtime. */
+export function refusedHostTool(tool: string): { content: { type: "text"; text: string }[]; isError: true } {
+  return { content: [{ type: "text", text: `${tool} is not available in this session.` }], isError: true };
 }
 
 type ToolResult = { content: unknown[]; isError?: boolean; structuredContent?: unknown };

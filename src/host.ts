@@ -51,7 +51,7 @@ import { createOrgBridge, type OrgBridge, type OrgBridgeOptions } from "./org-br
 import { httpLinkRelay, type LinkRelay } from "./org-host-room.js";
 import { ConversationRoomRoute } from "./rooms-route.js";
 import { FileSessionStore, type SessionRecord, type SessionStore } from "./session-store.js";
-import { isHostToolCall, isHostToolSearch, RemoteRuntimeClients, type RemoteRuntime } from "./remote-tools.js";
+import { hostToolOf, refusedHostTool, remoteHostToolSet, RemoteRuntimeClients, type RemoteRuntime } from "./remote-tools.js";
 
 const HARNESS_ID = "marshal-sdk";
 const SDK_VERSION = "0.0.1";
@@ -171,6 +171,13 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * settings does not shadow this one. Undefined (the default): the session is local.
    */
   remoteRuntime?: (session: SessionRecord) => RemoteRuntime | undefined;
+  /**
+   * The host tools remote sessions may reach: a subset of REMOTE_HOST_TOOLS (default: all of them). Any other host tool a remote session names is
+   * refused on the host and never forwarded. A host whose session store holds several tenants' sessions lists only tools scoped by the session itself
+   * (the memory tools); the session tools (searchSessions, getSessionTranscript, messageSubagent, messageForks, listSubagents, forkSubagents) reach
+   * every session of the store.
+   */
+  remoteHostTools?: readonly string[];
   /** Keep sessions' Claude Code processes alive between turns (the port's live mode); `liveFor` picks which sessions. */
   live?: AgentPortOptions["live"];
   liveFor?: AgentPortOptions["liveFor"];
@@ -608,16 +615,18 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     (session) => memory.promptContext(session),
   );
 
+  const remoteHostTools = remoteHostToolSet(options.remoteHostTools);
   serversFor = (session: SessionRecord): Record<string, unknown> => {
     const hostAdapterOfSession = adapterFor(session.id);
     const remote = options.remoteRuntime?.(session);
     // A remote session's runtime calls go to its own machine's runtime, except the fixed host tool set (remote-tools.ts).
     const adapter = remote
       ? {
-          callTool: (name: string, args: unknown, _extra?: never) =>
-            isHostToolCall(name, args) || isHostToolSearch(name, args)
-              ? hostAdapterOfSession.callTool(name, args, undefined as never)
-              : remoteClients.callTool(session.id, remote, name, args),
+          callTool: (name: string, args: unknown, _extra?: never) => {
+            const hostTool = hostToolOf(name, args);
+            if (hostTool === undefined) return remoteClients.callTool(session.id, remote, name, args);
+            return remoteHostTools.has(hostTool) ? hostAdapterOfSession.callTool(name, args, undefined as never) : Promise.resolve(refusedHostTool(hostTool));
+          },
           readResource: (uri: string) => remoteClients.readResource(session.id, remote, uri),
         }
       : hostAdapterOfSession;

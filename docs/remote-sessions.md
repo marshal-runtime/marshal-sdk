@@ -24,7 +24,9 @@ for that chat). For such a session the `marshal` server carries:
 
 `REMOTE_HOST_TOOLS` is fixed: `marshal.tool.forkSubagents`, `listSubagents`, `messageSubagent`, `messageForks`,
 `searchSessions`, `getSessionTranscript`, `remember`, `recall`, `linkMemory`, `updateMemory`, `forget`, `recordDecision`.
-No other host capability is reachable (no generic forwarding), and a TypeScript block (`inline_module`) runs on the
+`createMarshalHost({ remoteHostTools })` narrows that set to a subset (default: all of it); a host tool outside it is refused on the
+host and never forwarded. A host whose session store holds several tenants (Marley: every brand on one server) lists only
+the memory tools, because the session tools read and reach every session of the store. No other host capability is reachable (no generic forwarding), and a TypeScript block (`inline_module`) runs on the
 remote runtime only. A remote session gets no host browser server and no host runtime for other providers. Embedder
 direct tools route their runtime calls the same way.
 
