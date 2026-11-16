@@ -5,26 +5,26 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@marshal/agent-runtime-claude': file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-78.tgz
-  '@marshal/agent-runtime-code-intelligence': file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-72.tgz
-  '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz
-  '@marshal/agent-runtime-conformance': file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-72.tgz
-  '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
-  '@marshal/agent-runtime-delegation': file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-90.tgz
-  '@marshal/agent-runtime-effects': file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-72.tgz
-  '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz
-  '@marshal/agent-runtime-host': file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-88.tgz
-  '@marshal/agent-runtime-manifest': file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-72.tgz
-  '@marshal/agent-runtime-org': file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-87.tgz
-  '@marshal/agent-runtime-permissions': file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-72.tgz
-  '@marshal/agent-runtime-prompt': file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-83.tgz
-  '@marshal/agent-runtime-provider-artifacts': file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-72.tgz
-  '@marshal/agent-runtime-provider-kit': file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-72.tgz
-  '@marshal/agent-runtime-typescript': file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-72.tgz
-  '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-85.tgz
+  '@marshal/agent-runtime-claude': file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-code-intelligence': file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-conformance': file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-delegation': file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-effects': file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-host': file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-manifest': file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-org': file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-permissions': file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-prompt': file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-provider-artifacts': file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-provider-kit': file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-typescript': file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-91.tgz
+  '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-91.tgz
   '@marshal/agentic-debugger-extension': file:vendor/packs/marshal-agentic-debugger-extension-1.0.0-marshal-host-1.tgz
   '@marshal/overlay-review': file:vendor/packs/marshal-overlay-review-0.1.0-marshal-host-2.tgz
-  '@marshal/runtime': file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz
+  '@marshal/runtime': file:vendor/packs/marshal-runtime-0.1.0-marshal-host-91.tgz
   '@marshal/swarm': file:vendor/packs/marshal-swarm-0.1.0-marshal-host-51.tgz
 
 importers:
@@ -38,14 +38,14 @@ importers:
         specifier: 1.0.35
         version: 1.0.35
       '@marshal/agent-runtime-claude':
-        specifier: file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-78.tgz
-        version: file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-78.tgz
+        specifier: file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-91.tgz
+        version: file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-91.tgz
       '@marshal/agent-runtime-org':
-        specifier: file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-87.tgz
-        version: file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-87.tgz
+        specifier: file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-91.tgz
+        version: file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-91.tgz
       '@marshal/agent-runtime-prompt':
-        specifier: file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-83.tgz
-        version: file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-83.tgz
+        specifier: file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-91.tgz
+        version: file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-91.tgz
       '@marshal/agentic-debugger-extension':
         specifier: file:vendor/packs/marshal-agentic-debugger-extension-1.0.0-marshal-host-1.tgz
         version: file:vendor/packs/marshal-agentic-debugger-extension-1.0.0-marshal-host-1.tgz(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -53,8 +53,8 @@ importers:
         specifier: file:vendor/packs/marshal-overlay-review-0.1.0-marshal-host-2.tgz
         version: file:vendor/packs/marshal-overlay-review-0.1.0-marshal-host-2.tgz(electron@45.3.2)
       '@marshal/runtime':
-        specifier: file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz
-        version: file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz(zod@4.3.6)
+        specifier: file:vendor/packs/marshal-runtime-0.1.0-marshal-host-91.tgz
+        version: file:vendor/packs/marshal-runtime-0.1.0-marshal-host-91.tgz(zod@4.3.6)
       '@marshal/swarm':
         specifier: file:vendor/packs/marshal-swarm-0.1.0-marshal-host-51.tgz
         version: file:vendor/packs/marshal-swarm-0.1.0-marshal-host-51.tgz(react@18.3.1)(zod@4.3.6)
@@ -382,88 +382,88 @@ packages:
     resolution: {integrity: sha512-wgm9Ehl2jpeqP3zw/7mo3kRHFp5MEDhqAdwy1fTGkHAwnkGOVsgpvQhL8B5n1qlb01jV3n/bI0ZfZp5lWA1k4w==}
     engines: {node: '>=18.0.0'}
 
-  '@marshal/agent-runtime-claude@file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-78.tgz':
-    resolution: {integrity: sha512-c4TJGXaGEG0eFOs51CGsCQJo7lyNvj58rKeQkYPXBSRf4wv2JmM9UQ8VrOMAZwMl9m7oriUD0LjZxhBXcb6VTA==, tarball: file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-78.tgz}
+  '@marshal/agent-runtime-claude@file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-c4TJGXaGEG0eFOs51CGsCQJo7lyNvj58rKeQkYPXBSRf4wv2JmM9UQ8VrOMAZwMl9m7oriUD0LjZxhBXcb6VTA==, tarball: file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-code-intelligence@file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-72.tgz':
-    resolution: {integrity: sha512-o27yypK4g5qM/GT+ybp67ok4ru0hrIzm96gff3iGGMl9Edf9bbp5eKmpiDdUyDisWD0uh4h+dcSjYz/BpfIr4A==, tarball: file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-72.tgz}
+  '@marshal/agent-runtime-code-intelligence@file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-o27yypK4g5qM/GT+ybp67ok4ru0hrIzm96gff3iGGMl9Edf9bbp5eKmpiDdUyDisWD0uh4h+dcSjYz/BpfIr4A==, tarball: file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=24.14.0'}
 
-  '@marshal/agent-runtime-composer@file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz':
-    resolution: {integrity: sha512-FbxBFuG1HbhYDb821AB/gg+Dxi7qt1nsOQl6EzJ4vNJPTe1d1+nr+KePTZjP9u9SzaL50v0eDyswF3YxnuWK+Q==, tarball: file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz}
+  '@marshal/agent-runtime-composer@file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-FbxBFuG1HbhYDb821AB/gg+Dxi7qt1nsOQl6EzJ4vNJPTe1d1+nr+KePTZjP9u9SzaL50v0eDyswF3YxnuWK+Q==, tarball: file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-conformance@file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-72.tgz':
-    resolution: {integrity: sha512-fuUlzm1qkbl/0U1MfKNhE19YT+Opm7fSSWgBkVEN6NYjPi6pbc269TBpVyhsHCBmAOhEiX/p4m94V/Ijl6oR+A==, tarball: file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-72.tgz}
+  '@marshal/agent-runtime-conformance@file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-fuUlzm1qkbl/0U1MfKNhE19YT+Opm7fSSWgBkVEN6NYjPi6pbc269TBpVyhsHCBmAOhEiX/p4m94V/Ijl6oR+A==, tarball: file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-core@file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz':
-    resolution: {integrity: sha512-qz9uEaJY9Ym76iuInzZXCppkPjBGLcD08sb/hx/CjRvbkpUxeRltkfZ2jxEUcgfb2zVto+HpbuxTTUtVQNCpRA==, tarball: file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz}
+  '@marshal/agent-runtime-core@file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-qz9uEaJY9Ym76iuInzZXCppkPjBGLcD08sb/hx/CjRvbkpUxeRltkfZ2jxEUcgfb2zVto+HpbuxTTUtVQNCpRA==, tarball: file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-delegation@file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-90.tgz':
-    resolution: {integrity: sha512-sZSrmrNrwXWYDMY9JVoC1p77zz4hlYsIAqnlBi6ACdHQIWef8EDZK0quws1Y2xALbvmwZatkuWMDeDGjpj7IcA==, tarball: file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-90.tgz}
+  '@marshal/agent-runtime-delegation@file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-sZSrmrNrwXWYDMY9JVoC1p77zz4hlYsIAqnlBi6ACdHQIWef8EDZK0quws1Y2xALbvmwZatkuWMDeDGjpj7IcA==, tarball: file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-effects@file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-72.tgz':
-    resolution: {integrity: sha512-b5WTBZj+l8E+qeN+0ILe8+kYL71AUV7/WUVJId3fdPsF/SUPrKsngck7AQZ2jzYx3PowuaUHl202XOsV5MN7+Q==, tarball: file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-72.tgz}
+  '@marshal/agent-runtime-effects@file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-b5WTBZj+l8E+qeN+0ILe8+kYL71AUV7/WUVJId3fdPsF/SUPrKsngck7AQZ2jzYx3PowuaUHl202XOsV5MN7+Q==, tarball: file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-extensions@file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz':
-    resolution: {integrity: sha512-DfGRor7IAUkICGokjsTLrWuzaqQrO93zy5ad1HqC48Htyp6KtIswNt1y0ePs9qdbaGof9fSJVnJi3ToeB1bEfg==, tarball: file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz}
+  '@marshal/agent-runtime-extensions@file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-A4qpFyjb55oX0IYx1nYC1KrbD+a431Nyeu63oC7jh7hlNQc67uC9uFU5stVQ3qn4/JfOim58B5PPEBgtqdloqg==, tarball: file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-host@file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-88.tgz':
-    resolution: {integrity: sha512-i4bzDDEqqWC+X6BFEzTG3P0rs3OkJ2ZSnfO87z82JFhT5iBovnDPFt0g6BKoyDYaNiQgy2Picqku6Sk5U2p5qA==, tarball: file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-88.tgz}
+  '@marshal/agent-runtime-host@file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-i4bzDDEqqWC+X6BFEzTG3P0rs3OkJ2ZSnfO87z82JFhT5iBovnDPFt0g6BKoyDYaNiQgy2Picqku6Sk5U2p5qA==, tarball: file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=24.14.0'}
 
-  '@marshal/agent-runtime-manifest@file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-72.tgz':
-    resolution: {integrity: sha512-8eWNjAd0m8pM7vM3pDmWxMm6KLO+TyulRYQmL0BLn3w0KGj1YUbreHfxM0MTgHQw4GLopMxmF9LXHlqZ2C62bw==, tarball: file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-72.tgz}
+  '@marshal/agent-runtime-manifest@file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-8eWNjAd0m8pM7vM3pDmWxMm6KLO+TyulRYQmL0BLn3w0KGj1YUbreHfxM0MTgHQw4GLopMxmF9LXHlqZ2C62bw==, tarball: file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-org@file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-87.tgz':
-    resolution: {integrity: sha512-coRjSUQGU3+CziB+yjgq/Y6NMKY8+BD9AmwASXPUUy249rNwAMuoMIalJpJDLZYglicJRQzTk4hN5hnBcN4sew==, tarball: file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-87.tgz}
+  '@marshal/agent-runtime-org@file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-j1x/W0tyFUXHTYjy6yx1+bdwTmc31IoVJGmNVlnG5g3uRTCZuB5ovRqaWbqH5bJgsbTSlBullClbU1DCCbbrKg==, tarball: file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-permissions@file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-72.tgz':
-    resolution: {integrity: sha512-ITQorBuMBX8BLEZcjXWl2x/c4160EUqi7gi+BVg2ZlPm+p1GJNmtBEVSZ1tLzbCaXYvc1hPOGb6Q+I9H45rtXw==, tarball: file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-72.tgz}
+  '@marshal/agent-runtime-permissions@file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-ITQorBuMBX8BLEZcjXWl2x/c4160EUqi7gi+BVg2ZlPm+p1GJNmtBEVSZ1tLzbCaXYvc1hPOGb6Q+I9H45rtXw==, tarball: file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-prompt@file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-83.tgz':
-    resolution: {integrity: sha512-hDLlvsJld8SHYAF4U9tJKkOvxdsJ2/UIDJHw9pleusmy/xI+vzJ2Ej0g1smmppUD32QoCac01jj8625WH97uzg==, tarball: file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-83.tgz}
+  '@marshal/agent-runtime-prompt@file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-hDLlvsJld8SHYAF4U9tJKkOvxdsJ2/UIDJHw9pleusmy/xI+vzJ2Ej0g1smmppUD32QoCac01jj8625WH97uzg==, tarball: file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-provider-artifacts@file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-72.tgz':
-    resolution: {integrity: sha512-V8HiJ61SCAnF4kytaYjCMTqiXyQGYAQxXTfEM3DQbgoz+zZ37CTLCgXFmwV8DgC2Mhv9Ee2PXJor9i4NY4JdIQ==, tarball: file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-72.tgz}
+  '@marshal/agent-runtime-provider-artifacts@file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-V8HiJ61SCAnF4kytaYjCMTqiXyQGYAQxXTfEM3DQbgoz+zZ37CTLCgXFmwV8DgC2Mhv9Ee2PXJor9i4NY4JdIQ==, tarball: file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-provider-kit@file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-72.tgz':
-    resolution: {integrity: sha512-OY6Z5YohA1ByIPcFiPv0XvWj4Vw9fpFkufP3xX5Va4SKNbf2vTkJ/LCtOnFAwPNwEIFJZoVZNR8ZFHfAigE1rg==, tarball: file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-72.tgz}
+  '@marshal/agent-runtime-provider-kit@file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-OY6Z5YohA1ByIPcFiPv0XvWj4Vw9fpFkufP3xX5Va4SKNbf2vTkJ/LCtOnFAwPNwEIFJZoVZNR8ZFHfAigE1rg==, tarball: file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-typescript@file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-72.tgz':
-    resolution: {integrity: sha512-8YtAw7AjrAYoNRjHybqg1AmqRt+iUo7FFQOCeO7G9/OQTserWUzk9PspHecqzVCFaEVnHC4eB3PfSH0o/w8Phw==, tarball: file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-72.tgz}
+  '@marshal/agent-runtime-typescript@file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-8YtAw7AjrAYoNRjHybqg1AmqRt+iUo7FFQOCeO7G9/OQTserWUzk9PspHecqzVCFaEVnHC4eB3PfSH0o/w8Phw==, tarball: file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
-  '@marshal/agent-runtime-ui@file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-85.tgz':
-    resolution: {integrity: sha512-wUbWutY+DqzZ06MYPpxjcbh+1/ii2U42pu6QQPQ9OY6W9DxSQx9ozC4SCKLaYj9qDrx0ixrBX7c+j0tzZZs1FQ==, tarball: file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-85.tgz}
+  '@marshal/agent-runtime-ui@file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-wUbWutY+DqzZ06MYPpxjcbh+1/ii2U42pu6QQPQ9OY6W9DxSQx9ozC4SCKLaYj9qDrx0ixrBX7c+j0tzZZs1FQ==, tarball: file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
 
@@ -487,8 +487,8 @@ packages:
       '@marshal/agent-runtime-extensions':
         optional: true
 
-  '@marshal/runtime@file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz':
-    resolution: {integrity: sha512-oOGSszyhgnNunkw1VZ4fQgURoqiBSEe7qyhi3ZMY5/CA+4K3xvkqxhJWYNxEhCTGRlTIp+dAEF0Y6Stffkn9ag==, tarball: file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz}
+  '@marshal/runtime@file:vendor/packs/marshal-runtime-0.1.0-marshal-host-91.tgz':
+    resolution: {integrity: sha512-oOGSszyhgnNunkw1VZ4fQgURoqiBSEe7qyhi3ZMY5/CA+4K3xvkqxhJWYNxEhCTGRlTIp+dAEF0Y6Stffkn9ag==, tarball: file:vendor/packs/marshal-runtime-0.1.0-marshal-host-91.tgz}
     version: 0.1.0
     engines: {node: '>=24.14.0'}
     hasBin: true
@@ -1391,91 +1391,91 @@ snapshots:
     dependencies:
       minipass: 7.1.3
 
-  '@marshal/agent-runtime-claude@file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-78.tgz': {}
+  '@marshal/agent-runtime-claude@file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-91.tgz': {}
 
-  '@marshal/agent-runtime-code-intelligence@file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-72.tgz':
+  '@marshal/agent-runtime-code-intelligence@file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
-      '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz
-      '@marshal/agent-runtime-provider-kit': file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-72.tgz
+      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-provider-kit': file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-91.tgz
 
-  '@marshal/agent-runtime-composer@file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz':
+  '@marshal/agent-runtime-composer@file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
       typescript: 5.9.3
 
-  '@marshal/agent-runtime-conformance@file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-72.tgz':
+  '@marshal/agent-runtime-conformance@file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
-      '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-85.tgz
+      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-91.tgz
 
-  '@marshal/agent-runtime-core@file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz': {}
+  '@marshal/agent-runtime-core@file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz': {}
 
-  '@marshal/agent-runtime-delegation@file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-90.tgz':
+  '@marshal/agent-runtime-delegation@file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
+      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
 
-  '@marshal/agent-runtime-effects@file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-72.tgz':
+  '@marshal/agent-runtime-effects@file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
-      '@marshal/agent-runtime-delegation': file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-90.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-delegation': file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-91.tgz
 
-  '@marshal/agent-runtime-extensions@file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz':
+  '@marshal/agent-runtime-extensions@file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
-      '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-85.tgz
+      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-91.tgz
 
-  '@marshal/agent-runtime-host@file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-88.tgz':
+  '@marshal/agent-runtime-host@file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-code-intelligence': file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
-      '@marshal/agent-runtime-effects': file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz
-      '@marshal/agent-runtime-manifest': file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-permissions': file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-provider-artifacts': file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-provider-kit': file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-typescript': file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-85.tgz
+      '@marshal/agent-runtime-code-intelligence': file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-effects': file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-manifest': file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-permissions': file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-provider-artifacts': file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-provider-kit': file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-typescript': file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-91.tgz
 
-  '@marshal/agent-runtime-manifest@file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-72.tgz': {}
+  '@marshal/agent-runtime-manifest@file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-91.tgz': {}
 
-  '@marshal/agent-runtime-org@file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-87.tgz':
+  '@marshal/agent-runtime-org@file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-91.tgz':
     dependencies:
       yjs: 13.6.33
 
-  '@marshal/agent-runtime-permissions@file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-72.tgz':
+  '@marshal/agent-runtime-permissions@file:vendor/packs/marshal-agent-runtime-permissions-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
 
-  '@marshal/agent-runtime-prompt@file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-83.tgz': {}
+  '@marshal/agent-runtime-prompt@file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-91.tgz': {}
 
-  '@marshal/agent-runtime-provider-artifacts@file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-72.tgz':
+  '@marshal/agent-runtime-provider-artifacts@file:vendor/packs/marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
-      '@marshal/agent-runtime-provider-kit': file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-72.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-provider-kit': file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-91.tgz
 
-  '@marshal/agent-runtime-provider-kit@file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-72.tgz':
+  '@marshal/agent-runtime-provider-kit@file:vendor/packs/marshal-agent-runtime-provider-kit-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
 
-  '@marshal/agent-runtime-typescript@file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-72.tgz':
+  '@marshal/agent-runtime-typescript@file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
-      '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz
+      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-91.tgz
       esbuild: 0.27.7
       typescript: 5.9.3
 
-  '@marshal/agent-runtime-ui@file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-85.tgz':
+  '@marshal/agent-runtime-ui@file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-91.tgz':
     dependencies:
-      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
+      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
       esbuild: 0.27.7
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
@@ -1500,19 +1500,19 @@ snapshots:
     dependencies:
       electron: 45.3.2
 
-  '@marshal/runtime@file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz(zod@4.3.6)':
+  '@marshal/runtime@file:vendor/packs/marshal-runtime-0.1.0-marshal-host-91.tgz(zod@4.3.6)':
     dependencies:
-      '@marshal/agent-runtime-code-intelligence': file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-conformance': file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz
-      '@marshal/agent-runtime-delegation': file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-90.tgz
-      '@marshal/agent-runtime-effects': file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz
-      '@marshal/agent-runtime-host': file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-88.tgz
-      '@marshal/agent-runtime-manifest': file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-typescript': file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-72.tgz
-      '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-85.tgz
+      '@marshal/agent-runtime-code-intelligence': file:vendor/packs/marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-composer': file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-conformance': file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-core': file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-delegation': file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-effects': file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-extensions': file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-host': file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-manifest': file:vendor/packs/marshal-agent-runtime-manifest-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-typescript': file:vendor/packs/marshal-agent-runtime-typescript-0.1.0-marshal-host-91.tgz
+      '@marshal/agent-runtime-ui': file:vendor/packs/marshal-agent-runtime-ui-0.1.0-marshal-host-91.tgz
       '@modelcontextprotocol/sdk': 1.30.0(zod@4.3.6)
     transitivePeerDependencies:
       - '@cfworker/json-schema'
@@ -1521,7 +1521,7 @@ snapshots:
 
   '@marshal/swarm@file:vendor/packs/marshal-swarm-0.1.0-marshal-host-51.tgz(react@18.3.1)(zod@4.3.6)':
     dependencies:
-      '@marshal/runtime': file:vendor/packs/marshal-runtime-0.1.0-marshal-host-88.tgz(zod@4.3.6)
+      '@marshal/runtime': file:vendor/packs/marshal-runtime-0.1.0-marshal-host-91.tgz(zod@4.3.6)
       react: 18.3.1
     transitivePeerDependencies:
       - '@cfworker/json-schema'
