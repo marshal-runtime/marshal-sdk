@@ -1,7 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
-import type { AutomationInput } from "./automations.js";
+import { isTenantZone, type AutomationInput } from "./automations.js";
 
 /**
  * Marshal's routine file (`.marshal/routines/<id>.yaml`), the same schema the desktop (common/routines/routine-definition.ts)
@@ -9,7 +9,7 @@ import type { AutomationInput } from "./automations.js";
  *
  * - `body.extension {id, agent, input}`: start an agent an extension declares (contributes.agents) with its pinned profile;
  * - `triggers.after {routine, notBefore, within}`: run once another routine finished well;
- * - `triggers.timezone`: the zone of its schedules and notBefore (an IANA name, or "tenant" for the tenant's own).
+ * - `triggers.timezone`: the zone of its schedules and notBefore (an IANA name, or "tenant" (alias "brand") for the tenant's own).
  *
  * zyg-agents' Slack and alert event objects are accepted here as data and ignored by this host (it fires named events).
  */
@@ -162,7 +162,7 @@ export function routineAutomations(
       ...(body.extension.effort ? { reasoningEffort: body.extension.effort } : {}),
     });
   }
-  const zone = routine.triggers.timezone === "tenant" || !routine.triggers.timezone ? host.timezone : routine.triggers.timezone;
+  const zone = isTenantZone(routine.triggers.timezone) ? host.timezone : routine.triggers.timezone;
   const inputs: AutomationInput[] = [];
   for (const schedule of routine.triggers.schedules) {
     inputs.push({ ...common, triggerType: "schedule", schedule, ...(zone ? { timezone: zone } : {}) } as AutomationInput);
@@ -174,7 +174,7 @@ export function routineAutomations(
     inputs.push({
       ...common,
       triggerType: "after",
-      after: { ...routine.triggers.after, timezone: routine.triggers.timezone ?? "tenant" },
+      after: { ...routine.triggers.after, timezone: isTenantZone(routine.triggers.timezone) ? "tenant" : routine.triggers.timezone! },
     } as AutomationInput);
   }
   // A routine with no automatic trigger is still runnable by hand.

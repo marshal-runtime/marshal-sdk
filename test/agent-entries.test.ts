@@ -382,7 +382,7 @@ test("routine files: the extension body, after and timezone parse, and a routine
       "title: Brief send",
       "triggers:",
       "  manual: true",
-      "  timezone: tenant",
+      "  timezone: brand",
       "  after: { routine: daily-brief, notBefore: \"09:00\", within: 6h }",
       "body:",
       "  extension: { id: \"@marley/brief-send\", agent: brief-send, input: { channel: owner-dm } }",

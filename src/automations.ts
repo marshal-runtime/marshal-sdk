@@ -516,7 +516,7 @@ export class HostAutomations {
       if (trigger.type !== "after" || downstream.tenant !== upstream.tenant) continue;
       if (trigger.routine !== upstream.id && trigger.routine !== upstream.routineId) continue;
       if (!downstream.enabled || downstream.state !== "active") continue;
-      const zone = trigger.timezone === "tenant" || !trigger.timezone ? this.zoneOf(downstream) : trigger.timezone;
+      const zone = isTenantZone(trigger.timezone) ? this.zoneOf(downstream) : trigger.timezone!;
       const due = trigger.notBefore ? Math.max(finishedAt.getTime(), localTimeOn(finishedAt, trigger.notBefore, zone)) : finishedAt.getTime();
       if (trigger.within && due - finishedAt.getTime() > parseDuration(trigger.within)) {
         this.decide(downstream, "skip", "after");
@@ -768,7 +768,7 @@ export class HostAutomations {
       const within = input.after?.within;
       if (within !== undefined) parseDuration(within);
       const timezone = input.after?.timezone;
-      if (timezone !== undefined && timezone !== "tenant") checkTimezone(timezone);
+      if (!isTenantZone(timezone)) checkTimezone(timezone!);
       return { type, routine, ...(notBefore ? { notBefore } : {}), ...(within ? { within } : {}), ...(timezone ? { timezone } : {}) };
     }
     if (type === "condition") {
@@ -1233,4 +1233,9 @@ export function createAutomationsProvider(automations: HostAutomations): Capabil
       }
     },
   } as unknown as CapabilityProvider;
+}
+
+/** A trigger zone that means "the tenant's own": absent, "tenant", or "brand" (the routine file's wording for Marley). */
+export function isTenantZone(zone: string | undefined): boolean {
+  return zone === undefined || zone === "" || zone === "tenant" || zone === "brand";
 }
