@@ -363,3 +363,4 @@ export {
   type MemoryStore,
 } from "./memory.js";
 export { typedGraphMemoryRoute, type TypedGraphExecute, type TypedGraphHit, type TypedGraphMemoryRouteOptions } from "./memory-typed-graph.js";
+export { REMOTE_HOST_TOOLS, type RemoteRuntime } from "./remote-tools.js";

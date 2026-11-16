@@ -51,6 +51,7 @@ import { createOrgBridge, type OrgBridge, type OrgBridgeOptions } from "./org-br
 import { httpLinkRelay, type LinkRelay } from "./org-host-room.js";
 import { ConversationRoomRoute } from "./rooms-route.js";
 import { FileSessionStore, type SessionRecord, type SessionStore } from "./session-store.js";
+import { isHostToolCall, isHostToolSearch, RemoteRuntimeClients, type RemoteRuntime } from "./remote-tools.js";
 
 const HARNESS_ID = "marshal-sdk";
 const SDK_VERSION = "0.0.1";
@@ -158,6 +159,18 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * session's tools are served elsewhere. A session adopted after a restart runs behind them too.
    */
   launchOptionsFor?: AgentPortOptions["launchOptionsFor"];
+  /**
+   * A session whose Claude Code runs on another machine (a remote `spawnClaudeCodeProcess`): how the host reaches that
+   * machine's own Marshal runtime MCP server over stdio (Marley: the ssh command that starts the brand VM's runtime for
+   * that chat). For such a session the host's `marshal` server, an in-process SDK server carried over the Claude Code
+   * process's own control channel (no listener, port or token), serves runtime_search / runtime_exec /
+   * runtime_read_resource on the remote runtime and the fixed host tool set (REMOTE_HOST_TOOLS: forks, sessions, memory,
+   * recordDecision) on this host; no other host capability, no browser server. Tool names stay `mcp__marshal__*` and
+   * `marshal.tool.*`, so the prompt is the same local or remote. The session must keep the host's servers
+   * (`hostMcpServers` not false) and should run with `strictMcpConfig` so a `marshal` server in the remote machine's
+   * settings does not shadow this one. Undefined (the default): the session is local.
+   */
+  remoteRuntime?: (session: SessionRecord) => RemoteRuntime | undefined;
   /** Keep sessions' Claude Code processes alive between turns (the port's live mode); `liveFor` picks which sessions. */
   live?: AgentPortOptions["live"];
   liveFor?: AgentPortOptions["liveFor"];
@@ -329,6 +342,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   // Both are filled once the runtime exists; sessions only read them when a turn starts.
   let prompts: HostPrompts | undefined;
   let serversFor: (session: SessionRecord) => Record<string, unknown> = () => ({});
+  const remoteClients = new RemoteRuntimeClients(log);
   let automations: HostAutomations | undefined;
   let publisher: SessionPublisher | undefined;
   const runRecords = runRecordsPublisher;
@@ -355,7 +369,14 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     ...(options.launchOptionsFor ? { launchOptionsFor: options.launchOptionsFor } : {}),
     ...(options.live ? { live: options.live } : {}),
     ...(options.liveFor ? { liveFor: options.liveFor } : {}),
-    ...(options.onLiveProcessClosed ? { onLiveProcessClosed: options.onLiveProcessClosed } : {}),
+    ...(options.onLiveProcessClosed || options.remoteRuntime
+      ? {
+          onLiveProcessClosed: (sessionId: string, reason: Parameters<NonNullable<AgentPortOptions["onLiveProcessClosed"]>>[1]) => {
+            void remoteClients.close(sessionId);
+            options.onLiveProcessClosed?.(sessionId, reason);
+          },
+        }
+      : {}),
     prepareTurn: (session) => memory.warm(session, log),
     mcpServers: (session) => serversFor(session),
     log,
@@ -365,6 +386,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       if (typeof payload.sessionId === "string") publisher?.schedule(payload.sessionId);
       if (typeof payload.sessionId === "string") runRecords?.schedule(payload.sessionId);
       if (typeof payload.sessionId === "string" && (type === "session.idle" || type === "session.failed")) orgStore?.schedule(payload.sessionId);
+      // A remote session's runtime connection ends with its turn; its next runtime call opens a fresh one.
+      if (typeof payload.sessionId === "string" && (type === "session.idle" || type === "session.failed")) void remoteClients.close(payload.sessionId);
       try {
         options.onSessionEvent?.(type, payload);
       } catch (error) {
@@ -586,7 +609,18 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   );
 
   serversFor = (session: SessionRecord): Record<string, unknown> => {
-    const adapter = adapterFor(session.id);
+    const hostAdapterOfSession = adapterFor(session.id);
+    const remote = options.remoteRuntime?.(session);
+    // A remote session's runtime calls go to its own machine's runtime, except the fixed host tool set (remote-tools.ts).
+    const adapter = remote
+      ? {
+          callTool: (name: string, args: unknown, _extra?: never) =>
+            isHostToolCall(name, args) || isHostToolSearch(name, args)
+              ? hostAdapterOfSession.callTool(name, args, undefined as never)
+              : remoteClients.callTool(session.id, remote, name, args),
+          readResource: (uri: string) => remoteClients.readResource(session.id, remote, uri),
+        }
+      : hostAdapterOfSession;
     const call = async (name: string, args: unknown) => {
       const result = (await adapter.callTool(name, args, undefined as never)) as {
         content: unknown[];
@@ -597,7 +631,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     const directContext = {
       sessionId: session.id,
       workspacePath,
-      trustedTypeScript: importPolicy !== undefined,
+      trustedTypeScript: !remote && importPolicy !== undefined,
       call: (name: string, args: unknown) => adapter.callTool(name, args, undefined as never) as never,
       invoke: async (capability: string, input: unknown = {}) => {
         const result = (await adapter.callTool("runtime_exec", { targetType: "operation", target: capability, input }, undefined as never)) as {
@@ -665,8 +699,10 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     const marshal = createSdkMcpServer({
       name: "marshal",
       version: "0.1.0",
-      tools: [...(runtimeTools ? runtimeToolList : []), ...embedderTools],
+      tools: [...(runtimeTools || remote ? runtimeToolList : []), ...embedderTools],
     });
+    // A remote session gets only its `marshal` server: no host browser, no host runtime for other providers.
+    if (remote) return { marshal };
     return {
       marshal,
       ...(browserServer ? { playwright: browserServer } : {}),
@@ -809,6 +845,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       forks.dispose();
       await models.dispose().catch(() => undefined);
       await agents.dispose();
+      await remoteClients.closeAll();
       // Stopping the agents ends their running turns, which schedules one more publish each; it must reach the
       // Brain before the runtime takes its capabilities down (2026-11-16: capability_not_found on the last upload).
       await publisher?.close();
