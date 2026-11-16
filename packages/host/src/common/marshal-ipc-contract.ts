@@ -2937,6 +2937,11 @@ export interface IpcInvokeMap extends RuntimeAcceptanceIpcInvokeMap {
   "sessions:delete": (
     sessionId: string,
   ) => Promise<{ success: boolean; newActiveId?: string | null; error?: string }>;
+  /** New top-level session with the conversation up to and including `messageId`; the source is unchanged. */
+  "sessions:forkAtMessage": (
+    sessionId: string,
+    messageId: string,
+  ) => Promise<{ success: boolean; session?: SessionMetadata; error?: string }>;
   "sessions:delete-all": (options?: {
     preserveWorkflowGroups?: boolean;
   }) => Promise<{ success: boolean; error?: string }>;
