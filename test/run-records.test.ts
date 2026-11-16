@@ -214,6 +214,14 @@ test("directoryRunSink refuses an object name that leaves its folder", async () 
   await assert.rejects(directoryRunSink(path.join(root, "out")).put("../escape.json", "{}", "application/json"), /escapes/);
 });
 
+test("directoryRunSink writes under a relative folder", async () => {
+  const { root } = tempStore();
+  const relative = path.relative(process.cwd(), path.join(root, "rel-out"));
+  await directoryRunSink(relative).put("runs/r1/summary.json", "{}", "application/json");
+  assert.equal(fs.readFileSync(path.join(root, "rel-out", "runs", "r1", "summary.json"), "utf8"), "{}");
+  await assert.rejects(directoryRunSink(relative).put("../escape.json", "{}", "application/json"), /escapes/);
+});
+
 test("a host with runRecords publishes a labelled session's run when it goes idle", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "run-records-host-"));
   const workspacePath = path.join(root, "workspace");

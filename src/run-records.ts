@@ -314,10 +314,11 @@ function readNative(record: SessionRecord): Uint8Array | undefined {
 
 /** Writes runs into a folder laid out like the records bucket (`<root>/runs/<run id>/…`). */
 export function directoryRunSink(root: string): RunRecordSink {
+  const base = path.resolve(root);
   return {
     async put(objectName, body) {
-      const target = path.join(root, ...objectName.split("/"));
-      if (!target.startsWith(path.resolve(root) + path.sep)) throw new Error(`object ${objectName} escapes ${root}`);
+      const target = path.join(base, ...objectName.split("/"));
+      if (!target.startsWith(base + path.sep)) throw new Error(`object ${objectName} escapes ${root}`);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(`${target}.tmp`, body);
       fs.renameSync(`${target}.tmp`, target);
