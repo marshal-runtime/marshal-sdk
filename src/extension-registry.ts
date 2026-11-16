@@ -63,7 +63,7 @@ export interface RunPin extends ExtensionVersionRef {
   at: string;
 }
 
-export interface ResolvedExtension {
+export interface ResolvedRoutineExtension {
   binding?: RoutineBinding;
   version: ExtensionVersion;
   agentId: string;
@@ -231,7 +231,7 @@ export class ExtensionRegistry {
   }
 
   /** Which version brand B runs for routine R. */
-  async resolve(tenant: string, routineId: string): Promise<ResolvedExtension> {
+  async resolve(tenant: string, routineId: string): Promise<ResolvedRoutineExtension> {
     const binding = await this.store.getBinding(checkTenant(tenant), routineId);
     if (!binding) throw new RegistryRefusal(`no routine ${routineId} for ${tenant}`);
     if (!binding.enabled) throw new RegistryRefusal(`routine ${routineId} is off for ${tenant}`);
@@ -278,7 +278,7 @@ export class ExtensionRegistry {
   }
 
   /** Records the version a run used; returns the pin. */
-  async pinRun(input: { runId: string; tenant: string; routineId?: string; resolved: ResolvedExtension }): Promise<RunPin> {
+  async pinRun(input: { runId: string; tenant: string; routineId?: string; resolved: ResolvedRoutineExtension }): Promise<RunPin> {
     const pin: RunPin = {
       runId: input.runId,
       tenant: checkTenant(input.tenant),
