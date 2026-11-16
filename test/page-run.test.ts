@@ -38,6 +38,7 @@ test("readSandboxInput maps agent-sandbox's input folder to a brand, a product p
   const input = inputFolder();
   const read = readSandboxInput(input);
   assert.equal(read.productId, "321");
+  assert.equal(read.brandId, "7", "the brief's brand_id, the id a brand-data provider serves");
   assert.equal(read.productDir, path.join(input, "products", "321"));
   assert.equal(read.brandName, "Acme");
   assert.equal(read.domain, "acme.example");
