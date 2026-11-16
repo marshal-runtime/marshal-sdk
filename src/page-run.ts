@@ -185,6 +185,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
       depth,
       ...(options.rounds ? { rounds: options.rounds } : {}),
     });
+    if (created?.ok === false) throw new Error(`Page Studio refused the page (${String(created.code ?? "error")}): ${String(created.error ?? created.message ?? "")}`);
     pageId = created.pageId;
     log(`page ${pageId}, activity ${created.activity.id}`);
     let step = "";
@@ -197,7 +198,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
       if (activity?.error) throw new Error(`Page Studio stopped: ${activity.error}`);
       if (activity?.doneAt) {
         reply = String(activity.reply ?? "");
-        warnings.push(...((activity.failed as string[] | undefined) ?? []));
+        warnings.push(...activityWarnings(activity));
         break;
       }
     }
@@ -217,6 +218,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     log(`FAILED: ${failure}`);
   }
 
+  for (const warning of new Set(warnings)) log(`WARNING ${warning}`);
   const sessions = host.sessions.list({ runId: host.runId });
   const summary = writeRunLogs({
     logDir: logs,
@@ -368,6 +370,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   let route: unknown;
   let shots: unknown[] = [];
   let shotsError: string | undefined;
+  const editWarnings: string[] = [];
   let build: PageStudioBuild = {};
   try {
     if (!pageId) throw new Error(`No page to edit: ${state} has no ${PAGE_RUN_RECORD} and no --page-id was given.`);
@@ -387,6 +390,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
       if (activity?.doneAt) {
         reply = String(activity.reply ?? "");
         route = activity.route ?? activity.tier ?? activity.routedBy;
+        editWarnings.push(...activityWarnings(activity));
         break;
       }
     }
@@ -401,6 +405,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     failure = error instanceof Error ? error.message : String(error);
     log(`FAILED: ${failure}`);
   }
+  for (const warning of editWarnings) log(`WARNING ${warning}`);
   const sessions = turnSessions(host.sessions.list(), usageBefore, host.runId, started);
   const summary = writeRunLogs({
     logDir: logs,
@@ -412,7 +417,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     since: started,
     error: failure,
     requiredSkills: [],
-    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, request: options.request, route, reply, sections: finished?.sections ?? [], shots, ...(shotsError ? { warnings: [shotsError] } : {}) },
+    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, request: options.request, route, reply, sections: finished?.sections ?? [], shots, ...(editWarnings.length || shotsError ? { warnings: [...editWarnings, ...(shotsError ? [shotsError] : [])] } : {}) },
   });
   if (record) {
     writePageRunRecord(state, { ...record, edits: [...(record.edits ?? []), { at: new Date().toISOString(), request: options.request, runId: host.runId, ...(failure ? { error: failure } : {}) }] });
@@ -467,6 +472,12 @@ function skillNames(declared: unknown[]): string[] {
   return declared
     .map((entry) => (typeof entry === "string" ? entry : typeof (entry as { name?: unknown })?.name === "string" ? (entry as { name: string }).name : ""))
     .filter(Boolean);
+}
+
+/** What Page Studio's finished activity warns about (skipped critic rounds and the like), each logged once. */
+export function activityWarnings(activity: { failed?: unknown; warnings?: unknown }): string[] {
+  const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
+  return [...new Set([...list(activity.failed), ...list(activity.warnings)])];
 }
 
 /** The Page Studio build this host runs (pagestudio.skills), compared with $MARSHAL_PAGE_STUDIO_HASH when set. */
@@ -562,6 +573,8 @@ const NO_CHROME_WARNING =
 
 async function resolveChrome(): Promise<string | undefined> {
   const given = process.env.MARSHAL_SDK_CHROME || process.env.PAGE_STUDIO_CHROME;
+  // "none" is Page Studio's switch for "no browser on this host" (its tests); not a path.
+  if (given === "none") return undefined;
   if (given) return given;
   const candidates: string[] = [];
   try {

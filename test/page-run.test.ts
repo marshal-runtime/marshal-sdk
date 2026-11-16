@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { extraExtensions, fakeAnswer, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { activityWarnings, extraExtensions, fakeAnswer, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -211,6 +211,13 @@ test("a required skill Page Studio loads into its own prompts is not reported mi
 
   assert.deepEqual(summary.skills_used, [], "used still means a Skill tool call");
   assert.deepEqual(summary.skills_missing, ["page-builder-qa"]);
+});
+
+test("Page Studio's skipped critic rounds and failed steps reach the run's warnings once each", () => {
+  const skipped = "critic rounds skipped: 2 of 2 did not run (no browser)";
+  assert.deepEqual(activityWarnings({ failed: ["copy pass"], warnings: [skipped, skipped] }), ["copy pass", skipped]);
+  assert.deepEqual(activityWarnings({}), []);
+  assert.deepEqual(activityWarnings({ warnings: "not a list" }), []);
 });
 
 test("page-run's dry path writes the whole run contract from an input folder, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 90_000 }, async () => {
