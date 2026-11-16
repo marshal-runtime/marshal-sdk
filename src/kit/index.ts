@@ -6,7 +6,6 @@ import type { SessionStore } from "../session-store.js";
 import { brainConfiguration, brainPackageRoot, type BrainKitOptions } from "./brain.js";
 import { kernelCall, type KernelLike } from "./call.js";
 import { createKnowledgeProvider, type KnowledgeKitOptions } from "./knowledge.js";
-import { createMemoryProvider, type MemoryKitOptions } from "./memory.js";
 import { createSessionsProvider, publishOptions, type SessionsKitOptions } from "./sessions.js";
 
 export * from "./brain.js";
@@ -19,7 +18,6 @@ export {
   type KnowledgeScope,
   type KnowledgeTarget,
 } from "./knowledge.js";
-export { createMemoryProvider, type MemoryKitOptions, type RecalledMemory } from "./memory.js";
 export {
   createSessionsProvider,
   mergeByRank,
@@ -41,7 +39,6 @@ export type KitPart = "brain" | "memory" | "sessions" | "knowledge";
 export interface KitOptions {
   parts: readonly KitPart[];
   brain?: BrainKitOptions;
-  memory?: MemoryKitOptions;
   sessions?: SessionsKitOptions;
   /** A host-chosen knowledge provider in a fixed tenant scope (part `knowledge`); it cannot be combined with the Brain parts, which bring their own knowledge.* capabilities. */
   knowledge?: KnowledgeKitOptions;
@@ -55,19 +52,7 @@ export type KitSelection = readonly KitPart[] | KitOptions;
  * option is on, so a host carries the Brain read-only by default.
  */
 export const BRAIN_WRITE_CAPABILITIES = {
-  memory: [
-    "memory.propose",
-    "memory.review",
-    "memory.cloud_link",
-    "memory.cloud_retire",
-    "memory.store",
-    "memory.write",
-    "memory.correct",
-    "memory.delete",
-    "memory.purge",
-    "memory.promote",
-    "memory.link",
-  ],
+  memory: ["memory.create", "memory.update", "memory.link", "memory.delete"],
   sessions: ["sessions.cloud_share", "sessions.cloud_unshare"],
   feedback: ["knowledge.feedback"],
 } as const;
@@ -108,13 +93,14 @@ export function prepareKit(input: {
 }): PreparedKit {
   const { kit } = input;
   const requested = new Set(kit.parts);
-  // Memory recall reads the Brain's team memories; it cannot exist without the Brain.
+  // Memory lives in the Brain's graph; it cannot exist without the Brain.
   const brainOn = requested.has("brain") || requested.has("memory");
   const parts = new Set<KitPart>([...requested, ...(brainOn ? (["brain"] as const) : [])]);
   if (parts.has("knowledge") && !kit.knowledge) throw new Error("The kit part knowledge needs kit.knowledge: { provider, scope }.");
   if (parts.has("knowledge") && brainOn) throw new Error("The kit parts knowledge and brain/memory both serve knowledge.search; choose one.");
   const brain = kit.brain ?? {};
-  const memoryWrites = parts.has("memory") && kit.memory?.writes === true;
+  // Any session writes memory nodes at once when the kit carries memory: nobody approves them (Omer, 2026-11-17).
+  const memoryWrites = parts.has("memory");
   const publishes = parts.has("sessions") && brainOn && publishOptions(kit.sessions) !== undefined;
   const ingest = (parts.has("sessions") && kit.sessions?.ingest === true) || publishes;
   const feedback = brain.feedback === true;
@@ -130,17 +116,12 @@ export function prepareKit(input: {
             brain,
             workspaceName: path.basename(input.workspacePath),
             memoryWrites,
-            ...(kit.memory?.anchorPath ? { memoryAnchorPath: kit.memory.anchorPath } : {}),
           }),
         },
       ]
     : [];
 
   const providerSources: (() => CapabilityProvider)[] = [];
-  if (parts.has("memory") && call) {
-    const provider = createMemoryProvider(call, kit.memory ?? {});
-    providerSources.push(() => provider);
-  }
   if (parts.has("knowledge") && kit.knowledge) {
     const provider = createKnowledgeProvider(kit.knowledge);
     providerSources.push(() => provider);
@@ -151,7 +132,7 @@ export function prepareKit(input: {
   }
 
   const denied = new Set<string>([
-    ...(memoryWrites ? [] : [...BRAIN_WRITE_CAPABILITIES.memory, "memory.remember"]),
+    ...(memoryWrites ? [] : BRAIN_WRITE_CAPABILITIES.memory),
     ...(ingest ? [] : [...BRAIN_WRITE_CAPABILITIES.sessions, "sessions.share"]),
     ...(feedback ? [] : BRAIN_WRITE_CAPABILITIES.feedback),
   ]);
@@ -206,9 +187,7 @@ function kitPrompt(parts: ReadonlySet<KitPart>, on: { memoryWrites: boolean; ing
   }
   if (parts.has("memory")) {
     lines.push(
-      on.memoryWrites
-        ? "- **Team memory**: `memory.recall {query}` before you start on something the team may have learned about; `memory.remember {fact, links}` proposes a fact (a person approves it before others see it)."
-        : "- **Team memory**: `memory.recall {query}` returns what the team has written down (conventions, gotchas, decisions); look before you start on something the team may have learned about. This host cannot write memories.",
+      "- **Memory** (the Brain graph): `marshal.tool.recall {query}` before you start on something already learned; `marshal.tool.remember {fact, category, links}` adds a memory node at once, linked to the files, sessions, people or graph nodes it is about; `marshal.tool.linkMemory`, `marshal.tool.updateMemory` and `marshal.tool.forget` keep them right. Nobody approves memories: write only what is true and useful.",
     );
   }
   if (parts.has("sessions")) {

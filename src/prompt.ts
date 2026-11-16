@@ -47,11 +47,9 @@ export function sdkBaseLayer(input: {
     slots: {
       "v2.finding-information.session-scope":
         "ranks the sessions of this host and every session the organization's hosts published to the org store (`scope: local|cloud|all`, default all; open a hit with `marshal.tool.getSessionTranscript {sessionId}`)",
-      "v2.finding-information.memory-rung":
-        "3. **Your memory.** The memories of your scopes are already in your context below (preferences always); `marshal.tool.recall {query}` finds the rest.",
-      "v2.memory-and-records.personal":
-        "  - Notes about the people you work for and their world (preferences, decisions, facts, context): `marshal.tool.remember {fact, category, appliesTo?, replaces?, links?}`. A preference is shown in every later session of its scope; `appliesTo` names the scope (recall lists them), `replaces: <id>` corrects an older memory and `links: [{path, symbol?}]` names the files a memory about code explains.",
-      "v2.memory-and-records.correct": "replace it (`marshal.tool.remember` with `replaces`) or `marshal.tool.forget` it",
+      "v2.finding-information.memory-rung": "3. **Your memory.** Memories are nodes in the Brain graph. The ones of your scopes are already in your context below (preferences always); `marshal.tool.recall {query}` finds the rest by meaning, `marshal.tool.recall {since}` lists what was saved since a time.",
+      "v2.memory-and-records.personal": "  - What you learn about the people you work for and their world (preferences, decisions, facts, context): `marshal.tool.remember {fact, category, appliesTo?, replaces?, links?}` writes a memory node into the Brain graph at once; nobody approves it, so write only what is true and useful. Link it to what it is about: `links: [{nodeId} | {path, symbol?} | {sessionId} | {personId}]`. A preference is shown in every later session of its scope; `appliesTo` names the scope (recall lists them), `replaces: <id>` supersedes an older memory. `marshal.tool.linkMemory {id, links}` adds links, `marshal.tool.updateMemory {id, fact?, category?, alwaysOn?}` fixes one in place, `marshal.tool.forget {id}` deletes one.",
+      "v2.memory-and-records.correct": "fix it (`marshal.tool.updateMemory`, or `marshal.tool.remember` with `replaces`), relink it (`marshal.tool.linkMemory`) or delete it (`marshal.tool.forget`)",
     },
     tools: [
       ...(input.runtimeTools === false ? [] : RUNTIME_PROMPT_TOOLS),

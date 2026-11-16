@@ -40,8 +40,7 @@ import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { SessionPublisher } from "./kit/publisher.js";
 import { OrgStore, type OrgStoreOptions, type OrgTranscriptOptions } from "./org-store/index.js";
 import { OrgSessionSearch } from "./org-store/search.js";
-import { createMemoryToolsProvider, HostMemory, objectMemoryBackend, type MemoryOptions } from "./memory.js";
-import { fsObjectStore } from "./object-store.js";
+import { brainCapabilityRoute, createMemoryToolsProvider, HostMemory, type MemoryOptions } from "./memory.js";
 import { RunRecordsPublisher, type RunRecordsOptions } from "./run-records.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
 import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
@@ -147,9 +146,10 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    */
   prompt?: HostPromptOptions;
   /**
-   * Memory for every session (docs/memory.md): marshal.tool.remember / recall / forget, and the memory block of each
-   * session's prompt (always-on preferences first). Default backend: one object per memory under sdk-memory/v1/ in the
-   * org store's bucket, else in the state folder. scopes says which scopes a session reads (Marley: brand, person).
+   * Memory for every session (docs/memory.md): marshal.tool.remember / recall / linkMemory / updateMemory / forget as
+   * nodes of a Brain graph, and the memory block of each session's prompt (always-on preferences first). `store(session)`
+   * names the Brain store and scopes (Marley: the brand's Spanner graph, scopes brand and person). Default: the kit's
+   * company Brain with a `workspace` scope when the kit carries `memory`; with neither, sessions have no memory.
    */
   memory?: MemoryOptions;
 }
@@ -282,12 +282,17 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const orgStore = options.orgStore ? new OrgStore({ log, ...options.orgStore }, sessions, options.orgStore.isCurrent) : undefined;
   if (orgStore) sessions.transcripts = orgStore.transcripts;
   const orgSearch = options.orgStore ? new OrgSessionSearch({ objects: options.orgStore.objects, workspace: options.orgStore.impl.workspace, log: (line, fields) => log(line + " " + JSON.stringify(fields ?? {})) }) : undefined;
+  // The kit's company Brain answers memory.* once the runtime exists (`invoke` below); until then a call fails as unavailable.
+  let brainInvoke: ((capability: string, input: Record<string, unknown>) => Promise<unknown>) | undefined;
+  const companyBrain = brainCapabilityRoute("brain", (capability, input) => {
+    if (!brainInvoke) throw Object.assign(new Error("The Brain is not ready yet."), { code: "unavailable" });
+    return brainInvoke(capability, input);
+  });
+  const kitMemory = normalizeKit(options.kit)?.parts.includes("memory") === true;
   const memory = new HostMemory(
     {
       ...options.memory,
-      backend: options.memory?.backend ?? objectMemoryBackend(options.orgStore?.objects ?? fsObjectStore(path.join(stateRoot, "memory"))),
-      org: options.memory?.org ?? options.orgStore?.impl.workspace ?? "local",
-      workspaceName: path.basename(workspacePath),
+      ...(kitMemory ? { fallback: () => ({ route: companyBrain, scopes: [{ id: "workspace", key: { workspace: path.basename(workspacePath) } }] }) } : {}),
     },
     sessions,
   );
@@ -659,6 +664,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     }
     return response.result?.output as T;
   };
+  brainInvoke = (capability, input) => invoke(capability, input);
   if (kit?.publishes) publisher = new SessionPublisher((sessionId) => invoke("sessions.share", { sessionId }), log);
   if (kit?.parts.has("brain")) void brainReady(invoke, log);
   const search = async (query: string, limit = 10, sessionId?: string): Promise<unknown> => {

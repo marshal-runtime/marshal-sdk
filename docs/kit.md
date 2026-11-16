@@ -27,7 +27,7 @@ broker) and the `kit` option in `src/host.ts`. Tests: `test/kit.test.ts`.
 | Part       | Capabilities on the host                                                                         | Backed by                                                                                                       |
 | ---------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | `brain`    | `knowledge.search`, `context`, `impact`, `path`, `refine`, `schema`, `health`                    | The `@marshal/brain` extension (v0.2.0), loaded on the host's runtime with its cloud-only surface               |
-| `memory`   | `memory.recall {query, limit?}`                                                                  | `knowledge.search {kinds: ["memory"]}` on the Brain: the team memories, each fact wrapped in `<untrusted_memory>` |
+| `memory`   | `marshal.tool.remember`, `recall`, `linkMemory`, `updateMemory`, `forget` (docs/memory.md)        | Memory nodes in the Brain graph through `memory.create/update/link/delete/search/list`; written at once, no approval |
 | `sessions` | `sessions.search {query, scope?, limit?, workspace?, since?, until?}`                            | This host's own session store + the Brain's shared session index (`sessions.cloud_search`), merged by rank       |
 
 `memory` implies `brain`. `sessions` works without the Brain (local store only; the result says the shared index
@@ -48,7 +48,7 @@ the kit turns it on). The configuration is the cloud-only surface (`brainConfigu
     person.
   - `delegated`: a service on Google Cloud signs with its metadata-server ID token, and the person comes from the
     host principal's `callerEmail` claim (`kit.brain.callerEmail`, with access labels from `kit.brain.access`).
-- A `brainRoutes` entry with `memory: true` is written only when memory writes are on.
+- A `brainRoutes` entry with `memory: true` is written when the kit carries `memory`.
 - `cloudTimeoutMs`: 60000 by default (`kit.brain.timeoutMs`, 1000 to 120000).
 
 **The warm-up line.** The Brain extension's warm-up calls the front's `schema` tool and gives up after 20 s. When
@@ -152,17 +152,17 @@ host-level call above found no local hit because no earlier session on this host
 
 ## Off pending a decision (Omer)
 
-Each write has a kit option that is **off**. While it is off, the capability is either not registered or refused
-by the broker with `kit_write_disabled`.
+Memory writes come with the `memory` part: any session writes memory nodes at once and nobody approves them
+(Omer, 2026-11-17). Every other write has a kit option that is **off**. While it is off, the capability is either not
+registered or refused by the broker with `kit_write_disabled`.
 
 | Write                          | Option                          | What it does when on                                                                                                                                  |
 | ------------------------------ | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Team memory proposals          | `kit.memory.writes: true`       | Registers `memory.remember {fact, links?, key?}`, which calls the Brain's `memory.propose` through a `brainRoutes[<workspace>].memory: true` route (optional `kit.memory.anchorPath`) |
 | Sharing sessions to the index  | `kit.sessions.ingest: true`     | Registers `sessions.share {sessionId, people?}`, which sends the session's user and assistant messages (tool output dropped, each capped) to `sessions.cloud_share` |
 | Publishing every session       | `kit.sessions.publish: true \| {audience?, context?}` | Implies ingest. After each finished turn (`session.idle`/`session.failed`) the host shares that session, one upload per session at a time, and once more at `dispose()`. Needs the `brain` part |
 | Search feedback                | `kit.brain.feedback: true`      | Allows `knowledge.feedback` (the Brain's search-quality log)                                                                                            |
 
-Memory writes are tested against fakes only (`test/kit.test.ts`).
+The memory route is tested against a fake only (`test/kit.test.ts`).
 
 ### Publishing sessions (R33)
 
@@ -186,82 +186,17 @@ Proof (2026-11-16, production index, audience Omer only): a haiku session on a h
 turn; a second host's `sessions.cloud_search` returned it as the top hit (owner `omer.machluf@zyg.com`, source
 `marshal`, judge 1.00) with the context line in the snippet.
 
-**What identity a memory written by a service carries.** `memory.propose` stores a `memory_link` in state
-`proposed` with `capturedBy: marshal-agent`:
-
-- **The proposer is whoever signed the request.**
-  - In `delegated` mode that is the sandbox's service account.
-  - In `desktop` mode it is the person whose credentials the host holds.
-- **A speaker is recorded only with user credentials.** The record gets
-  `speaker {kind: "human", id: <email>, relayedBy: "marshal-agent"}` with `trust: "human-relayed"`. A service
-  signing alone writes a memory with no human speaker: an agent-authored fact.
-- **A proposal stays private until approved.** Only its proposer sees it until someone on
-  `QUILLSTONE_MEMORY_APPROVERS` approves it with their own token.
-
-zyg-agents' own memories use keys `v1:agent-<category>/<slug>`; personal ones use
-`v1:personal-<category>/<person>-<slug>`.
-
-**What a shared session written by a service carries.** The shared index stores a person's share under their
-email with `source: marshal`, and a zyg-agents job's under `zyg-agents`. An SDK sandbox signing as a service
-account has no defined owner today, so the front may refuse it or file it under the service. Publish from a host
-whose Brain caller is a person (`desktop` mode) until that is decided.
-
-### Finding and opening shared sessions from another Marshal
-
-The Brain's index answers searches but holds no whole sessions. `sessions.search {query, scope: "cloud"}` returns
-the hits; a hit from a session published with a run context line also carries `runId` and `stateLocation`.
-`sessions.read {sessionId, stateLocation?, tail?}` opens one. It looks in this host's store first, then in the
-stores named with `--sessions-root`, and then in `<stateLocation>/sessions/<id>/transcript.jsonl`. That last read
-uses the person's gcloud credentials. `found: false` lists where it looked.
-
-A Marshal whose own Brain is too old to search the index (the desktop on Brain 0.1.0) can still find and open
-these sessions through a local kit host that serves the link. The SDK sessions viewer adds that host as a linked
-host:
-
-```bash
-marshal-sdk serve --workspace ws --state state --kit brain,sessions \
-  --brain-package <brain 0.2.0 package> --brain-caller you@zyg.com \
-  --sessions-root <another SDK state dir> --no-browser --token-file token --port 7790
-```
-
-The viewer then calls `POST /invoke` with `sessions.search` and `sessions.read`. This host runs no model; brain
-writes stay denied.
-
-The decisions:
-
-1. May a headless host propose team memories, and as whom (the service account, or the person it works for)?
-2. May SDK sessions be shared into the production session index, under which owner and `source`?
-3. Which service account does a sandbox use for `delegated` mode, and does the front accept it? Today the front
-   accepts the desktop ID-token path for people and zyg-agents' own runners.
-
-## What a sandbox needs
-
-- **Node ≥ 24.** The Brain keeps a small local SQLite catalog and needs FTS5. Node 22.14 fails activation with
-  `no such module: fts5`; Node 24.22.2 works. The image (`image/Dockerfile`) is on `node:24.19.0`, which is not
-  yet verified with the Brain.
-- **The Brain package in the image.** Pass it to `node image/prepare.mjs --extension <brain-package>`, which
-  copies it to `/opt/marshal-sdk/extensions/<name>`, and set `MARSHAL_SDK_BRAIN_PACKAGE` to that path (or pass
-  `kit.brain.packageRoot`). The kit refuses to start without it and says how to fix it.
-- **Network** to the Cloud Run front (`zyg-agents-front-…run.app`) and to Google's token endpoints
-  (`oauth2.googleapis.com`, `iamcredentials.googleapis.com` in `desktop` mode; the metadata server in `delegated`
-  mode).
-- **Credentials**, one of:
-  - `desktop`: an `authorized_user` credentials file for a person (`kit.brain.credentialsFile`). This suits a
-    developer's sandbox, not a shared service.
-  - `delegated`: the sandbox runs on Google Cloud as a service account the front accepts.
-    `kit.brain.callerEmail` (the person the run works for) and `kit.brain.access` (labels such as `staff` and
-    `user:<email>`) go on the host principal; they are never taken from model input. This is open decision 3.
-- **No API key for the model.** The kit changes nothing about how sessions reach the model.
+**Who wrote a memory.** A memory node records the session that wrote it (`sessionId`) and the Brain's caller as its
+author; there is no proposal state and no approvers list.
 
 ## Unit tests
 
 `npm test` covers the kit in `test/kit.test.ts`:
 
-- recall maps and wraps memories, and escapes closing tags;
-- `memory.remember` exists only with writes on, and proposes to a fake;
+- `brainCapabilityRoute` maps the memory operations onto the Brain's capabilities;
 - `sessions.search` merges local and shared hits by rank, and survives a failing or absent Brain;
 - `sessions.share` exists only with ingest on, and sends the right payload to a fake `cloud_share`;
-- `brainConfiguration` writes a memory route only with writes on;
+- `brainConfiguration` writes a memory route when the kit carries memory;
 - `prepareKit` defaults (memory implies the Brain, code intelligence, principal claims, denials, prompt);
 - the broker denies the writes and defers everything else;
 - a real host with `kit: ["sessions"]` serves `sessions.search` and its prompt names it.

@@ -17,7 +17,7 @@ export interface CloudRunPromptInput {
   contract?: readonly string[];
   /** Page Studio is installed and the work happens through it (pagestudio.* capabilities). */
   pageStudio?: boolean;
-  kit?: { brain?: boolean; memory?: boolean; sessions?: boolean; publishes?: boolean; memoryWrites?: boolean };
+  kit?: { brain?: boolean; memory?: boolean; sessions?: boolean; publishes?: boolean };
   /** The run's limits in words, e.g. "Opus 5.5 xhigh, about 40 minutes". */
   limits?: string;
 }
@@ -25,9 +25,7 @@ export interface CloudRunPromptInput {
 export function cloudRunLayer(input: CloudRunPromptInput): PromptLayer {
   const kit = input.kit ?? {};
   const starter = input.startedBy ? ` (${input.startedBy})` : "";
-  const memoryRung =
-    "3. **Your memory.** The memories of this run's scopes are in your context below (preferences always); `marshal.tool.recall {query}` finds the rest." +
-    (kit.memory ? " `memory.recall {query}` also returns what the team wrote down in the Brain: conventions, gotchas, decisions." : "");
+  const memoryRung = "3. **Your memory.** Memories are nodes in the Brain graph. The ones of your scopes are already in your context below (preferences always); `marshal.tool.recall {query}` finds the rest by meaning, `marshal.tool.recall {since}` lists what was saved since a time.";
   return {
     slots: {
       "v2.identity.host": `You are Marshal, an AI agent running in a cloud sandbox for the person who started this run${starter}. Nobody is at a screen next to you: you work from this run's files, the tools listed under "Tools on this host" and the credentials the run was given, and you can search what the organization already knows.`,
@@ -43,11 +41,9 @@ export function cloudRunLayer(input: CloudRunPromptInput): PromptLayer {
         : "ranks the sessions of this host and every session the organization's hosts published to the org store (`scope: local|cloud|all`, default all; open a hit with `marshal.tool.getSessionTranscript {sessionId}`)",
       "v2.finding-information.memory-rung": memoryRung,
       "v2.finding-information.web": "(`WebSearch`; to read a page, the `web-fetch` subagent through `Task`)",
-      "v2.memory-and-records.personal":
-        "  - Notes about the people you work for and their world (preferences, decisions, facts, context): `marshal.tool.remember {fact, category, appliesTo?, replaces?, links?}`. A preference is shown in every later session of its scope; `appliesTo` names the scope (recall lists them), `replaces: <id>` corrects an older memory, `marshal.tool.forget {id}` removes one." +
-        (kit.memoryWrites ? "\n  - Facts the whole team should keep: `memory.remember {fact, links?}` proposes one to the Brain; a person approves it before any session is served it." : ""),
+      "v2.memory-and-records.personal": "  - What you learn about the people you work for and their world (preferences, decisions, facts, context): `marshal.tool.remember {fact, category, appliesTo?, replaces?, links?}` writes a memory node into the Brain graph at once; nobody approves it, so write only what is true and useful. Link it to what it is about: `links: [{nodeId} | {path, symbol?} | {sessionId} | {personId}]`. A preference is shown in every later session of its scope; `appliesTo` names the scope (recall lists them), `replaces: <id>` supersedes an older memory. `marshal.tool.linkMemory {id, links}` adds links, `marshal.tool.updateMemory {id, fact?, category?, alwaysOn?}` fixes one in place, `marshal.tool.forget {id}` deletes one.",
       "v2.memory-and-records.skill": "  - A procedure you repeat becomes a note in your result for the people who own this pipeline.",
-      "v2.memory-and-records.correct": "replace it (`marshal.tool.remember` with `replaces`) or `marshal.tool.forget` it",
+      "v2.memory-and-records.correct": "fix it (`marshal.tool.updateMemory`, or `marshal.tool.remember` with `replaces`), relink it (`marshal.tool.linkMemory`) or delete it (`marshal.tool.forget`)",
       "v2.memory-and-records.decision-where":
         "The host timestamps the entry and keeps it in the run's decisions record, which is uploaded with the run's state; the person who started the run reviews it there.",
     },
