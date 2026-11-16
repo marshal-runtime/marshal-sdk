@@ -109,10 +109,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   const chrome = await resolveChrome();
   const browserUsable = Boolean(chrome) && (await answersPipe(chrome!));
   if (!browserUsable) log(NO_CHROME_WARNING);
-  if (chrome) {
-    process.env.MARSHAL_SDK_CHROME = env.MARSHAL_SDK_CHROME = chrome;
-    process.env.PAGE_STUDIO_CHROME = env.PAGE_STUDIO_CHROME = chromeWrapper(chrome, state);
-  }
+  if (chrome) Object.assign(process.env, Object.assign(env, browserEnv(chrome, state)));
 
   const started = Date.now();
   const { createMarshalHost } = await import("./host.js");
@@ -333,10 +330,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   process.env.PAGE_STUDIO_DIR = env.PAGE_STUDIO_DIR = studioDir;
   const chrome = await resolveChrome();
   if (!chrome) log(NO_CHROME_WARNING);
-  if (chrome) {
-    process.env.MARSHAL_SDK_CHROME = env.MARSHAL_SDK_CHROME = chrome;
-    process.env.PAGE_STUDIO_CHROME = env.PAGE_STUDIO_CHROME = chromeWrapper(chrome, state);
-  }
+  if (chrome) Object.assign(process.env, Object.assign(env, browserEnv(chrome, state)));
   const started = Date.now();
   const { createMarshalHost } = await import("./host.js");
   const host = await createMarshalHost({
@@ -648,6 +642,24 @@ export function chromeWrapper(chrome: string, state: string, flags: readonly str
   const wrapper = path.join(state, "chrome-no-sandbox.sh");
   fs.writeFileSync(wrapper, `#!/bin/sh\nexec '${chrome.replaceAll("'", "'\\''")}' ${flags.join(" ")} "$@"\n`, { mode: 0o755 });
   return wrapper;
+}
+
+/**
+ * The browser variables a run sets for itself and Page Studio. A value the host already set is kept as it is: on
+ * 2026-11-16 the SDK replaced Coder's PAGE_STUDIO_CHROME wrapper with its own, which lacked --disable-dev-shm-usage,
+ * and Page Studio's look crashed. Only unset variables get the found Chrome and the flag wrapper.
+ */
+export function browserEnv(
+  chrome: string,
+  state: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  flags: readonly string[] = chromeFlags(),
+): { MARSHAL_SDK_CHROME: string; PAGE_STUDIO_CHROME: string } {
+  const hostStudioChrome = env.PAGE_STUDIO_CHROME && env.PAGE_STUDIO_CHROME !== "none" ? env.PAGE_STUDIO_CHROME : undefined;
+  return {
+    MARSHAL_SDK_CHROME: env.MARSHAL_SDK_CHROME || chrome,
+    PAGE_STUDIO_CHROME: hostStudioChrome ?? chromeWrapper(chrome, state, flags),
+  };
 }
 
 /**

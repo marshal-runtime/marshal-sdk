@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activityWarnings, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { activityWarnings, browserEnv, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -260,6 +260,22 @@ test("Chrome gets --disable-dev-shm-usage on Linux and --no-sandbox when asked, 
     const wrapper = chromeWrapper("/opt/it's/chrome", state, ["--no-sandbox", "--disable-dev-shm-usage"]);
     assert.equal(fs.readFileSync(wrapper, "utf8"), `#!/bin/sh\nexec '/opt/it'\\''s/chrome' --no-sandbox --disable-dev-shm-usage "$@"\n`);
   }
+});
+
+test("a browser the host already set is never overridden; only unset variables get the found Chrome and the wrapper", () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "browser-env-"));
+  const flags = ["--no-sandbox", "--disable-dev-shm-usage"];
+  const found = "/ms-playwright/chromium/chrome";
+  const host = { MARSHAL_SDK_CHROME: "/usr/bin/chromium", PAGE_STUDIO_CHROME: "/root/chrome-wrapper.sh" };
+  assert.deepEqual(browserEnv(found, state, host, flags), host, "both set: both kept");
+  assert.deepEqual(browserEnv(found, state, { PAGE_STUDIO_CHROME: "/root/chrome-wrapper.sh" }, flags), {
+    MARSHAL_SDK_CHROME: found,
+    PAGE_STUDIO_CHROME: "/root/chrome-wrapper.sh",
+  });
+  const onlySdk = browserEnv("/usr/bin/chromium", state, { MARSHAL_SDK_CHROME: "/usr/bin/chromium" }, flags);
+  assert.equal(onlySdk.MARSHAL_SDK_CHROME, "/usr/bin/chromium");
+  assert.equal(onlySdk.PAGE_STUDIO_CHROME, path.join(state, "chrome-no-sandbox.sh"), "Page Studio gets the flag wrapper around the host's Chrome");
+  assert.deepEqual(browserEnv(found, state, {}, flags), { MARSHAL_SDK_CHROME: found, PAGE_STUDIO_CHROME: path.join(state, "chrome-no-sandbox.sh") });
 });
 
 test("page-run's dry path writes the whole run contract from an input folder, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 90_000 }, async () => {
