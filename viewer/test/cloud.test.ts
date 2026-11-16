@@ -120,6 +120,37 @@ test("a cloud host lists Marshal runs and their older runs, and serves sessions,
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("listing reads only small objects; a run's state is mirrored when its sessions or pages are asked for", async () => {
+  const { pullRoot, dir } = setup();
+  const host = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot);
+  const runs = await host.cloudRuns(true);
+  const marshal = runs.find((run) => run.marshal)!;
+  assert.equal(marshal.run?.title, "Rawdog quick");
+  assert.equal(marshal.run?.runId, RUN_ID);
+  // Nothing was mirrored by listing: no cache folder for the run, no pulled runs.
+  const cacheRoot = (host as unknown as { cacheRoot: string }).cacheRoot;
+  assert.deepEqual(fs.readdirSync(cacheRoot), []);
+  assert.deepEqual(await host.pulledRuns(), []);
+  assert.equal(marshal.cacheDir, undefined);
+  // Asking for the run's pages mirrors that run only.
+  const pages = await host.pages(RUN_ID);
+  assert.deepEqual(pages.pages.map((page) => page.id), [PAGE_ID]);
+  assert.equal(fs.readdirSync(cacheRoot).length, 1);
+  assert.equal((await host.pulledRuns()).length, 1);
+  assert.ok((await host.cloudRuns(false)).find((run) => run.marshal)?.cacheDir);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a session id alone finds its run by mirroring the runs not yet pulled", async () => {
+  const { pullRoot, dir } = setup();
+  const host = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot);
+  await host.cloudRuns(true);
+  const [session] = await host.sessions(RUN_ID);
+  const fresh = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, path.join(dir, "pulled-2"));
+  assert.equal((await fresh.session(session!.id))?.id, session!.id);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("a run elsewhere in the bucket is listed through its pointer under the prefix", async () => {
   const { gcs, pullRoot, dir } = setup();
   const root = path.join(gcs, "dev-bucket", "page-generation-runs", "901", "output");
