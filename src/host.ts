@@ -14,10 +14,11 @@ import { z } from "zod";
 
 import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
 import { marshalProviderTools, PROVIDER_TOOLS, resolveProvider, type ProviderSelection } from "./provider-selection.js";
-import { createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
+import { callerSessionId, createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
 import { createAutomationsProvider, HostAutomations } from "./automations.js";
 import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decisions.js";
 import { createModelServices, createModelsProvider, type ModelServices, type ModelsConfig } from "./models/index.js";
+import { skillVisibleTo } from "./profile.js";
 import { extensionSkillSource, extensionSkillsPrompt, readExtensionSkills, type ExtensionSkill } from "./extension-skills.js";
 import { createForkToolsProvider } from "./fork-provider.js";
 import {
@@ -183,9 +184,10 @@ export interface MarshalHost {
   readonly forks: SessionForks;
   /** Call one runtime capability the way an agent would, and return its output. */
   invoke<T = unknown>(capability: string, input?: unknown, timeoutMs?: number): Promise<T>;
-  search(query: string, limit?: number): Promise<unknown>;
+  /** Search the runtime's capabilities and skills, as a session sees them (its agent profile's extension scope applies) when `sessionId` is given. */
+  search(query: string, limit?: number, sessionId?: string): Promise<unknown>;
   /** Read a runtime resource (an extension skill `skill://<identity>/<name>`, its references, extension docs). */
-  readResource(uri: string): Promise<{ uri: string; mimeType?: string; text?: string }>;
+  readResource(uri: string, sessionId?: string): Promise<{ uri: string; mimeType?: string; text?: string }>;
   /** Skills the installed extensions declare (`skill:` catalog contributions). */
   readonly skills: readonly Omit<ExtensionSkill, "content" | "references">[];
   /** Each installed extension as it came up: identity, version, its capabilities and declared skills. */
@@ -371,6 +373,12 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const resourcesPort = {
     listResources: async (callerContext: unknown) => [...((await runtime.resources?.listResources(callerContext)) ?? [])],
     readResource: async (uri: string, callerContext: unknown) => {
+      if (uri.startsWith("skill://")) {
+        const caller = callerSessionId(callerContext as never);
+        const owner = caller ? sessions.get(caller) : undefined;
+        const hidden = extensionSkills.find((skill) => (uri === skill.uri || uri.startsWith(`${skill.uri}/`)) && !skillVisibleTo(skill, owner));
+        if (hidden) throw new Error(`Skill ${hidden.name} is not part of this agent's profile.`);
+      }
       try {
         return await runtime.resources.readResource(uri, callerContext);
       } catch (error) {
@@ -463,7 +471,6 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     options.browser === false
       ? undefined
       : playwrightServer(typeof options.browser === "object" ? options.browser : {}, log, options.nodeExecutable);
-  const skillsSection = extensionSkillsPrompt(extensionSkills);
   const rulesSection = repoRules ? repositoryRulesPrompt(workspacePath, options.provider?.id ?? "claude") : "";
   const directTools = options.directTools ?? [];
   const runtimeTools = options.runtimeTools !== false;
@@ -475,7 +482,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     sdkBaseLayer({
       browser: browserServer !== undefined,
       extensionGuidance: guidance,
-      sections: [...(kit?.promptSection ? [kit.promptSection] : []), forksPromptSection(forksCall), ...(skillsSection ? [skillsSection] : [])],
+      sections: [...(kit?.promptSection ? [kit.promptSection] : []), forksPromptSection(forksCall)],
       ...(rulesSection ? { repoRules: rulesSection } : {}),
       runtimeTools,
       directTools,
@@ -483,6 +490,10 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     }),
     options.prompt,
     log,
+    (session) => {
+      const visible = extensionSkillsPrompt(extensionSkills.filter((skill) => skillVisibleTo(skill, session)));
+      return visible ? [visible] : [];
+    },
   );
 
   serversFor = (session: SessionRecord): Record<string, unknown> => {
@@ -594,8 +605,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   };
   if (kit?.publishes) publisher = new SessionPublisher((sessionId) => invoke("sessions.share", { sessionId }), log);
   if (kit?.parts.has("brain")) void brainReady(invoke, log);
-  const search = async (query: string, limit = 10): Promise<unknown> => {
-    const result = (await hostAdapter.callTool("runtime_search", { query, limit }, undefined as never)) as {
+  const search = async (query: string, limit = 10, sessionId?: string): Promise<unknown> => {
+    const result = (await (sessionId ? adapterFor(sessionId) : hostAdapter).callTool("runtime_search", { query, limit }, undefined as never)) as {
       structuredContent?: unknown;
     };
     return result.structuredContent;
@@ -681,8 +692,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     setSessionPrompt: (sessionId, layer) => prompts?.setSessionLayer(sessionId, layer),
     invoke,
     search,
-    readResource: async (uri) => {
-      const read = (await hostAdapter.readResource(uri)) as { contents: { uri: string; mimeType?: string; text?: string }[] };
+    readResource: async (uri, sessionId) => {
+      const read = (await (sessionId ? adapterFor(sessionId) : hostAdapter).readResource(uri)) as { contents: { uri: string; mimeType?: string; text?: string }[] };
       return read.contents[0]!;
     },
     extensions: extensionStates,

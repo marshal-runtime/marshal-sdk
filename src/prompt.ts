@@ -72,14 +72,21 @@ export interface HostPrompts {
  * Layer order, later wins: the SDK's base, the host's `prompt` option, the role the session has (a fork is `fork`,
  * a lane is `lane`), then the session's own layer.
  */
-export function createHostPrompts(base: PromptLayer, host: HostPromptOptions | undefined, log: (line: string) => void): HostPrompts {
+export function createHostPrompts(
+  base: PromptLayer,
+  host: HostPromptOptions | undefined,
+  log: (line: string) => void,
+  /** Sections that depend on the session (the skills its agent profile shows), added after the host's layers. */
+  sessionSections?: (session?: SessionRecord) => PromptLayer["sections"],
+): HostPrompts {
   const sessionLayers = new Map<string, PromptLayer>();
   const { session: sessionLayerOf, ...hostLayer } = host ?? {};
   return {
     forSession(session) {
       const role: HostPromptRole | undefined = session?.parentId ? "fork" : session?.launchedBy ? "lane" : undefined;
       const own = session ? (sessionLayers.get(session.id) ?? sessionLayerOf?.(session)) : undefined;
-      const hosted = mergePromptLayers(base, hostLayer);
+      const sections = sessionSections?.(session);
+      const hosted = mergePromptLayers(mergePromptLayers(base, hostLayer), sections?.length ? { sections } : undefined);
       // The host's role text is for its top-level sessions; a fork or lane gets its own unless its layer gives one.
       const layer = mergePromptLayers(role ? { ...hosted, role, roleText: undefined } : hosted, own);
       try {

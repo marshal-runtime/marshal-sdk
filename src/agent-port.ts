@@ -153,6 +153,10 @@ export interface AgentLaunchRequest {
   fork?: SessionFork;
   /** Agent profile: extension identities the session sees (capabilities and skills). Absent: every installed extension. */
   extensions?: readonly string[];
+  /** Agent profile: skill names the session sees besides its extensions' skills. */
+  skills?: readonly string[];
+  /** Agent profile: the backend's built-in tools (Read, Bash, ...) the session keeps. */
+  nativeTools?: readonly string[];
   /** Agent profile: sections appended to the host prompt (ignored when the launch replaces the prompt). */
   systemPromptAppend?: string;
   /** Agent profile: the host MCP server names the session keeps. Absent: all. */
@@ -414,6 +418,8 @@ export class ClaudeAgentPort {
       },
       ...(request.fork ? { fork: request.fork } : {}),
       ...(request.extensions ? { extensions: request.extensions } : {}),
+      ...(request.skills ? { skills: request.skills } : {}),
+      ...(request.nativeTools ? { nativeTools: request.nativeTools } : {}),
       ...(request.systemPromptAppend ? { systemPromptAppend: request.systemPromptAppend } : {}),
       ...(request.mcpServerNames ? { mcpServerNames: request.mcpServerNames } : {}),
       ...(request.parentId ? { parentId: request.parentId } : {}),
@@ -695,7 +701,7 @@ export class ClaudeAgentPort {
         agent.systemPrompt !== undefined
           ? { type: "custom", prompt: agent.systemPrompt, snapshot: false }
           : (systemPrompt ?? { type: "preset", preset: "claude_code" }),
-      ...(this.options.tools ? { tools: [...this.options.tools] } : {}),
+      ...(session.nativeTools ? { tools: [...session.nativeTools] } : this.options.tools ? { tools: [...this.options.tools] } : {}),
       ...(session.native.sessionId
         ? { resume: session.native.sessionId }
         : session.native.forkOf
