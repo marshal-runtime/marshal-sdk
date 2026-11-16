@@ -5329,6 +5329,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     if (sessionData?.source === "workflow-agent") return false;
     if (sessionData?.source !== "subagent" || sessionData.repositoryAgent) return false;
     if (sessionData.systemPromptOverride !== undefined) return false;
+    // The SDK default persona skips Marshal's prompt, so a launch's appended section would be lost.
+    if (sessionData.systemPromptAppend !== undefined) return false;
     // Scoped-MCP subagents need the normal Marshal session runtime: the SDK
     // default subagent runtime does not surface the session's `mcpServers`.
     if ((sessionData.scopedMcp?.length ?? 0) > 0) return false;
