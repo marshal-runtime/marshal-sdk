@@ -125,8 +125,9 @@ test("sessions.search merges this host's sessions with the shared index by rank"
   assert.ok(output.results[1].snippet.includes("<\\/untrusted_session>"));
   assert.equal(output.results[0].host, "sandbox:box");
 
+  assert.deepEqual(fake.calls[1]!.input, { query: "run state", limit: 20 });
   const localOnly = await run(provider, "sessions.search", { query: "checkout", scope: "local" });
-  assert.equal(fake.calls.length, 1);
+  assert.equal(fake.calls.length, 2);
   assert.equal(localOnly.cloud, undefined);
 
   const fromItself = (await provider.invoke(

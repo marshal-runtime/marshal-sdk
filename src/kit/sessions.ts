@@ -160,6 +160,7 @@ export function createSessionsProvider(
                 context,
               )) as { result?: { hits?: Record<string, any>[] }; hits?: Record<string, any>[]; cloud?: Record<string, unknown> };
               cloud = (answer.result?.hits ?? answer.hits ?? []).map(cloudHit);
+              await fillRunOrigins(cloud, call, context);
               cloudStatus = { ...(answer.cloud ?? { status: "ok" }), hits: cloud.length };
             } catch (error) {
               cloudStatus = {
@@ -469,6 +470,50 @@ function gcloudCat(url: string): Promise<string | undefined> {
   return new Promise((resolve) => {
     execFile("gcloud", ["storage", "cat", url], { maxBuffer: 64 * 1024 * 1024, timeout: 60_000 }, (error, stdout) => resolve(error ? undefined : stdout));
   });
+}
+
+const ORIGIN_LOOKUP_QUERY = "run state";
+const MAX_WORKSPACE_LOOKUPS = 3;
+const MAX_WINDOW_LOOKUPS = 10;
+const WINDOW_MS = 1_000;
+
+/**
+ * A hit published before the run context rode in its title has it only in its first message, and the snippet is
+ * whichever message matched. The Brain has no read-one-session call, so a search for the context line's own words
+ * brings first messages back: once per workspace, then, for hits a busy workspace crowded out, once per hit narrowed
+ * to a second around its last update. A lookup that fails leaves the hits as they were.
+ */
+async function fillRunOrigins(hits: FoundSession[], call: CapabilityCall, context: Parameters<CapabilityCall>[2]): Promise<void> {
+  const unresolved = () => hits.filter((hit) => !hit.runId && hit.source === "marshal");
+  const lookup = async (filters: Record<string, string | undefined>) => {
+    try {
+      const answer = (await call(
+        "sessions.cloud_search",
+        { query: ORIGIN_LOOKUP_QUERY, limit: MERGE_DEPTH, ...Object.fromEntries(Object.entries(filters).filter(([, value]) => value)) },
+        context,
+      )) as { result?: { hits?: Record<string, any>[] }; hits?: Record<string, any>[] };
+      for (const found of answer.result?.hits ?? answer.hits ?? []) {
+        const origin = runOrigin(String(found.snippet ?? ""));
+        const id = String(found.sessionId ?? found.id ?? "");
+        if (!origin.runId || !id) continue;
+        for (const hit of hits) if (hit.id === id && !hit.runId) Object.assign(hit, origin);
+      }
+    } catch {
+      // Hits keep what their own snippet and title gave.
+    }
+  };
+  const missing = unresolved();
+  if (!missing.length) return;
+  await Promise.all([...new Set(missing.map((hit) => hit.workspace))].slice(0, MAX_WORKSPACE_LOOKUPS).map((workspace) => lookup({ workspace })));
+  await Promise.all(
+    unresolved()
+      .slice(0, MAX_WINDOW_LOOKUPS)
+      .map((hit) => {
+        const at = Date.parse(hit.updatedAt ?? hit.createdAt ?? "");
+        if (Number.isNaN(at)) return undefined;
+        return lookup({ workspace: hit.workspace, since: new Date(at - WINDOW_MS).toISOString(), until: new Date(at + WINDOW_MS).toISOString() });
+      }),
+  );
 }
 
 function cloudHit(hit: Record<string, any>): FoundSession {

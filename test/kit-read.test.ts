@@ -104,3 +104,58 @@ test("a cloud hit reads its run from the title when the snippet came from a late
   assert.equal(answer.results[0]!.stateLocation, "gs://bucket/conv/1/marshal-state/");
   assert.deepEqual(splitTitle("Rerun · notes"), { title: "Rerun · notes" });
 });
+
+test("a hit whose title and snippet lack the run gets it from one lookup per workspace for the context line", async () => {
+  const own = tempStore("run-1");
+  const calls: Record<string, unknown>[] = [];
+  const call: CapabilityCall = async (_target, input) => {
+    const query = input as Record<string, unknown>;
+    calls.push(query);
+    if (query.query === "BioVelvet page edit") {
+      return { result: { hits: [
+        { sessionId: "old", source: "marshal", title: "Page Studio fast hands", workspace: "turn", snippet: "You are the fast hands" },
+        { sessionId: "zyg", source: "zyg-agents", title: "Agent run", snippet: "page edit" },
+      ] } };
+    }
+    return { result: { hits: [{ sessionId: "old", source: "marshal", snippet: "agent-sandbox run page-edit-1 · state gs://bucket/conv/1/marshal-state/\n\nPage: BioVelvet" }] } };
+  };
+  const provider = createSessionsProvider(own.store, call);
+  const answer = (await out(provider.invoke("sessions.search", { query: "BioVelvet page edit", scope: "cloud" }, context))) as { results: Record<string, unknown>[] };
+  const old = answer.results.find((hit) => hit.id === "old")!;
+  assert.equal(old.runId, "page-edit-1");
+  assert.equal(old.stateLocation, "gs://bucket/conv/1/marshal-state/");
+  assert.equal(answer.results.find((hit) => hit.id === "zyg")!.runId, undefined);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]!.workspace, "turn");
+});
+
+test("a hit a busy workspace crowds out of the lookup gets its run from a lookup narrowed to its last update", async () => {
+  const own = tempStore("run-1");
+  const calls: Record<string, unknown>[] = [];
+  const call: CapabilityCall = async (_target, input) => {
+    const query = input as Record<string, unknown>;
+    calls.push(query);
+    if (query.query === "hero") return { result: { hits: [{ sessionId: "busy", source: "marshal", title: "Picture look", workspace: "page-agent", updated: "2026-11-16T02:22:28.718Z", snippet: "hero" }] } };
+    if (!query.since) return { result: { hits: [{ sessionId: "other", source: "marshal", snippet: "agent-sandbox run x · state gs://b/x/" }] } };
+    return { result: { hits: [{ sessionId: "busy", source: "marshal", snippet: "agent-sandbox run 900012 · state gs://b/900012/agent/marshal-state/" }] } };
+  };
+  const provider = createSessionsProvider(own.store, call);
+  const answer = (await out(provider.invoke("sessions.search", { query: "hero", scope: "cloud" }, context))) as { results: Record<string, unknown>[] };
+  assert.equal(answer.results[0]!.runId, "900012");
+  assert.equal(answer.results[0]!.stateLocation, "gs://b/900012/agent/marshal-state/");
+  assert.deepEqual(calls[2], { query: "run state", limit: 20, workspace: "page-agent", since: "2026-11-16T02:22:27.718Z", until: "2026-11-16T02:22:29.718Z" });
+});
+
+test("a failed origin lookup leaves the hits as they were", async () => {
+  const own = tempStore("run-1");
+  let first = true;
+  const call: CapabilityCall = async () => {
+    if (!first) throw new Error("brain down");
+    first = false;
+    return { result: { hits: [{ sessionId: "old", source: "marshal", title: "T", snippet: "no line" }] } };
+  };
+  const provider = createSessionsProvider(own.store, call);
+  const answer = (await out(provider.invoke("sessions.search", { query: "q", scope: "cloud" }, context))) as { results: Record<string, unknown>[]; cloud: Record<string, unknown> };
+  assert.equal(answer.results[0]!.runId, undefined);
+  assert.equal(answer.cloud.status, "ok");
+});
