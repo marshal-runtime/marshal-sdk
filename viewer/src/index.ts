@@ -7,6 +7,7 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 
 import { VIEW_HTML } from "./generated/view";
+import { configuredReview } from "./review";
 import { cloudHost, configuredClouds, consoleUrl, listEdits, previewHtml, pushToCloud, readLinks, readRunJson, writeLink } from "./cloud";
 import { configuredLinks, folderHost, linkedHost, linkProblem, LOCAL_HOST_ID, type Host } from "./hosts";
 import { expandHome } from "./store";
@@ -569,11 +570,12 @@ export function createExtension(context: Context) {
           by: { ...(me.name ? { name: me.name } : {}), ...(typeof context.configuration?.person?.email === "string" ? { email: context.configuration.person.email } : {}) },
           ...(typeof input.summary === "string" ? { summary: input.summary } : {}),
           workDir: path.join(expandHome(pullRoot()), ".push"),
+          review: configuredReview(context.configuration),
         });
         if (!pushed.ok) return { ...pushed, outputRoot, pageId, cloudPageId };
         if (link) writeLink(pullRoot(), pageId, { ...link, pushedAt: new Date().toISOString() });
         for (const host of cloud().values()) void host.cloudRuns(true).catch(() => undefined);
-        return { ...pushed, outputRoot, pageId, cloudPageId, message: `Pushed version ${pushed.version} of the page to ${outputRoot}; their page generator shows it at preview/index.html${pushed.thumbnail ? " and its run list card is retaken" : ""}.${pushed.warnings.length ? ` ${pushed.warnings.join(" ")}` : ""}` };
+        return { ...pushed, outputRoot, pageId, cloudPageId, message: `Pushed version ${pushed.version} of the page to ${outputRoot}; their page generator shows it at preview/index.html${pushed.thumbnail ? " and its run list card is retaken" : ""}${pushed.review ? `; ${pushed.review.kept + pushed.review.added} note(s) in its review panel (${pushed.review.added} added, ${pushed.review.removed} removed)` : ""}.${pushed.warnings.length ? ` ${pushed.warnings.join(" ")}` : ""}` };
       },
     },
     {

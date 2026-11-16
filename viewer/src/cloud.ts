@@ -20,6 +20,7 @@ import { pathToFileURL } from "url";
 
 import { finishPage } from "../../src/page-finish";
 import { folderHost, type Host } from "./hosts";
+import { notesOf, reviewRunId, syncReviewComments, type ReviewApiConfig, type ReviewSync } from "./review";
 
 type Row = Record<string, any>;
 
@@ -348,6 +349,8 @@ export interface PushInput {
   workDir: string;
   /** Screenshots htmlFile into pngFile at their thumbnail's phone viewport; defaults to a headless Chrome. */
   capture?: (htmlFile: string, pngFile: string) => Promise<void>;
+  /** Their page generator's review API: the page's notes become comments in its /lp-review panel. */
+  review?: ReviewApiConfig | null;
 }
 
 export interface PushResult {
@@ -362,6 +365,8 @@ export interface PushResult {
   version: number;
   /** The new preview/thumbnail.png their run list shows, or null when no Chrome could take it. */
   thumbnail: string | null;
+  /** What the notes did in their review panel, or null when no review API is configured or the run has no id there. */
+  review: ReviewSync | null;
   warnings: string[];
 }
 
@@ -470,6 +475,26 @@ export async function pushToCloud(input: PushInput): Promise<PushResult | PushRe
   const recordFile = path.join(out, "edit.json");
   fs.writeFileSync(recordFile, JSON.stringify(record, null, 2));
   await gcloud(["storage", "cp", recordFile, edit], { timeoutMs: 60_000 });
+
+  let review: ReviewSync | null = null;
+  const notes = notesOf(doc);
+  const reviewRun = reviewRunId(root, runJson);
+  if (input.review && reviewRun !== null) {
+    const mapUri = `${root}/${EDITS}/review-comments.json`;
+    const sent = ((await readJson(mapUri))?.comments ?? {}) as Record<string, number>;
+    try {
+      review = await syncReviewComments(input.review, reviewRun, notes, sent);
+    } catch (error) {
+      warnings.push(`The notes did not reach their review panel: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (review) {
+      const mapFile = path.join(out, "review-comments.json");
+      fs.writeFileSync(mapFile, JSON.stringify({ runId: reviewRun, api: input.review.url, updatedAt: new Date().toISOString(), comments: review.comments }, null, 2));
+      await gcloud(["storage", "cp", mapFile, mapUri], { timeoutMs: 60_000 });
+    }
+  } else if (notes.some((note) => (note.status ?? "open") === "open")) {
+    warnings.push(input.review ? "This run has no page generator run id, so its notes stay in the page record only." : "No review API is configured (configuration.review), so the notes stay in the page record only.");
+  }
   return {
     ok: true,
     previewUri,
@@ -481,6 +506,7 @@ export async function pushToCloud(input: PushInput): Promise<PushResult | PushRe
     missing: finished.missingAssets,
     version: record.version,
     thumbnail,
+    review,
     warnings,
   };
 }
@@ -508,7 +534,7 @@ export async function captureThumbnail(htmlFile: string, pngFile: string): Promi
   if (!chrome) throw new Error("no Chrome or Chromium found (set MARSHAL_SDK_CHROME)");
   if (typeof WebSocket !== "function") throw new Error("this Node has no WebSocket to drive Chrome");
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-thumb-"));
-  const child = spawn(chrome, ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, "--remote-debugging-port=0", "about:blank"], { stdio: "ignore", windowsHide: true });
+  const child = spawn(chrome, ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, "--remote-debugging-port=0", ...(process.platform === "linux" ? ["--disable-dev-shm-usage"] : []), "about:blank"], { stdio: "ignore", windowsHide: true });
   let socket: WebSocket | undefined;
   const timer = setTimeout(() => child.kill(), 90_000);
   try {
