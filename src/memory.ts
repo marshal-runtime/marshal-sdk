@@ -67,6 +67,9 @@ export interface BrainMemoryRoute {
     supersedes?: string;
     sessionId?: string;
     author?: string;
+    /** An import of an existing memory: the same id written again replaces that node (idempotent), and createdAt keeps its date. */
+    id?: string;
+    createdAt?: string;
   }): Promise<BrainMemory>;
   /** `links` replaces the memory's whole link set. `scopes`: the session's scopes, where the memory is looked for. */
   update(input: { id: string; scopes: string[]; content?: string; category?: MemoryCategory; alwaysOn?: boolean; links?: BrainMemoryLink[] }): Promise<BrainMemory>;
