@@ -310,6 +310,52 @@ describe("forkClaudeNativeState", () => {
     expect(messages?.[0]?.content).toBe("go");
   });
 
+  it("leaves the parent's background commands to the parent", async () => {
+    const configDir = tempConfigDir();
+    const backgroundCall = {
+      type: "assistant",
+      uuid: "a0",
+      parentUuid: "u1",
+      sessionId: "parent",
+      message: {
+        id: "msg_0",
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_bg", name: "Bash", input: { command: "watch" } }],
+      },
+    };
+    const backgroundStarted = {
+      type: "user",
+      uuid: "u2",
+      parentUuid: "a0",
+      sessionId: "parent",
+      message: {
+        role: "user",
+        content: [
+          {
+            tool_use_id: "toolu_bg",
+            type: "tool_result",
+            content: "Command running in background with ID: boft0icii.",
+          },
+        ],
+      },
+      toolUseResult: { stdout: "", backgroundTaskId: "boft0icii" },
+    };
+    const projectDir = writeSource(configDir, [
+      user,
+      backgroundCall,
+      backgroundStarted,
+      { ...forkCall, parentUuid: "u2" },
+    ]);
+    await forkClaudeNativeState(configDir, "parent", "/repo", request);
+    const child = fs.readFileSync(path.join(projectDir, "child.jsonl"), "utf8");
+    expect(child).not.toContain("backgroundTaskId");
+    // The model still sees the same tool result, so the prompt cache matches.
+    expect(child).toContain("Command running in background with ID: boft0icii.");
+    expect(fs.readFileSync(path.join(projectDir, "parent.jsonl"), "utf8")).toContain(
+      '"backgroundTaskId":"boft0icii"',
+    );
+  });
+
   it("gives up when the fork call never appears", async () => {
     const configDir = tempConfigDir();
     writeSource(configDir, [user]);
