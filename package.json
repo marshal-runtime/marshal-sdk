@@ -24,28 +24,26 @@
     "@marshal/agent-runtime-claude": "file:vendor/packs/marshal-agent-runtime-claude-0.1.0-marshal-host-91.tgz",
     "@marshal/agent-runtime-org": "file:vendor/packs/marshal-agent-runtime-org-0.1.0-marshal-host-91.tgz",
     "@marshal/agent-runtime-prompt": "file:vendor/packs/marshal-agent-runtime-prompt-0.1.0-marshal-host-91.tgz",
-    "@marshal/agentic-debugger-extension": "file:vendor/packs/marshal-agentic-debugger-extension-1.0.0-marshal-host-1.tgz",
-    "@marshal/overlay-review": "file:vendor/packs/marshal-overlay-review-0.1.0-marshal-host-2.tgz",
     "@marshal/runtime": "file:vendor/packs/marshal-runtime-0.1.0-marshal-host-91.tgz",
-    "@marshal/swarm": "file:vendor/packs/marshal-swarm-0.1.0-marshal-host-51.tgz",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@openai/agents": "0.22.0",
     "@openai/codex": "0.162.1",
     "@playwright/mcp": "0.0.68",
     "playwright-core": "1.59.0-alpha-1771104257000",
+    "zod": "4.3.6",
+    "@marshal/agentic-debugger-extension": "file:vendor/packs/marshal-agentic-debugger-extension-1.0.0-marshal-host-1.tgz",
+    "@marshal/overlay-review": "file:vendor/packs/marshal-overlay-review-0.1.0-marshal-host-2.tgz",
+    "@marshal/swarm": "file:vendor/packs/marshal-swarm-0.1.0-marshal-host-51.tgz",
     "ws": "^8.20.1",
-    "yaml": "2.8.3",
-    "zod": "4.3.6"
+    "yaml": "2.8.3"
   },
   "engines": {
     "node": ">=22.14.0"
   },
   "packageManager": "pnpm@10.32.1",
   "devDependencies": {
-    "@types/node": "^24.19.2",
-    "@types/pg": "^8.23.1",
     "esbuild": "^0.27.4",
-    "pg": "^8.23.1",
+    "@types/node": "^24.19.2",
     "typescript": "^6.0.2"
   },
   "pnpm": {

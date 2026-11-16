@@ -232,19 +232,28 @@ export {
   type LinkRelay,
 } from "./org-host-room.js";
 export { HostSessions, type CapabilityCall, type HostSessionsOptions } from "./org-host-sessions.js";
+export { PreconditionFailedError, fsObjectStore, gcsObjectStore, type GcsObjectStoreOptions, type ObjectInfo, type ObjectStore, type PutOptions } from "./object-store.js";
 export {
-  CloudSessionStore,
-  CloudTranscriptStore,
-  SCHEMA_STATEMENTS as CLOUD_STORE_SCHEMA,
-  applySchema as applyCloudStoreSchema,
-  fsObjectStore,
-  gcsObjectStore,
-  type CloudSessionStoreOptions,
-  type CloudTranscriptStoreOptions,
-  type GcsObjectStoreOptions,
-  type ObjectStore,
-  type SqlClient,
-} from "./cloud-store/index.js";
+  INDEX_ROOT,
+  OBJECTS_ROOT,
+  OrgStore,
+  OrgTranscriptStore,
+  dayOf,
+  implFile,
+  implRoot,
+  indexDir,
+  listIndex,
+  partitionPath,
+  rowObject,
+  sessionDir,
+  shardObject,
+  validateImpl,
+  type ImplDeclaration,
+  type IndexQuery,
+  type IndexRow,
+  type OrgStoreOptions,
+  type OrgTranscriptOptions,
+} from "./org-store/index.js";
 export {
   FileSessionStore,
   type BackendTranscriptStore,
