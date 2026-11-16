@@ -44,7 +44,6 @@ export interface BrainConfigurationInput {
   /** The directory name of the host's workspace: the Brain route that carries memory writes is keyed by it. */
   workspaceName: string;
   memoryWrites: boolean;
-  memoryAnchorPath?: string;
 }
 
 /** Where image/pack.mjs puts the Brain inside the installed SDK (onboarding's DEFAULT_EXTENSIONS "bundled"). */
@@ -78,8 +77,8 @@ export function brainPackageRoot(
 }
 
 /**
- * The Brain extension's cloud-only surface: the knowledge tools, the shared-session tools, and memory
- * proposals only when writes are on (a route with `memory: true` for this workspace). No local index,
+ * The Brain extension's cloud-only surface: the knowledge tools, the shared-session tools, and the memory graph
+ * writes when the kit carries memory (a route with `memory: true` for this workspace). No local index,
  * no brand tools, no answer card.
  */
 export function brainConfiguration(input: BrainConfigurationInput): Record<string, unknown> {
@@ -106,7 +105,6 @@ export function brainConfiguration(input: BrainConfigurationInput): Record<strin
               cloudUrl,
               cloudAudience,
               memory: true,
-              ...(input.memoryAnchorPath ? { memoryAnchorPath: input.memoryAnchorPath } : {}),
             },
           },
         }

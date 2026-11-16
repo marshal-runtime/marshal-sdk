@@ -73,7 +73,7 @@ test("publish turns on sessions.share with the publish audience and context, and
   const on = prepareKit({ kit: { parts: ["brain", "sessions"], brain: { packageRoot }, sessions: { publish: { audience: { people: ["omer@zyg.com"] } } } }, sessions: store, workspacePath: "/w/zyg" });
   assert.equal(on.publishes, true);
   assert.ok(!on.denied.has("sessions.cloud_share"));
-  assert.ok(on.denied.has("memory.propose"));
+  assert.ok(on.denied.has("memory.create"), "memory writes come with the memory part");
 
   const session = store.create({ title: "Critic", runtime: "claude", native: { kind: "claude", cwd: "/w" } });
   store.appendMessage(session.id, { role: "user", content: "review the page" });

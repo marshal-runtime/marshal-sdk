@@ -33,20 +33,20 @@ test("the cloud run layer names the run, its contract and state, and drops what 
   assert.match(prompt, /gs:\/\/bucket\/run-812\/agent\/marshal-state\//);
   assert.match(prompt, /published to the team Brain's session index/);
   assert.match(prompt, /## Page Studio on this host/);
-  assert.match(prompt, /`memory\.recall \{query\}`/);
+  assert.match(prompt, /`marshal\.tool\.recall \{query\}`/);
+  assert.match(prompt, /`marshal\.tool\.remember \{fact, category, appliesTo\?, replaces\?, links\?\}` writes a memory node into the Brain graph at once/);
   assert.match(prompt, /mcp__marshal__runtime_exec \{targetType: 'operation'/);
-  for (const absent of ["marshal.tool.recall", "marshal.tool.remember", "marshal.tool.forget", "`WebFetch`", "runtimeSearch {query}", "ask once, the way this surface allows"]) {
+  for (const absent of ["memory.propose", "approves it before", "`WebFetch`", "runtimeSearch {query}", "ask once, the way this surface allows"]) {
     assert.ok(!prompt.includes(absent), `still names ${absent}`);
   }
   for (const tool of ["`Bash`", "`Read`", "`Write`", "`Edit`", "`WebSearch`", "`mcp__marshal__runtime_exec`"]) assert.ok(prompt.includes(tool), tool);
 });
 
-test("without memory or Page Studio the layer says so and adds no Page Studio section", () => {
+test("without Page Studio the layer adds no Page Studio section; memory is always the Brain graph", () => {
   const prompt = assembleHostPrompt(mergePromptLayers(base, cloudRunLayer({ job: "page-edit" }))).content;
-  assert.match(prompt, /This run has no memory store/);
   assert.doesNotMatch(prompt, /## Page Studio on this host/);
   assert.doesNotMatch(prompt, /published to the team Brain/);
-  assert.match(prompt, /This run cannot save memories/);
+  assert.match(prompt, /Memories are nodes in the Brain graph/);
 });
 
 test("marshal.tool.setSessionTodos keeps the calling session's plan in its state", async () => {

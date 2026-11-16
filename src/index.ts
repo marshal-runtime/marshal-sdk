@@ -347,3 +347,18 @@ export {
   type RoutineBinding,
   type RunPin,
 } from "./extension-registry.js";
+export {
+  brainCapabilityRoute,
+  createMemoryToolsProvider,
+  HostMemory,
+  MEMORY_CATEGORIES,
+  scopeString,
+  type BrainCall,
+  type BrainMemory,
+  type BrainMemoryLink,
+  type BrainMemoryRoute,
+  type MemoryCategory,
+  type MemoryOptions,
+  type MemoryScope,
+  type MemoryStore,
+} from "./memory.js";
