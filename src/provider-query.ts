@@ -9,7 +9,7 @@ import type {
   RuntimeSessionEvent,
   RuntimeTool,
 } from "./providers.js";
-import { TURN_EXTRAS, type QueryFn, type TurnExtras } from "./agent-port.js";
+import { systemPromptText, TURN_EXTRAS, type QueryFn, type TurnExtras } from "./agent-port.js";
 
 /**
  * Where a host puts the provider-neutral form of a session's Marshal tools inside the MCP-server record it hands the
@@ -189,7 +189,7 @@ export function sessionConfig(turnOptions: Record<string, unknown>, cwd: string,
     const converted = mcpServerConfig(server);
     if (converted) mcpServers[name] = converted;
   }
-  const systemPrompt = turnOptions.systemPrompt;
+  const systemPrompt = systemPromptText(turnOptions.systemPrompt);
   return {
     // An empty model lets the provider pick its own default.
     ...(typeof turnOptions.model === "string" && turnOptions.model ? { model: turnOptions.model } : {}),

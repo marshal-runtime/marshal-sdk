@@ -30,6 +30,24 @@ export interface TurnExtras {
   permissionHandler?: RuntimePermissionHandler;
   /** The Marshal session this turn belongs to (the session engine keeps one live session per Marshal session). */
   sessionId?: string;
+  /**
+   * The turn opens a live process (`AgentPortOptions.live`): its prompt is a stream of user messages that stays open
+   * across turns, which only the Claude Agent SDK reads.
+   */
+  live?: boolean;
+}
+
+/**
+ * The text of a turn's `systemPrompt` option: a string, a list of strings, or the Agent SDK's `{type: "custom", prompt}`
+ * (a launch's own prompt, sent with `snapshot: false`). Undefined for the preset and anything else.
+ */
+export function systemPromptText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(String).join("\n");
+  if (value && typeof value === "object" && (value as { type?: unknown }).type === "custom") {
+    return systemPromptText((value as { prompt?: unknown }).prompt);
+  }
+  return undefined;
 }
 
 /** The Claude Agent SDK's canUseTool over a host handler: the request mapped the way the desktop's Claude client maps it. */
@@ -79,7 +97,9 @@ export interface AgentSummary {
 
 /**
  * Claude Agent SDK options one launch passes to every turn of its session, on top of what the host sets. Functions
- * (hooks, the spawner) live in this process only: a session adopted by a later run of the host runs without them.
+ * (hooks, the spawner) live in this process only and the port does not store them: a session adopted by a later run of
+ * the host gets only what the host's `launchOptionsFor` returns for it, so a policy that must survive a restart (a
+ * tool gate, the remote spawner, the proxy env) belongs there.
  */
 export interface AgentLaunchOptions {
   maxTurns?: number;
@@ -179,6 +199,95 @@ export interface AgentPortOptions {
   log?: (line: string) => void;
   /** A session finished its queued work (`session.idle`) or stopped on an error (`session.failed`). */
   onSessionEvent?: (type: "session.idle" | "session.failed", payload: Record<string, unknown>) => void;
+  /**
+   * The host's launch options for a session, read at every turn, including turns of a session this process adopted
+   * from an earlier run (whose own launch options are gone). Merged with the launch's own: hooks of both run (the
+   * host's first, per event), `disallowedTools` is the union, `env`, `mcpServers` and `extraArgs` merge key by key with
+   * the launch winning, and any other option the launch sets wins. A throw fails the turn: a session never runs
+   * without the policy its host gives it.
+   */
+  launchOptionsFor?: (session: SessionRecord) => AgentLaunchOptions | undefined;
+  /**
+   * Keep each session's Claude Code process alive between its turns (Claude Agent SDK streaming input) instead of
+   * starting one per turn. Off by default. Only for Claude sessions on the Agent SDK's `query` (`runtimeId` claude).
+   * See `LiveProcessOptions`.
+   */
+  live?: LiveProcessOptions;
+}
+
+/**
+ * Live processes: one Claude Code process per session, fed one user message per turn. A turn still ends at its
+ * `result`. The process closes when it has been idle `idleSeconds`, when a new one is needed and `maxLive` are open
+ * (the least recently used idle one closes), after `maxTurns` turns, when the turn's options change (model, effort,
+ * prompt, cwd, env, tools, MCP server names, limits, or the hook events and counts), when its turn is cancelled or
+ * interrupted, and at `dispose`. A live process keeps the hooks, spawner and MCP servers it started with: a host whose
+ * hooks read per-turn state reads it through the session, not through a fresh closure per turn. `maxBudgetUsd` counts
+ * the spend of the whole process.
+ */
+export interface LiveProcessOptions {
+  /** Default 900. */
+  idleSeconds?: number;
+  /** Default 4. */
+  maxLive?: number;
+  /** Turns one process serves before it is replaced. Default 20. */
+  maxTurns?: number;
+}
+
+/** A user-message stream the Agent SDK reads; `end` lets its process finish. */
+class InputQueue implements AsyncIterable<unknown> {
+  private readonly items: unknown[] = [];
+  private waiting: ((result: IteratorResult<unknown>) => void) | null = null;
+  private ended = false;
+
+  push(message: unknown): void {
+    if (this.ended) throw new Error("input closed");
+    if (this.waiting) {
+      const resolve = this.waiting;
+      this.waiting = null;
+      resolve({ value: message, done: false });
+    } else {
+      this.items.push(message);
+    }
+  }
+
+  end(): void {
+    this.ended = true;
+    if (this.waiting) {
+      const resolve = this.waiting;
+      this.waiting = null;
+      resolve({ value: undefined, done: true });
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<unknown> {
+    return {
+      next: () => {
+        if (this.items.length) return Promise.resolve({ value: this.items.shift(), done: false });
+        if (this.ended) return Promise.resolve({ value: undefined, done: true });
+        return new Promise((resolve) => (this.waiting = resolve));
+      },
+      return: async () => {
+        this.end();
+        return { value: undefined, done: true };
+      },
+    };
+  }
+}
+
+interface LiveProcess {
+  agentId: string;
+  signature: string;
+  input: InputQueue;
+  stream: AsyncIterable<Record<string, any>> & { close?: () => void };
+  events: AsyncIterator<Record<string, any>>;
+  abort: AbortController;
+  turns: number;
+  /** The process's cumulative total_cost_usd at its last result (streaming input reports a running total). */
+  lastTotalCost?: number;
+  lastUsedAt: number;
+  idleTimer?: NodeJS.Timeout;
+  busy: boolean;
+  closed: boolean;
 }
 
 interface QueuedMessage {
@@ -228,8 +337,14 @@ export class ClaudeAgentPort {
   private readonly launches = new Map<string, string>();
   private readonly transports = new Map<string, SessionTransport>();
   private readonly settledListeners = new Set<(sessionId: string, outcome: SessionOutcome) => void>();
+  private readonly processes = new Map<string, LiveProcess>();
 
   constructor(private readonly options: AgentPortOptions) {}
+
+  /** Sessions whose Claude Code process is alive between turns now (live mode). */
+  liveSessions(): string[] {
+    return [...this.processes.keys()];
+  }
 
   /** Called each time a session's queue runs dry or it fails (forks report to their parent this way). */
   onSettled(listener: (sessionId: string, outcome: SessionOutcome) => void): () => void {
@@ -415,6 +530,8 @@ export class ClaudeAgentPort {
     const agent = this.agent(agentId);
     dropQueue(agent);
     agent.abort?.abort();
+    const live = this.processes.get(agentId);
+    if (live) this.closeProcess(live, "cancelled");
     return this.summary(agentId);
   }
 
@@ -460,6 +577,7 @@ export class ClaudeAgentPort {
       dropQueue(agent);
       agent.abort?.abort();
     }
+    for (const live of [...this.processes.values()]) this.closeProcess(live, "disposed");
     await Promise.allSettled([...this.live.values()].map((agent) => agent.idle));
   }
 
@@ -538,7 +656,8 @@ export class ClaudeAgentPort {
     agent.abort = abort;
     const hostPrompt = this.options.systemPrompt(session);
     const systemPrompt = agent.systemPrompt ?? hostPrompt;
-    const launch = agent.launchOptions ?? {};
+    const launch = mergeLaunchOptions(this.options.launchOptionsFor?.(session), agent.launchOptions);
+    const live = this.options.live && (this.options.runtimeId ?? "claude") === "claude" ? this.options.live : undefined;
     agent.structuredOutput = undefined;
     const extraArgs = { ...launch.extraArgs, ...(launch.disableSlashCommands ? { "disable-slash-commands": null } : {}) };
     // A fork carries its parent's prompt, so it counts as the host's prompt when the text is the same.
@@ -556,8 +675,14 @@ export class ClaudeAgentPort {
         ? { permissionMode: "default", canUseTool: claudeCanUseTool(permissionHandler, agent.id) }
         : { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true }),
       settingSources: this.options.projectSettings ? ["project"] : [],
-      mcpServers: { ...(launch.hostMcpServers === false ? {} : this.options.mcpServers(session)), ...launch.mcpServers },
-      systemPrompt: systemPrompt ?? { type: "preset", preset: "claude_code" },
+      // A live process keeps the servers it started with, so they are made only when one starts (openProcess).
+      mcpServers: live ? {} : this.mcpServersOf(session, launch),
+      // A launch's own prompt (a fork's included) is rendered fresh on every request: recorded once, a resumed or
+      // forked session would keep running on the prompt of its first turn (its parent's, for a fork).
+      systemPrompt:
+        agent.systemPrompt !== undefined
+          ? { type: "custom", prompt: agent.systemPrompt, snapshot: false }
+          : (systemPrompt ?? { type: "preset", preset: "claude_code" }),
       ...(this.options.tools ? { tools: [...this.options.tools] } : {}),
       ...(session.native.sessionId
         ? { resume: session.native.sessionId }
@@ -580,13 +705,13 @@ export class ClaudeAgentPort {
         attachments: [...attachments],
         ...(surface ? { nativeSubagentAllowlist: [...surface.subagentAllowlist] } : {}),
         ...(launch.env ? { launchEnv: true } : {}),
+        ...(live ? { live: true } : {}),
         // The provider's own session id is not the Marshal one; the handler always gets the Marshal session.
         ...(permissionHandler ? { permissionHandler: (request) => permissionHandler(request, { sessionId: agent.id }) } : {}),
       } satisfies TurnExtras,
     };
-    let lastText = "";
-    let final: string | undefined;
-    let failed: string | undefined;
+    if (live) return this.liveTurn(agent, session, launch, live, options, abort, message, attachments);
+    const acc: TurnAccumulator = { lastText: "" };
     // The turn ends at its result event, not when the stream closes: on 2026-11-16 (c2-real-2 hero, 900008 critic)
     // the Claude process stayed alive after `result` (end_turn), the stream never closed, and the finished answer was
     // never recorded until the caller cancelled the turn 25-40 min later.
@@ -596,26 +721,7 @@ export class ClaudeAgentPort {
       for (;;) {
         const next = await events.next();
         if (next.done) break;
-        const event = next.value;
-        store.appendEvent(agent.id, slim(event));
-        if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
-          store.update(agent.id, { native: { ...this.session(agent.id).native, sessionId: event.session_id } });
-        } else if (event.type === "assistant" && !event.parent_tool_use_id) {
-          const text = textOf(event.message?.content);
-          if (text) lastText = text;
-        } else if (event.type === "result") {
-          final = typeof event.result === "string" && event.result ? event.result : lastText;
-          if (event.is_error) failed = final || String(event.subtype ?? "error");
-          if (event.structured_output !== undefined) agent.structuredOutput = event.structured_output;
-          store.addUsage(agent.id, {
-            inputTokens: num(event.usage?.input_tokens),
-            outputTokens: num(event.usage?.output_tokens),
-            cacheReadTokens: num(event.usage?.cache_read_input_tokens),
-            cacheWriteTokens: num(event.usage?.cache_creation_input_tokens),
-            costUsd: num(event.total_cost_usd),
-            turns: 1,
-            modelTurns: num(event.num_turns),
-          });
+        if (this.takeEvent(agent, next.value, acc, num(next.value.total_cost_usd))) {
           ended = true;
           break;
         }
@@ -635,14 +741,186 @@ export class ClaudeAgentPort {
       store.appendMessage(agent.id, { role: "system", content: "Turn cancelled." });
       return undefined;
     }
-    const content = failed ?? final ?? lastText;
+    return this.finishTurn(agent, acc);
+  }
+
+  /** Records one backend event; true at the turn's result. `costUsd` is what this turn cost. */
+  private takeEvent(agent: LiveAgent, event: Record<string, any>, acc: TurnAccumulator, costUsd: number): boolean {
+    const store = this.options.store;
+    store.appendEvent(agent.id, slim(event));
+    if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
+      store.update(agent.id, { native: { ...this.session(agent.id).native, sessionId: event.session_id } });
+    } else if (event.type === "assistant" && !event.parent_tool_use_id) {
+      const text = textOf(event.message?.content);
+      if (text) acc.lastText = text;
+    } else if (event.type === "result") {
+      acc.final = typeof event.result === "string" && event.result ? event.result : acc.lastText;
+      if (event.is_error) acc.failed = acc.final || String(event.subtype ?? "error");
+      if (event.structured_output !== undefined) agent.structuredOutput = event.structured_output;
+      store.addUsage(agent.id, {
+        inputTokens: num(event.usage?.input_tokens),
+        outputTokens: num(event.usage?.output_tokens),
+        cacheReadTokens: num(event.usage?.cache_read_input_tokens),
+        cacheWriteTokens: num(event.usage?.cache_creation_input_tokens),
+        costUsd,
+        turns: 1,
+        modelTurns: num(event.num_turns),
+      });
+      return true;
+    }
+    return false;
+  }
+
+  private finishTurn(agent: LiveAgent, acc: TurnAccumulator): string {
+    const content = acc.failed ?? acc.final ?? acc.lastText;
     agent.lastResult = content;
-    store.appendMessage(agent.id, {
+    this.options.store.appendMessage(agent.id, {
       role: "assistant",
       content,
-      ...(failed !== undefined ? { error: true } : {}),
+      ...(acc.failed !== undefined ? { error: true } : {}),
     });
     return content;
+  }
+
+  private mcpServersOf(session: SessionRecord, launch: AgentLaunchOptions): Record<string, unknown> {
+    return { ...(launch.hostMcpServers === false ? {} : this.options.mcpServers(session)), ...launch.mcpServers };
+  }
+
+  /**
+   * One turn on the session's live process: reuses it when its options are unchanged, otherwise starts one (resuming
+   * the session, or forking it on its first turn). The message goes into the process's input; the turn ends at its
+   * result and the process stays up until idle, evicted, recycled, cancelled or disposed.
+   */
+  private async liveTurn(
+    agent: LiveAgent,
+    session: SessionRecord,
+    launch: AgentLaunchOptions,
+    live: LiveProcessOptions,
+    options: Record<string | symbol, unknown>,
+    abort: AbortController,
+    message: string,
+    attachments: readonly string[],
+  ): Promise<string | undefined> {
+    const store = this.options.store;
+    const signature = processSignature(options, launch);
+    let proc = this.processes.get(agent.id);
+    if (proc && (proc.closed || proc.signature !== signature || proc.turns >= (live.maxTurns ?? 20))) {
+      this.closeProcess(proc, proc.signature !== signature ? "options changed" : "recycled");
+      proc = undefined;
+    }
+    const acc: TurnAccumulator = { lastText: "" };
+    const onAbort = () => {
+      if (proc) this.closeProcess(proc, "turn cancelled");
+    };
+    try {
+      if (!proc) proc = this.openProcess(agent, session, launch, live, options, signature);
+      if (proc.idleTimer) clearTimeout(proc.idleTimer);
+      proc.busy = true;
+      if (abort.signal.aborted) throw new Error("Turn cancelled before it started.");
+      abort.signal.addEventListener("abort", onAbort, { once: true });
+      proc.input.push(userMessage(message, attachments));
+      for (;;) {
+        const next = await proc.events.next();
+        if (next.done) {
+          // The process ended without answering this turn: it is gone, and the next turn starts another.
+          this.closeProcess(proc, "its stream ended");
+          break;
+        }
+        const event = next.value;
+        let costUsd = 0;
+        if (event.type === "result") {
+          // Streaming input reports a running total for the process; this turn cost the difference.
+          const total = num(event.total_cost_usd);
+          costUsd = proc.lastTotalCost === undefined || total < proc.lastTotalCost ? total : total - proc.lastTotalCost;
+          proc.lastTotalCost = total;
+        }
+        if (this.takeEvent(agent, event, acc, costUsd)) {
+          proc.turns += 1;
+          break;
+        }
+      }
+    } catch (error) {
+      if (proc) this.closeProcess(proc, "its turn failed");
+      if (abort.signal.aborted) {
+        store.appendMessage(agent.id, { role: "system", content: "Turn cancelled." });
+        return undefined;
+      }
+      store.appendMessage(agent.id, { role: "assistant", content: errorText(error), error: true });
+      throw error;
+    } finally {
+      abort.signal.removeEventListener("abort", onAbort);
+      agent.abort = undefined;
+      if (proc && !proc.closed) {
+        proc.busy = false;
+        proc.lastUsedAt = Date.now();
+        const live_ = proc;
+        proc.idleTimer = setTimeout(() => {
+          if (!live_.busy) this.closeProcess(live_, "idle");
+        }, (live.idleSeconds ?? 900) * 1000);
+        proc.idleTimer.unref?.();
+      }
+    }
+    if (abort.signal.aborted && acc.final === undefined) {
+      store.appendMessage(agent.id, { role: "system", content: "Turn cancelled." });
+      return undefined;
+    }
+    return this.finishTurn(agent, acc);
+  }
+
+  private openProcess(
+    agent: LiveAgent,
+    session: SessionRecord,
+    launch: AgentLaunchOptions,
+    live: LiveProcessOptions,
+    options: Record<string | symbol, unknown>,
+    signature: string,
+  ): LiveProcess {
+    const maxLive = Math.max(1, live.maxLive ?? 4);
+    while (this.processes.size >= maxLive) {
+      const idle = [...this.processes.values()].filter((p) => !p.busy).sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
+      if (!idle) break;
+      this.closeProcess(idle, "evicted");
+    }
+    const input = new InputQueue();
+    const processAbort = new AbortController();
+    const stream = this.options.query({
+      prompt: input,
+      options: { ...options, abortController: processAbort, mcpServers: this.mcpServersOf(session, launch) },
+    }) as LiveProcess["stream"];
+    const proc: LiveProcess = {
+      agentId: agent.id,
+      signature,
+      input,
+      stream,
+      events: stream[Symbol.asyncIterator](),
+      abort: processAbort,
+      turns: 0,
+      lastUsedAt: Date.now(),
+      busy: false,
+      closed: false,
+    };
+    this.processes.set(agent.id, proc);
+    this.options.log?.(`agent ${agent.id}: live process started (${this.processes.size} live)`);
+    return proc;
+  }
+
+  private closeProcess(proc: LiveProcess, why: string): void {
+    if (proc.closed) return;
+    proc.closed = true;
+    if (proc.idleTimer) clearTimeout(proc.idleTimer);
+    if (this.processes.get(proc.agentId) === proc) this.processes.delete(proc.agentId);
+    proc.input.end();
+    try {
+      proc.stream.close?.();
+    } catch {
+      /* already gone */
+    }
+    proc.abort.abort();
+    // A backend without close() (any QueryFn) still gets its stream finished.
+    Promise.resolve()
+      .then(() => proc.events.return?.())
+      .catch((error) => this.options.log?.(`agent ${proc.agentId}: closing its live stream failed: ${errorText(error)}`));
+    this.options.log?.(`agent ${proc.agentId}: live process closed (${why})`);
   }
 
   private summary(agentId: string): AgentSummary {
@@ -715,8 +993,95 @@ function withoutBundledSkills(env: Record<string, string>): Record<string, strin
   return "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS" in env ? env : { ...env, CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1" };
 }
 
+interface TurnAccumulator {
+  lastText: string;
+  final?: string;
+  failed?: string;
+}
+
+type HookMatchers = Readonly<Record<string, unknown>>;
+
+/** Hooks of both, per event: the host's matchers first, then the launch's. */
+function mergeHooks(host: HookMatchers | undefined, own: HookMatchers | undefined): Record<string, unknown> | undefined {
+  if (!host) return own ? { ...own } : undefined;
+  if (!own) return { ...host };
+  const merged: Record<string, unknown> = {};
+  for (const event of new Set([...Object.keys(host), ...Object.keys(own)])) {
+    const list = (value: unknown) => (Array.isArray(value) ? value : value === undefined ? [] : [value]);
+    merged[event] = [...list(host[event]), ...list(own[event])];
+  }
+  return merged;
+}
+
+/** A host's launch options (launchOptionsFor) with a launch's own over them; see AgentPortOptions.launchOptionsFor. */
+export function mergeLaunchOptions(host: AgentLaunchOptions | undefined, own: AgentLaunchOptions | undefined): AgentLaunchOptions {
+  if (!host) return own ?? {};
+  if (!own) return host;
+  const hooks = mergeHooks(host.hooks, own.hooks);
+  const disallowedTools = [...new Set([...(host.disallowedTools ?? []), ...(own.disallowedTools ?? [])])];
+  const env = host.env || own.env ? { ...host.env, ...own.env } : undefined;
+  const mcpServers = host.mcpServers || own.mcpServers ? { ...host.mcpServers, ...own.mcpServers } : undefined;
+  const extraArgs = host.extraArgs || own.extraArgs ? { ...host.extraArgs, ...own.extraArgs } : undefined;
+  return {
+    ...host,
+    ...own,
+    ...(hooks ? { hooks } : {}),
+    ...(disallowedTools.length ? { disallowedTools } : {}),
+    ...(env ? { env } : {}),
+    ...(mcpServers ? { mcpServers } : {}),
+    ...(extraArgs ? { extraArgs } : {}),
+  };
+}
+
+/**
+ * What a live process was started with, as text: a turn whose signature differs needs a new process. Functions count
+ * by shape only (hook events and how many matchers, whether a spawner or permission handler is set), so a host that
+ * builds fresh closures each turn keeps its process.
+ */
+function processSignature(options: Record<string | symbol, unknown>, launch: AgentLaunchOptions): string {
+  const hooks = (options.hooks ?? {}) as Record<string, unknown>;
+  return JSON.stringify({
+    model: options.model,
+    effort: options.effort,
+    cwd: options.cwd,
+    env: options.env,
+    permissionMode: options.permissionMode,
+    canUseTool: typeof options.canUseTool === "function",
+    settingSources: options.settingSources,
+    systemPrompt: options.systemPrompt,
+    tools: options.tools,
+    allowedTools: options.allowedTools,
+    disallowedTools: options.disallowedTools,
+    maxTurns: options.maxTurns,
+    maxBudgetUsd: options.maxBudgetUsd,
+    strictMcpConfig: options.strictMcpConfig,
+    pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
+    extraArgs: options.extraArgs,
+    outputFormat: options.outputFormat,
+    spawner: typeof options.spawnClaudeCodeProcess === "function",
+    hooks: Object.keys(hooks)
+      .sort()
+      .map((event) => [event, Array.isArray(hooks[event]) ? (hooks[event] as unknown[]).length : 1]),
+    mcpServers: [launch.hostMcpServers === false ? "-host" : "+host", ...Object.keys(launch.mcpServers ?? {}).sort()],
+  });
+}
+
+/** One user message of a live process's input stream. */
+function userMessage(message: string, attachments: readonly string[]): unknown {
+  return { type: "user", message: { role: "user", content: contentOf(message, attachments) }, parent_tool_use_id: null, session_id: "" };
+}
+
 /** A plain string, or one user message with the pictures as image blocks ahead of the text. */
 function promptOf(message: string, attachments: readonly string[]): unknown {
+  if (attachments.length === 0) return message;
+  const content = contentOf(message, attachments);
+  return (async function* () {
+    yield { type: "user", message: { role: "user", content }, parent_tool_use_id: null, session_id: "" };
+  })();
+}
+
+/** The message text, or the pictures as image blocks ahead of it. */
+function contentOf(message: string, attachments: readonly string[]): string | unknown[] {
   if (attachments.length === 0) return message;
   const content: unknown[] = [];
   const unreadable: string[] = [];
@@ -733,9 +1098,7 @@ function promptOf(message: string, attachments: readonly string[]): unknown {
   }
   const note = unreadable.length ? `\n\nAttached files (open them yourself): ${unreadable.join(", ")}` : "";
   content.push({ type: "text", text: `${message}${note}` });
-  return (async function* () {
-    yield { type: "user", message: { role: "user", content }, parent_tool_use_id: null, session_id: "" };
-  })();
+  return content;
 }
 
 /** How long a backend gets to close its stream after the result before its turn is aborted (the process is killed). */
