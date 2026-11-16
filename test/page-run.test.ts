@@ -60,6 +60,14 @@ test("without operator-request.md the request comes from the brief's content_gui
   fs.writeFileSync(path.join(input, "page", "brief.json"), JSON.stringify(brief));
   assert.match(readSandboxInput(input).idea, /^Loud and playful\.\n\nThe positioning/, "a top-level content_guidelines also counts");
 
+  brief.positioning.visual_guidelines = "Neon gradients, big motion.";
+  fs.writeFileSync(path.join(input, "page", "brief.json"), JSON.stringify(brief));
+  assert.match(readSandboxInput(input).idea, /^Loud and playful\.\n\nVisual direction:\nNeon gradients, big motion\.\n\nThe positioning/, "visual_guidelines follow the request");
+
+  brief.operator_prompt = "An operator prompt.";
+  fs.writeFileSync(path.join(input, "page", "brief.json"), JSON.stringify(brief));
+  assert.match(readSandboxInput(input).idea, /^An operator prompt\.\n\nVisual direction:/, "an operator_prompt in the brief comes before the guidelines");
+
   fs.writeFileSync(path.join(input, "page", "operator-request.md"), "A page for tired parents.\n");
   assert.match(readSandboxInput(input).idea, /^A page for tired parents\./, "operator-request.md still wins");
 });
