@@ -35,7 +35,7 @@ import {
 import { CLAUDE_NATIVE_PROMPT_TOOLS, DISABLED_NATIVE_TOOLS, NATIVE_SUBAGENT_ALLOWLIST } from "./native-tools.js";
 import { repositoryRulesPrompt } from "./repo-rules.js";
 import { createHostPrompts, sdkBaseLayer, type HostPromptOptions, type HostPrompts, type PromptLayer } from "./prompt.js";
-import { SessionForks, forksPromptSection } from "./forks.js";
+import { type ForkPointOf, SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { SessionPublisher } from "./kit/publisher.js";
 import { OrgStore, type OrgStoreOptions, type OrgTranscriptOptions } from "./org-store/index.js";
@@ -185,6 +185,11 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * session (on its own children). Undefined (the default): one tenant, nothing is filtered.
    */
   sessionScopeLabel?: string;
+  /**
+   * Where a session is forked when its Claude session file is not on this host (a remote session, `remoteRuntime`): see ForkPointOf (forks.ts).
+   * Marley: the parent's last finished turn, resumed on the brand VM.
+   */
+  forkPoint?: ForkPointOf;
   /** Keep sessions' Claude Code processes alive between turns (the port's live mode); `liveFor` picks which sessions. */
   live?: AgentPortOptions["live"];
   liveFor?: AgentPortOptions["liveFor"];
@@ -430,7 +435,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const decisions = new DecisionDesk(sessions, agents, log);
   // marshal.link.call answers through a private loopback link that starts on first use (after the extensions activate).
   let linkRelay: LinkRelay | undefined;
-  const forks = new SessionForks(agents, sessions, { log });
+  const forks = new SessionForks(agents, sessions, { log, ...(options.forkPoint ? { forkPoint: options.forkPoint } : {}) });
   const models = createModelServices(options.models, { env: withSecrets(options.env ?? process.env, options.secrets), ...(options.modelsFetch ? { fetch: options.modelsFetch } : {}) });
   const importPolicy = importPolicyOf(options.trustedTypeScript);
   const broker =
