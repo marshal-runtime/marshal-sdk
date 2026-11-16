@@ -43,6 +43,16 @@ export function sdkBaseLayer(input: {
   return {
     surface: "cloud-headless",
     role: "worker",
+    // What every SDK host really provides (memory.ts, org-store/search.ts); a host layer's own slots still win.
+    slots: {
+      "v2.finding-information.session-scope":
+        "ranks the sessions of this host and every session the organization's hosts published to the org store (`scope: local|cloud|all`, default all; open a hit with `marshal.tool.getSessionTranscript {sessionId}`)",
+      "v2.finding-information.memory-rung":
+        "3. **Your memory.** The memories of your scopes are already in your context below (preferences always); `marshal.tool.recall {query}` finds the rest.",
+      "v2.memory-and-records.personal":
+        "  - Notes about the people you work for and their world (preferences, decisions, facts, context): `marshal.tool.remember {fact, category, appliesTo?, replaces?, links?}`. A preference is shown in every later session of its scope; `appliesTo` names the scope (recall lists them), `replaces: <id>` corrects an older memory and `links: [{path, symbol?}]` names the files a memory about code explains.",
+      "v2.memory-and-records.correct": "replace it (`marshal.tool.remember` with `replaces`) or `marshal.tool.forget` it",
+    },
     tools: [
       ...(input.runtimeTools === false ? [] : RUNTIME_PROMPT_TOOLS),
       ...(input.directTools ?? []).map((direct) => ({ name: `mcp__marshal__${direct.name}`, description: direct.description })),
@@ -78,6 +88,8 @@ export function createHostPrompts(
   log: (line: string) => void,
   /** Sections that depend on the session (the skills its agent profile shows), added after the host's layers. */
   sessionSections?: (session?: SessionRecord) => PromptLayer["sections"],
+  /** The memory block of a session (the host's memory: always-on preferences, then the newest memories of its scopes). */
+  sessionMemories?: (session?: SessionRecord) => NonNullable<PromptLayer["sessionContext"]>["memories"],
 ): HostPrompts {
   const sessionLayers = new Map<string, PromptLayer>();
   const { session: sessionLayerOf, ...hostLayer } = host ?? {};
@@ -86,7 +98,11 @@ export function createHostPrompts(
       const role: HostPromptRole | undefined = session?.parentId ? "fork" : session?.launchedBy ? "lane" : undefined;
       const own = session ? (sessionLayers.get(session.id) ?? sessionLayerOf?.(session)) : undefined;
       const sections = sessionSections?.(session);
-      const hosted = mergePromptLayers(mergePromptLayers(base, hostLayer), sections?.length ? { sections } : undefined);
+      const memories = sessionMemories?.(session);
+      const hosted = mergePromptLayers(
+        mergePromptLayers(mergePromptLayers(base, hostLayer), sections?.length ? { sections } : undefined),
+        memories ? { sessionContext: { memories } } : undefined,
+      );
       // The host's role text is for its top-level sessions; a fork or lane gets its own unless its layer gives one.
       const layer = mergePromptLayers(role ? { ...hosted, role, roleText: undefined } : hosted, own);
       try {
