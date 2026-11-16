@@ -178,6 +178,13 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * every session of the store.
    */
   remoteHostTools?: readonly string[];
+  /**
+   * The session label that bounds the session tools, for a host whose store holds several tenants' sessions (Marley: `brand`, set by the server on
+   * every session it launches; forks copy their parent's labels). searchSessions and getSessionTranscript return only sessions (local and org)
+   * whose label equals the caller's, and a caller without it sees none; forkSubagents, listSubagents, messageSubagent and messageForks act only for a calling
+   * session (on its own children). Undefined (the default): one tenant, nothing is filtered.
+   */
+  sessionScopeLabel?: string;
   /** Keep sessions' Claude Code processes alive between turns (the port's live mode); `liveFor` picks which sessions. */
   live?: AgentPortOptions["live"];
   liveFor?: AgentPortOptions["liveFor"];
@@ -461,9 +468,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     providerSources: [
       ...(options.providerSources ?? []),
       () => createAgentProvider(agents, (id) => id !== undefined && sessions.get(id) !== undefined),
-      () => createSessionToolsProvider(agents, sessions, orgSearch ? { orgSearch } : {}),
+      () => createSessionToolsProvider(agents, sessions, { ...(orgSearch ? { orgSearch } : {}), ...(options.sessionScopeLabel ? { scopeLabel: options.sessionScopeLabel } : {}) }),
       () => createMemoryToolsProvider(memory),
-      () => createForkToolsProvider(forks),
+      () => createForkToolsProvider(forks, options.sessionScopeLabel ? { requireCaller: true } : {}),
       () => createAutomationsProvider(hostAutomations),
       () => createDecisionsProvider(decisions),
       () => createModelsProvider(models),
