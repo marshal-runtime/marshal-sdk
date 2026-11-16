@@ -184,7 +184,7 @@ test("agent-sandbox's runner layout (host/sessions, page-studio/, page-run.json,
   fs.mkdirSync(path.join(studioDir, "library"), { recursive: true });
   // Still building (no output.json yet): its final upload would overwrite a push, so the push is refused and writes nothing.
   const early = await pushToCloud({
-    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work0"),
+    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work0"), capture: noChrome,
     renderedHtml: "<html><body><h1>too early</h1></body></html>",
     pageDoc: { id: "local", title: "SaffPro", brand: { id: "233", name: "SaffPro" }, product: null, source: "imported", version: 3, updatedAt: new Date().toISOString(), updatedBy: "Omer", notes: [], sections: [] },
   });
@@ -192,20 +192,22 @@ test("agent-sandbox's runner layout (host/sessions, page-studio/, page-run.json,
   assert.match(fs.readFileSync(path.join(state, "sandbox-page.html"), "utf8"), /old/);
   assert.equal(fs.existsSync(path.join(root, "agent", "edits")), false);
   fs.writeFileSync(path.join(root, "output.json"), JSON.stringify({ pages: [] }));
-  await pushToCloud({
-    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work"),
+  const late = await pushToCloud({
+    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work"), capture: noChrome,
     renderedHtml: '<html><body><section data-key="hero"><h1>new</h1></section></body></html>',
     pageDoc: { id: "local", title: "SaffPro", brand: { id: "233", name: "SaffPro" }, product: null, source: "imported", version: 3, updatedAt: new Date().toISOString(), updatedBy: "Omer", notes: [], sections: [] },
   });
   assert.equal(JSON.parse(fs.readFileSync(path.join(state, "page-studio", "pages", "saffpro--sandbox.json"), "utf8")).version, 3);
   assert.equal(fs.existsSync(path.join(state, "data")), false);
   assert.match(fs.readFileSync(path.join(state, "sandbox-page.html"), "utf8"), /new/);
+  // No Chrome to retake their list thumbnail: the push still lands and says so.
+  assert.ok(late.ok && late.thumbnail === null && /thumbnail was not updated: no Chrome/.test(late.warnings[0] ?? ""));
 
   // A page-generator run mid-flight: a run.json and page-studio/pages, page-run.json not written yet. Still the sandbox layout.
   fs.rmSync(path.join(state, "page-run.json"));
   fs.writeFileSync(path.join(state, "run.json"), JSON.stringify({ schemaVersion: 1, runId: "run-902", status: "done", title: "sdk-781-saffpro" }));
   await pushToCloud({
-    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work2"),
+    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work2"), capture: noChrome,
     renderedHtml: '<html><body><section data-key="hero"><h1>newer</h1></section></body></html>',
     pageDoc: { id: "local", title: "SaffPro", brand: { id: "233", name: "SaffPro" }, product: null, source: "imported", version: 4, updatedAt: new Date().toISOString(), updatedBy: "Omer", notes: [], sections: [] },
   });
@@ -226,8 +228,21 @@ test("pushToCloud replaces the preview, keeps the old one, writes the page recor
     notes: [{ key: "hero", body: "@Bar ok to ship?", status: "open" }],
     sections: [{ key: "hero", label: "Hero", kind: "html", src: "<section><h1>Look awake on every call.</h1></section>" }],
   };
-  const result = await pushToCloud({ outputRoot: "gs://dev-bucket/runs/demo-1", cloudPageId: PAGE_ID, renderedHtml: rendered, pageDoc, studioDir, by: { name: "Omer" }, summary: "headline", workDir: path.join(dir, "work") });
+  fs.mkdirSync(path.join(runRoot, "preview"), { recursive: true });
+  fs.writeFileSync(path.join(runRoot, "preview", "thumbnail.png"), "OLD-THUMB");
+  let shot = "";
+  const capture = async (htmlFile: string, pngFile: string) => {
+    shot = fs.readFileSync(htmlFile, "utf8");
+    fs.writeFileSync(pngFile, "NEW-THUMB");
+  };
+  const result = await pushToCloud({ outputRoot: "gs://dev-bucket/runs/demo-1", cloudPageId: PAGE_ID, renderedHtml: rendered, pageDoc, studioDir, by: { name: "Omer" }, summary: "headline", workDir: path.join(dir, "work"), capture });
   assert.equal(result.ok, true);
+  // Their run list's card shows preview/thumbnail.png: retaken from the edited page, the old one kept beside the backup.
+  assert.match(shot, /every call/);
+  assert.match(shot, /data:image\/[a-z]+;base64,/);
+  assert.equal(fs.readFileSync(path.join(runRoot, "preview", "thumbnail.png"), "utf8"), "NEW-THUMB");
+  assert.ok(result.ok && result.thumbnail === "gs://dev-bucket/runs/demo-1/preview/thumbnail.png");
+  assert.deepEqual(result.ok && result.warnings, []);
   const preview = fs.readFileSync(path.join(runRoot, "preview", "index.html"), "utf8");
   assert.match(preview, /every call/);
   assert.match(preview, /src="\.\.\/images\/[^"]+"/);
@@ -240,6 +255,7 @@ test("pushToCloud replaces the preview, keeps the old one, writes the page recor
   const editsDir = path.join(runRoot, "agent", "edits");
   const backup = fs.readdirSync(editsDir).find((name) => !name.endsWith(".json"))!;
   assert.match(fs.readFileSync(path.join(editsDir, backup, "preview.before.html"), "utf8"), /on camera/);
+  assert.equal(fs.readFileSync(path.join(editsDir, backup, "thumbnail.before.png"), "utf8"), "OLD-THUMB");
   const doc = JSON.parse(fs.readFileSync(path.join(runRoot, "agent", "marshal-state", "data", "pages", `${PAGE_ID}.json`), "utf8"));
   assert.equal(doc.id, PAGE_ID);
   assert.equal(doc.notes[0].body, "@Bar ok to ship?");
@@ -254,6 +270,10 @@ test("pushToCloud replaces the preview, keeps the old one, writes the page recor
   assert.equal(page!.notesOpen, 1);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+const noChrome = async () => {
+  throw new Error("no Chrome or Chromium found (set MARSHAL_SDK_CHROME)");
+};
 
 test("previewHtml inlines an older run's pictures and names the missing ones; links persist", async () => {
   const { pullRoot, dir } = setup();
