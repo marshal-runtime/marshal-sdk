@@ -19,7 +19,7 @@ test("marshal.agent.transcript carries eventCount and lastEventAt while a turn r
     automations: { start: false },
     query: () =>
       (async function* () {
-        yield { type: "system", subtype: "init", session_id: "native-big" };
+        yield { type: "system", subtype: "init", session_id: "native-big", tools: ["Read", "Bash"], mcp_servers: [{ name: "playwright", status: "connected" }], skills: ["lp-design", "animate"] };
         yield { type: "system", subtype: "thinking_tokens", estimated_tokens: 150 };
         await gate;
         yield { type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "{\"ops\":[]}" }] } };
@@ -41,6 +41,8 @@ test("marshal.agent.transcript carries eventCount and lastEventAt while a turn r
     // The runtime's agent schema is closed; its usage object is open, so the activity rides there.
     assert.equal(working.agent.usage.eventCount, 2);
     assert.equal(typeof working.agent.usage.lastEventAt, "string");
+    // What the backend really gave the session (its init event), sorted: Page Studio fingerprints it next to what it asked for.
+    assert.deepEqual(working.agent.usage.environment, { tools: ["Bash", "Read"], mcpServers: ["playwright"], skills: ["animate", "lp-design"] });
     release();
     for (let i = 0; i < 100 && (await call("marshal.agent.transcript", { agentId, limit: 1 })).agent.state !== "idle"; i++) {
       await new Promise((resolve) => setTimeout(resolve, 20));
