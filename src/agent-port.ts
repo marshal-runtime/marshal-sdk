@@ -664,28 +664,17 @@ export class ClaudeAgentPort {
       }
       agent.running = false;
       const idle = this.options.store.update(agent.id, { state: "idle" });
-      if (this.options.store.flush) await this.persist(agent.id);
       this.announce("session.idle", idle);
       this.settle(agent.id, { state: "idle", ...(agent.lastReply !== undefined ? { reply: agent.lastReply } : {}) });
     } catch (error) {
       dropQueue(agent);
       agent.running = false;
       const failed = this.options.store.update(agent.id, { state: "failed", lastError: errorText(error) });
-      if (this.options.store.flush) await this.persist(agent.id);
       this.announce("session.failed", failed);
       this.settle(agent.id, { state: "failed", error: errorText(error) });
       throw error;
     } finally {
       agent.running = false;
-    }
-  }
-
-  /** Everything the session wrote is durable before it reads as idle; a failure is logged and kept for the next flush. */
-  private async persist(sessionId: string): Promise<void> {
-    try {
-      await this.options.store.flush?.();
-    } catch (error) {
-      this.options.log?.(`session ${sessionId}: the store could not write everything yet: ${errorText(error)}`);
     }
   }
 
@@ -725,7 +714,6 @@ export class ClaudeAgentPort {
   ): Promise<string | undefined> {
     const store = this.options.store;
     // A session adopted from another host (or an earlier run) is read from the store before it continues.
-    if (store.hydrate) await store.hydrate(agent.id);
     const session = this.session(agent.id);
     store.appendMessage(agent.id, { role: "user", content: message, ...(from ? { from } : {}) });
     const abort = new AbortController();
@@ -755,8 +743,9 @@ export class ClaudeAgentPort {
         : { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true }),
       settingSources: this.options.projectSettings ? ["project"] : [],
       // The store keeps the backend's transcript: the Agent SDK mirrors each batch to it while the turn runs and, when a
-      // session resumes, restores it from there before the backend starts, whatever machine that is.
-      ...(store.transcripts && (this.options.runtimeId ?? "claude") === "claude" ? { sessionStore: store.transcripts } : {}),
+      // session resumes, loads it from there before the backend starts (a store answers null when the machine already has it).
+      // A session reads as idle without waiting for any of it to reach the cloud.
+      ...(store.transcripts && (this.options.runtimeId ?? "claude") === "claude" ? { sessionStore: store.transcripts.bind ? store.transcripts.bind(agent.id) : store.transcripts } : {}),
       // A live process keeps the servers it started with, so they are made only when one starts (openProcess).
       mcpServers: live ? {} : this.mcpServersOf(session, launch),
       // A launch's own prompt (a fork's included) is rendered fresh on every request: recorded once, a resumed or

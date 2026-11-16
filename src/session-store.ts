@@ -155,11 +155,7 @@ export interface SessionEnvironment {
 
 /**
  * What the agent port, the host and the kits need from a session store. `FileSessionStore` keeps everything on disk;
- * `CloudSessionStore` (cloud-store/) keeps it in Postgres and an object store for every host of one tenant.
- *
- * Reads are synchronous: a store answers from what it has loaded (a cloud store loads every record of its tenant when
- * it opens and a session's messages and events when `hydrate` is called, which the port does before a session's turn).
- * Writes are applied at once in memory and written behind; `flush` resolves when everything written so far is durable.
+ * the org store (org-store/) publishes it to the bucket after a session goes idle and keeps the backend's transcript there.
  */
 export interface SessionStore {
   /** Where this store's run began: every session it creates carries it. */
@@ -180,14 +176,10 @@ export interface SessionStore {
   touch(id: string): void;
   activity(id: string): { eventCount: number; lastEventAt?: string; environment?: SessionEnvironment };
   setEnvironment(id: string, environment: SessionEnvironment): void;
-  /** Word search over titles, labels and transcripts, best first. A cloud store answers from its database. */
-  search(query: string, limit?: number): SessionSearchHit[] | Promise<SessionSearchHit[]>;
-  /** Load a session's messages and events when they are not in memory yet. A no-op for a store that has them. */
-  hydrate?(id: string): Promise<void>;
-  /** Resolves when every write so far is durable; rejects with what failed (the writes stay queued for the next flush). */
-  flush?(): Promise<void>;
+  /** Word search over titles, labels and transcripts, best first. */
+  search(query: string, limit?: number): SessionSearchHit[];
   /** The backend's own transcript store for this host's sessions (Claude Agent SDK `sessionStore`), when it keeps one. */
-  readonly transcripts?: BackendTranscriptStore;
+  transcripts?: BackendTranscriptStore;
 }
 
 export interface SessionPlan {
@@ -203,9 +195,13 @@ export interface BackendTranscriptStore {
   listSessions?(projectKey: string): Promise<Array<{ sessionId: string; mtime: number }>>;
   delete?(key: { projectKey: string; sessionId: string; subpath?: string }): Promise<void>;
   listSubkeys?(key: { projectKey: string; sessionId: string }): Promise<string[]>;
+  /** A store whose objects live per Marshal session returns the view for that session; the port passes it to the backend each turn. */
+  bind?(marshalSessionId: string): BackendTranscriptStore;
 }
 
 export class FileSessionStore implements SessionStore {
+  /** Set by the host when an org store keeps the backend's transcripts. */
+  transcripts?: BackendTranscriptStore;
   private readonly records = new Map<string, SessionRecord>();
   private readonly counts = new Map<string, number>();
   private readonly lastEventAt = new Map<string, string>();
