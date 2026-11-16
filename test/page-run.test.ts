@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activityWarnings, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { activityWarnings, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -218,6 +218,23 @@ test("Page Studio's skipped critic rounds and failed steps reach the run's warni
   assert.deepEqual(activityWarnings({ failed: ["copy pass"], warnings: [skipped, skipped] }), ["copy pass", skipped]);
   assert.deepEqual(activityWarnings({}), []);
   assert.deepEqual(activityWarnings({ warnings: "not a list" }), []);
+});
+
+test("a look round whose browser failed twice fails the run with Page Studio's reason; steps are reported once each", async () => {
+  const lookFailed = "look failed: Target closed (round 1 of 2, retried once)";
+  const polls = [{ step: "Writing the page" }, { step: "Writing the page" }, { step: "Critic round 1" }, { error: lookFailed }];
+  const steps: string[] = [];
+  const call = async (capability: string, args: Record<string, unknown>) => {
+    assert.equal(capability, "pagestudio.activity");
+    assert.equal(args.id, "act-1");
+    return polls.shift();
+  };
+  await assert.rejects(followActivity(call, "act-1", (step) => steps.push(step)), { message: `Page Studio stopped: ${lookFailed}` });
+  assert.deepEqual(steps, ["Writing the page", "Critic round 1"]);
+
+  const done = { doneAt: "2026-11-16T00:00:00Z", reply: "ok", warnings: ["look round 1: the browser failed once and the retry worked (Target closed)"] };
+  const finished = [{ step: "Critic round 1" }, done];
+  assert.equal(await followActivity(async () => finished.shift(), "act-2"), done);
 });
 
 test("single and deep pages refuse to start without a usable browser unless --no-look", () => {
