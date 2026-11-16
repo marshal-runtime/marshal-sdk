@@ -113,6 +113,16 @@ export function createExtension(context: Context) {
     const out: Row[] = [];
     for (const host of linked.values()) {
       for (const hit of host.shared ? await host.shared(query, limit) : []) {
+        // A session this Mac already found (a cloud run it lists) that the org index also returned: keep the one that
+        // opens its run, and say it is shared and by whom, so the hit shows where the search found it.
+        const known = have.find((row) => row.sessionId === hit.sessionId);
+        if (known && !known.shared) {
+          known.shared = true;
+          known.sharedVia = host.summary.id;
+          if (hit.owner) known.owner = hit.owner;
+          known.snippet = [hit.owner ? `shared by ${hit.owner}` : "shared", known.snippet].filter(Boolean).join(" · ");
+          known.score = Math.max(Number(known.score) || 0, 2) + 1;
+        }
         if (seen.has(hit.sessionId)) continue;
         seen.add(hit.sessionId);
         const outputRoot = hit.origin?.stateLocation?.replace(/\/+$/, "").replace(/\/agent\/marshal-state$/, "");
