@@ -68,3 +68,14 @@ test("paths from a manifest cannot leave the cache folder", () => {
   const cache = new CloudCache("/tmp/c");
   assert.equal(cache.fileOf("h", "r", "../../etc/passwd").startsWith(cache.runDir("h", "r")), true);
 });
+
+test("the byte count of files fetched at the same time is their exact sum", async () => {
+  const { gcs, dir } = fakeBucket();
+  fs.mkdirSync(path.join(gcs, "b", "run"), { recursive: true });
+  const sizes = [1000, 2500, 400, 9000, 70, 3300];
+  sizes.forEach((size, index) => fs.writeFileSync(path.join(gcs, "b", "run", `f${index}.bin`), Buffer.alloc(size, index + 1)));
+  const cache = new CloudCache(path.join(dir, "cache"));
+  const { transfer } = await cache.fetchAll("host", "run", sizes.map((_, index) => ({ uri: `gs://b/run/f${index}.bin`, rel: `f${index}.bin` })));
+  assert.deepEqual([transfer.downloaded, transfer.files], [sizes.reduce((a, b) => a + b, 0), sizes.length]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

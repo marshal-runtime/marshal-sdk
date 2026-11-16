@@ -66,7 +66,9 @@ export class CloudCache {
       } catch {
         // not here yet
       }
-      transfer.downloaded += await gcsDownload(item.uri, file);
+      // Read the size before adding: `+= await` would read the running total first and lose concurrent downloads.
+      const size = await gcsDownload(item.uri, file);
+      transfer.downloaded += size;
       return file;
     });
     return { files, transfer };
