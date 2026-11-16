@@ -42,7 +42,17 @@ cpSync(path.join(root, "README.md"), path.join(out, "README.md"));
 writeFileSync(path.join(out, "package.json"), `${JSON.stringify({ name: manifest.identity, version: manifest.version, private: true, type: "commonjs", main: manifest.entrypoint }, null, 2)}\n`);
 
 await build({
-  entryPoints: ["store", "pages", "questions", "cloud", "shared", "review", "artifacts", "cache", "cloud-pages"].map((name) => path.join(root, "test", `${name}.test.ts`)),
+  entryPoints: [path.join(root, "src", "backfill-cli.ts")],
+  outfile: path.join(root, "out", "tools", "backfill.cjs"),
+  bundle: true,
+  format: "cjs",
+  platform: "node",
+  target: "node20",
+  logLevel: "warning",
+});
+
+await build({
+  entryPoints: ["store", "pages", "questions", "cloud", "shared", "review", "artifacts", "cache", "cloud-pages", "backfill"].map((name) => path.join(root, "test", `${name}.test.ts`)),
   outdir: path.join(root, "out", "test"),
   outExtension: { ".js": ".cjs" },
   bundle: true,

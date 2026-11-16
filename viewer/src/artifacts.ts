@@ -316,6 +316,29 @@ export async function commitPageVersion(input: CommitInput): Promise<CommitResul
   return { ok: true, version: next, dir: entry.dir, seeded, uploaded, reused, manifest };
 }
 
+/**
+ * Gives a page a run built (and never versioned) its version 1: the page as the run built it, written by the manifest's own
+ * conditional create. Backfill uses this for runs made before manifests; a page that already has a manifest is returned as is.
+ */
+export async function seedArtifact(input: { root: string; state: string; app: string; kind: string; id: string; title?: string; now?: () => Date }): Promise<{ manifest: ArtifactManifest; created: boolean } | undefined> {
+  const root = trim(input.root);
+  const existing = await readArtifactManifest(root, input.app, input.id);
+  if (existing.manifest) return { manifest: existing.manifest, created: false };
+  const legacy = await legacyPage(root, input.state, input.id);
+  if (!legacy) return undefined;
+  const base = artifactDir(root, input.app, input.id);
+  const entry = await writeVersion(base, 1, legacy, { at: (input.now ?? (() => new Date()))().toISOString(), by: { name: "build" }, summary: "The page as the run built it", docVersion: Number(legacy.doc.version ?? 0) });
+  const manifest: ArtifactManifest = { schemaVersion: 1, app: input.app, kind: input.kind, id: input.id, title: input.title ?? String(legacy.doc.title ?? input.id), versions: [entry], current: 1 };
+  try {
+    await gcsWrite(`${base}/manifest.json`, JSON.stringify(manifest, null, 2), { contentType: "application/json", cacheControl: "no-cache", ifGenerationMatch: "0" });
+    return { manifest, created: true };
+  } catch (error) {
+    if (!(error instanceof PreconditionFailed)) throw error;
+    const now = await readArtifactManifest(root, input.app, input.id);
+    return now.manifest ? { manifest: now.manifest, created: false } : undefined;
+  }
+}
+
 async function writeVersion(base: string, v: number, files: PageVersionFiles, meta: Pick<VersionEntry, "at" | "by" | "summary" | "docVersion">): Promise<VersionEntry> {
   // page.json claims the folder: a folder a crashed push left behind is skipped, never overwritten.
   let dir = `versions/${v}`;
