@@ -121,6 +121,8 @@ export function typedGraphMemoryRoute(options: TypedGraphMemoryRouteOptions): Br
         ...(input.supersedes ? { supersedes: [input.supersedes] } : {}),
         ...(input.author ? { author: input.author } : {}),
         alwaysOn: input.alwaysOn,
+        ...(input.id ? { id: input.id } : {}),
+        ...(input.createdAt ? { createdAt: input.createdAt } : {}),
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         ...(access?.length ? { access } : {}),
         properties: { scope: input.scope },
@@ -157,11 +159,19 @@ export function typedGraphMemoryRoute(options: TypedGraphMemoryRouteOptions): Br
       return answer.deleted === true;
     },
     async search(input) {
+      // One search per store: scopes that share a store (the company Brain keeps every person in zyg/org) search it once,
+      // with headroom, and the records are kept only when their own scope is one of the session's.
+      const byStore = new Map<string, string[]>();
+      for (const scope of input.scopes) byStore.set(options.storeOf(scope), [...(byStore.get(options.storeOf(scope)) ?? []), scope]);
       const lists = await Promise.all(
-        input.scopes.map(async (scope) => {
-          const found = (await run(scope, "memorySearch", { query: input.query, limit: input.limit, ...(input.category ? { category: input.category } : {}) })) as {
-            hits?: TypedGraphHit[];
-          };
+        [...byStore.values()].map(async (scopes) => {
+          const scope = scopes[0]!;
+          // Headroom: a store may hold other scopes' memories, which are dropped below; the result is cut to the limit.
+          const found = (await run(scope, "memorySearch", {
+            query: input.query,
+            limit: Math.min(Math.max(input.limit * 4, input.limit), 50),
+            ...(input.category ? { category: input.category } : {}),
+          })) as { hits?: TypedGraphHit[] };
           return { scope, hits: found.hits ?? [] };
         }),
       );
@@ -176,13 +186,20 @@ export function typedGraphMemoryRoute(options: TypedGraphMemoryRouteOptions): Br
       const records = new Map<string, BrainMemory>();
       await Promise.all(
         [...byScope].map(async ([scope, ids]) => {
-          for (const memory of await get(scope, ids)) if (!memory.supersededBy) records.set(memory.id, record(memory, scope));
+          for (const memory of await get(scope, ids)) {
+            const own = memory.properties?.scope;
+            // A memory written for another scope of the same store is not this session's; an unscoped one (an org memory) is.
+            if (memory.supersededBy || (typeof own === "string" && !input.scopes.includes(own))) continue;
+            records.set(memory.id, record(memory, scope));
+          }
         }),
       );
       return order.flatMap((id) => (records.has(id) ? [records.get(id)!] : [])).slice(0, input.limit);
     },
     async list(input) {
+      // Several scopes may share one store (the company Brain keeps every person in zyg/org): list only this scope.
       const found = (await run(input.scope, "memoryList", {
+        scope: input.scope,
         ...(typeof input.alwaysOn === "boolean" ? { alwaysOn: input.alwaysOn } : {}),
         ...(input.since ? { since: input.since } : {}),
         limit: Math.min(input.limit, 200),
