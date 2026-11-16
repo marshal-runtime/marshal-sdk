@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import type { QueryFn } from "./agent-port.js";
 import type { KitOptions, SessionsPublishOptions } from "./kit/index.js";
 import { cloudRunLayer } from "./prompt-cloud.js";
-import { writeRunLogs, type RunSummaryJson } from "./run-contract.js";
+import { turnSessions, writeRunLogs, type RunSummaryJson } from "./run-contract.js";
 import { escapeRegExp, finishPage, markSections, type FinishedPage } from "./page-finish.js";
 
 export { finishPage, markSections, type FinishedPage };
@@ -333,6 +333,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     ...(options.fake ? { query: fakeQuery, browser: false } : {}),
     log,
   });
+  const usageBefore = new Map(host.sessions.list().map((session) => [session.id, { ...session.usage }]));
   const call = async (capability: string, args: Record<string, unknown>): Promise<any> =>
     ((await host.invoke(capability, args)) as { result?: unknown })?.result;
   let failure = "";
@@ -372,7 +373,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     failure = error instanceof Error ? error.message : String(error);
     log(`FAILED: ${failure}`);
   }
-  const sessions = host.sessions.list({ runId: host.runId });
+  const sessions = turnSessions(host.sessions.list(), usageBefore, host.runId, started);
   const summary = writeRunLogs({
     logDir: logs,
     storeRoot: path.join(state, "host", "sessions"),
@@ -380,6 +381,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     model: settings.bigModel,
     effort: settings.bigEffort,
     started,
+    since: started,
     error: failure,
     requiredSkills: [],
     marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, request: options.request, route, reply, sections: finished?.sections ?? [], shots },

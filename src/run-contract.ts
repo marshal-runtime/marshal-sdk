@@ -3,7 +3,37 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { SessionRecord } from "./session-store.js";
+import type { SessionRecord, SessionUsage } from "./session-store.js";
+
+/**
+ * The sessions one turn on a reopened state used: the ones this host run made, plus earlier sessions it resumed
+ * (Page Studio keeps one fast-hands session per page), each with only the usage it added during the turn.
+ * `before` is every session's usage when the host opened the state.
+ */
+export function turnSessions(
+  sessions: readonly SessionRecord[],
+  before: ReadonlyMap<string, SessionUsage>,
+  runId: string,
+  started: number,
+): SessionRecord[] {
+  return sessions
+    .filter((session) => session.runId === runId || Date.parse(session.updatedAt) >= started)
+    .map((session) => {
+      const earlier = before.get(session.id);
+      if (!earlier) return session;
+      const usage: SessionUsage = {
+        inputTokens: session.usage.inputTokens - earlier.inputTokens,
+        outputTokens: session.usage.outputTokens - earlier.outputTokens,
+        cacheReadTokens: session.usage.cacheReadTokens - earlier.cacheReadTokens,
+        cacheWriteTokens: session.usage.cacheWriteTokens - earlier.cacheWriteTokens,
+        costUsd: session.usage.costUsd - earlier.costUsd,
+        turns: session.usage.turns - earlier.turns,
+        ...(session.usage.modelTurns !== undefined ? { modelTurns: session.usage.modelTurns - (earlier.modelTurns ?? 0) } : {}),
+      };
+      return { ...session, usage };
+    })
+    .filter((session) => session.runId === runId || session.usage.turns > 0 || session.usage.costUsd > 0);
+}
 
 export interface RunLogsInput {
   logDir: string;
@@ -14,6 +44,8 @@ export interface RunLogsInput {
   effort?: string;
   started?: number;
   finished?: number;
+  /** Only events from this time on (ms): a resumed session's earlier turns belong to earlier runs. */
+  since?: number;
   error?: string;
   /** Skills the caller's manifest requires; the ones no session called land in skills_missing. */
   requiredSkills?: readonly string[];
@@ -52,7 +84,7 @@ export function writeRunLogs(input: RunLogsInput): RunSummaryJson {
   const finished = input.finished ?? Date.now();
   const error = input.error ?? "";
   fs.mkdirSync(logDir, { recursive: true });
-  const events = runEvents(storeRoot, sessions);
+  const events = runEvents(storeRoot, sessions, input.since);
   fs.writeFileSync(path.join(logDir, "run.jsonl"), events.map((row) => JSON.stringify(row)).join("\n") + (events.length ? "\n" : ""));
   const results = events.filter((row) => row.type === "result").map(runResult);
   const messageCounts: Record<string, number> = {};
@@ -121,7 +153,7 @@ export function writeRunLogs(input: RunLogsInput): RunSummaryJson {
 }
 
 /** Every session's SDK messages as run.jsonl rows ({...message, type, at, session, seq}), oldest first. */
-export function runEvents(storeRoot: string, sessions: readonly SessionRecord[]): RunLogRow[] {
+export function runEvents(storeRoot: string, sessions: readonly SessionRecord[], since?: number): RunLogRow[] {
   const rows: RunLogRow[] = [];
   for (const session of sessions) {
     const file = path.join(storeRoot, session.id, "events.jsonl");
@@ -139,7 +171,8 @@ export function runEvents(storeRoot: string, sessions: readonly SessionRecord[])
       });
     }
   }
-  return rows.sort((left, right) => left.at - right.at || left.seq - right.seq);
+  const kept = since === undefined ? rows : rows.filter((row) => row.at * 1000 >= since);
+  return kept.sort((left, right) => left.at - right.at || left.seq - right.seq);
 }
 
 /** Skill tool calls in assistant messages: the session's own (subagents false) or its subagents'. */
