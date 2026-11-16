@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activityProfiles, activitySkills, activityWarnings, browserEnv, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { activityProfiles, profileArgument, profileLabel, activitySkills, activityWarnings, browserEnv, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -375,4 +375,30 @@ test("launch fingerprints on the finished activity go into the run record, and a
   const fp = { role: "critic", sha: "ab".repeat(32), pinned: true };
   assert.deepEqual(activityProfiles({ profiles: [fp] }), [fp]);
   assert.deepEqual(activityProfiles({}), []);
+});
+
+test("--profile names the run's agent profile: ids and per-role pairs parse, and the label is the same everywhere", () => {
+  assert.equal(profileLabel(undefined), "marshal");
+  assert.equal(profileArgument("page-studio"), "page-studio");
+  assert.deepEqual(profileArgument("default=marshal,critic=page-studio"), { default: "marshal", critic: "page-studio" });
+  assert.equal(profileLabel({ default: "marshal", critic: "page-studio" }), "default=marshal,critic=page-studio");
+  assert.throws(() => profileArgument("critic="), /--profile takes an id/);
+});
+
+test("a dry run records its profile and every agent's fingerprint in the summary: the default is marshal, a named one differs", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 180_000 }, async () => {
+  const run = async (profile?: string) => {
+    const input = inputFolder();
+    const work = path.dirname(input);
+    const root = path.dirname(work);
+    const summary = await runPage({ input, out: path.join(work, "out"), logs: path.join(root, "page-agent-logs"), state: path.join(root, "state"), extension: PAGE_STUDIO, fake: true, offline: true, ...(profile ? { profile } : {}) });
+    assert.equal(summary.error, "", summary.error);
+    return summary.marshal as { profile: string; profiles: { role: string; profile: string; prompt: string; sha: string }[] };
+  };
+  const plain = await run();
+  assert.equal(plain.profile, "marshal");
+  assert.ok(plain.profiles.length >= 1 && plain.profiles.every((p) => p.profile === "marshal" && p.prompt === "host-default"));
+  const named = await run("page-studio");
+  assert.equal(named.profile, "page-studio");
+  assert.ok(named.profiles.every((p) => p.profile === "page-studio" && p.prompt !== "host-default"));
+  assert.notEqual(plain.profiles[0].sha, named.profiles[0].sha);
 });

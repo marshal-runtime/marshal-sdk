@@ -34,6 +34,8 @@ export interface PageRunOptions {
   /** More extensions next to Page Studio (a brand-data provider). Default: $MARSHAL_SDK_EXTENSIONS, else the ones this package bundles. */
   extensions?: readonly string[];
   depth?: PageDepth;
+  /** Page Studio agent profile: an id ("marshal" by default, "page-studio", or one in its data folder), or an id per role. */
+  profile?: string | Record<string, string>;
   model?: string;
   effort?: string;
   /** Page Studio's fast model for small edits (its quickModel). Pinned so local and sandbox runs use the same one. */
@@ -118,7 +120,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     stateRoot: path.join(state, "host"),
     extensions: [{ packageRoot: extension }, ...extraExtensions(options.extensions).map((packageRoot) => ({ packageRoot }))],
     host: options.host ?? { id: "marshal-sdk", kind: "local" },
-    labels: { job: "page-run", depth, ...options.labels },
+    labels: { job: "page-run", depth, profile: profileLabel(options.profile), ...options.labels },
     prompt: runPrompt("page-run", options, {
       purpose: `build one landing page from this run's input pack (depth ${depth})`,
       contract: [
@@ -145,6 +147,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   let shots: unknown[] = [];
   let usedSkills: string[] = [];
   let profiles: unknown[] = [];
+  let profileText = profileLabel(options.profile);
   const warnings: string[] = [];
   let build: PageStudioBuild = {};
   try {
@@ -181,13 +184,14 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     fs.writeFileSync(path.join(logs, "query", "task.md"), idea);
     fs.writeFileSync(
       path.join(logs, "query", "options.json"),
-      JSON.stringify({ capability: "pagestudio.page.create", depth, basedOn: boardId, settings, input, fake: Boolean(options.fake) }, null, 2),
+      JSON.stringify({ capability: "pagestudio.page.create", depth, profile: profileLabel(options.profile), basedOn: boardId, settings, input, fake: Boolean(options.fake) }, null, 2),
     );
     const created = await call("pagestudio.page.create", {
       title: input.productName || input.brandName,
       idea,
       basedOn: boardId,
       depth,
+      ...(options.profile ? { profile: options.profile } : {}),
       ...(options.rounds ? { rounds: options.rounds } : {}),
       ...(options.noLook ? { review: false } : {}),
     });
@@ -198,6 +202,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     reply = String(done.reply ?? "");
     usedSkills = activitySkills(done);
     profiles = activityProfiles(done);
+    profileText = typeof done.profileLabel === "string" ? done.profileLabel : profileText;
     warnings.push(...activityWarnings(done));
     const rendered = await call("pagestudio.render", { pageId });
     const htmlFile = rendered.path ?? rendered.file;
@@ -236,6 +241,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
       boardId,
       pageId,
       pageStudio: build,
+      profile: profileText,
       profiles,
       reply,
       sections: finished?.sections ?? [],
@@ -496,6 +502,25 @@ export async function followActivity(
  */
 export function activitySkills(activity: { skills?: unknown }): string[] {
   return Array.isArray(activity.skills) ? [...new Set(activity.skills.map(String))] : [];
+}
+
+/** A run's profile as one label for its name, labels, summary and timings: "marshal", an id, or "writer=page-studio,default=marshal". */
+export function profileLabel(profile: string | Record<string, string> | undefined): string {
+  if (!profile) return "marshal";
+  if (typeof profile === "string") return profile;
+  const parts = Object.entries(profile).map(([role, id]) => `${role}=${id}`);
+  return parts.length ? parts.join(",") : "marshal";
+}
+
+/** --profile <id> or --profile role=id,role=id (role default sets the rest). */
+export function profileArgument(text: string | undefined): string | Record<string, string> | undefined {
+  if (!text) return undefined;
+  if (!text.includes("=")) return text;
+  return Object.fromEntries(text.split(",").map((pair) => {
+    const [role, id] = pair.split("=").map((x) => x.trim());
+    if (!role || !id) throw new Error(`--profile takes an id, or role=id pairs separated by commas, got ${text}.`);
+    return [role, id];
+  }));
 }
 
 /**
@@ -835,6 +860,7 @@ const USAGE = `marshal-sdk page-run: one Page Studio page from an agent-sandbox 
   --state <dir>      host-private folder outside the work folder                                    (required)
   --extension <dir>  Page Studio's built package (default: $MARSHAL_SDK_PAGE_STUDIO, else the bundled one)
   --depth <quick|single|deep>  (default single)   --rounds <1-4>   --idea <text | @file>
+  --profile <id | role=id,…>  (default marshal: the host's own prompt and tools; page-studio, or one of Page Studio's data folder; roles: planner writer reviewer critic fixer picture-look default)
   --model <id>  --effort <low|medium|high|xhigh|max>   --quick-model <id>   --required-skill <name> (repeatable)
   --kit <brain,memory,sessions>  kit parts on the host (default: $MARSHAL_SDK_KIT, else none)
   --publish-sessions <team|email,...>  publish the run's sessions to the team Brain's session index, for the team or
@@ -894,6 +920,7 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
     state: required("state"),
     depth,
     env,
+    ...(profileArgument(one("profile")) ? { profile: profileArgument(one("profile"))! } : {}),
     ...(one("workspace") ? { workspace: one("workspace")! } : {}),
     ...(one("extension") ? { extension: one("extension")! } : {}),
     ...(one("model") ? { model: one("model")! } : {}),
