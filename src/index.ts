@@ -78,6 +78,20 @@ export {
   type ResolvedAgent,
   type ResolvedProfile,
 } from "./agent-entries.js";
+export {
+  composePromptLayers,
+  layerRef,
+  LAYER_SEPARATOR,
+  parseLayerRef,
+  PromptLayerError,
+  readExtensionPromptLayers,
+  readPromptLayer,
+  resolvePromptLayers,
+  type ComposedLayer,
+  type ExtensionPromptLayers,
+  type PromptLayerEntry,
+  type PromptLayerSources,
+} from "./prompt-layers.js";
 export { parseRoutineFile, routineAutomations, RoutineDefinitionSchema, type ParsedRoutine, type RoutineDefinition } from "./routine-file.js";
 export {
   createDecisionsProvider,

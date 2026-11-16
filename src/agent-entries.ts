@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { AgentLaunchRequest } from "./agent-port.js";
 import { DISABLED_NATIVE_TOOLS } from "./native-tools.js";
+import { composePromptLayers, parseLayerRef, resolvePromptLayers, type PromptLayerSources } from "./prompt-layers.js";
 
 /**
  * Agent entries an extension declares (`contributes.agents`): a whole agent run defined by the package, so a host can
@@ -15,6 +16,7 @@ import { DISABLED_NATIVE_TOOLS } from "./native-tools.js";
 
 const ENTRY_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const IDENTITY = /^@?[a-z0-9][a-z0-9._-]{0,63}(\/[a-z0-9][a-z0-9._-]{0,63})?$/;
+const LAYER_REF = /^[^#\s]{1,130}#[a-z0-9][a-z0-9._-]{0,63}$/;
 const SKILL_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -34,8 +36,13 @@ export type OutputKind = (typeof OUTPUT_KINDS)[number];
 
 /** A profile as the manifest states it. */
 export interface DeclaredProfile {
-  /** Package-relative file holding the system prompt. */
-  prompt: string;
+  /** Package-relative file holding the system prompt (after the layers, when `layers` is given). Required unless `layers` is. */
+  prompt?: string;
+  /**
+   * Prompt layers (`contributes.promptLayers` of extensions in scope), named `<identity>#<id>`, composed in this order
+   * ahead of `prompt`. A persona's soul and shared rules are layers several profiles list instead of embedding.
+   */
+  layers?: string[];
   /** replace: the file is the whole system prompt; append: it is added after the host's. Default replace. */
   promptMode?: PromptMode;
   model?: string;
@@ -90,7 +97,10 @@ export interface ResolvedProfile {
   extension: string;
   extensionVersion: string;
   agent: string;
+  /** The composed system prompt: the layers in order, then the profile's own file. */
   prompt: string;
+  /** The layers composed into `prompt`, in order (absent when the profile lists none). */
+  layers?: { ref: string; version: string; sha256: string }[];
   promptMode: PromptMode;
   model?: string;
   effort?: string;
@@ -149,6 +159,8 @@ export function resolveAgent(
   packageRoot: string,
   agentId: string,
   overrides: { model?: string; effort?: string } = {},
+  /** Where to find the packages that contribute the profile's layers (the agent's own package is always found). */
+  layerSources?: PromptLayerSources,
 ): ResolvedAgent {
   const declared = readExtensionAgents(packageRoot);
   const entry = declared.agents.find((agent) => agent.id === agentId);
@@ -156,9 +168,17 @@ export function resolveAgent(
     const known = declared.agents.map((agent) => agent.id).join(", ") || "none";
     return fail(`${declared.identity} has no agent "${agentId}" (it declares: ${known}).`);
   }
-  const prompt = readPackageFile(declared.packageRoot, entry.profile.prompt, `${declared.identity}: agent "${entry.id}" prompt`);
   const declaredProfile = entry.profile;
   const extensions = [declared.identity, ...(declaredProfile.extensions ?? []).filter((id) => id !== declared.identity)];
+  const own = declaredProfile.prompt === undefined ? undefined : readPackageFile(declared.packageRoot, declaredProfile.prompt, `${declared.identity}: agent "${entry.id}" prompt`);
+  const layers = declaredProfile.layers?.length
+    ? resolvePromptLayers(
+        declaredProfile.layers,
+        (identity) => (identity === declared.identity ? declared.packageRoot : typeof layerSources === "function" ? layerSources(identity) : layerSources?.[identity]),
+        extensions,
+      )
+    : undefined;
+  const prompt = layers ? composePromptLayers(layers, own) : (own as string);
   const model = overrides.model ?? declaredProfile.model;
   const effort = overrides.effort ?? declaredProfile.effort;
   if (effort !== undefined && !(EFFORTS as readonly string[]).includes(effort)) fail(`effort "${effort}" is not one of ${EFFORTS.join(", ")}.`);
@@ -167,6 +187,7 @@ export function resolveAgent(
     extensionVersion: declared.version,
     agent: entry.id,
     prompt,
+    ...(layers ? { layers: layers.map(({ ref, version, sha256 }) => ({ ref, version, sha256 })) } : {}),
     promptMode: declaredProfile.promptMode ?? "replace",
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
@@ -189,6 +210,8 @@ export function profileFingerprint(profile: ResolvedProfile): string {
     extensionVersion: profile.extensionVersion,
     agent: profile.agent,
     prompt: createHash("sha256").update(profile.prompt).digest("hex"),
+    // Only a profile with layers carries this key, so the fingerprint of one without is what it always was.
+    ...(profile.layers ? { layers: profile.layers.map(({ ref, version, sha256 }) => [ref, version, sha256]) } : {}),
     promptMode: profile.promptMode,
     model: profile.model ?? null,
     effort: profile.effort ?? null,
@@ -295,10 +318,13 @@ function parseEntry(identity: string, root: string, value: unknown): AgentEntry 
   const profileRaw = raw.profile;
   if (!profileRaw || typeof profileRaw !== "object" || Array.isArray(profileRaw)) return fail(`${where} needs a profile.`);
   const p = profileRaw as Record<string, unknown>;
-  const known = new Set(["prompt", "promptMode", "model", "effort", "extensions", "skills", "nativeTools", "mcpServers", "context", "limits"]);
+  const known = new Set(["prompt", "layers", "promptMode", "model", "effort", "extensions", "skills", "nativeTools", "mcpServers", "context", "limits"]);
   for (const key of Object.keys(p)) if (!known.has(key)) fail(`${where}: profile field "${key}" is unknown${key === "tools" ? ' (capabilities come from "extensions", built-ins from "nativeTools")' : ""}.`);
-  const prompt = String(p.prompt ?? "");
-  checkPackagePath(root, prompt, `${where} prompt`);
+  const layers = list(p.layers, LAYER_REF, `${where}: layers`);
+  for (const ref of layers ?? []) parseLayerRef(ref);
+  if (p.prompt === undefined && !layers?.length) fail(`${where}: a profile needs a prompt file or prompt layers.`);
+  const prompt = p.prompt === undefined ? undefined : String(p.prompt);
+  if (prompt !== undefined) checkPackagePath(root, prompt, `${where} prompt`);
   if (p.promptMode !== undefined && p.promptMode !== "replace" && p.promptMode !== "append") fail(`${where}: promptMode must be "replace" or "append".`);
   if (p.model !== undefined && (typeof p.model !== "string" || !p.model.trim() || p.model.length > 256)) fail(`${where}: model must be a model id.`);
   if (p.effort !== undefined && !(EFFORTS as readonly unknown[]).includes(p.effort)) fail(`${where}: effort must be one of ${EFFORTS.join(", ")}.`);
@@ -327,7 +353,8 @@ function parseEntry(identity: string, root: string, value: unknown): AgentEntry 
     title: typeof raw.title === "string" && raw.title.trim() ? raw.title.trim().slice(0, 200) : id,
     description: typeof raw.description === "string" ? raw.description.slice(0, 2000) : "",
     profile: {
-      prompt,
+      ...(prompt !== undefined ? { prompt } : {}),
+      ...(layers ? { layers } : {}),
       ...(p.promptMode ? { promptMode: p.promptMode as PromptMode } : {}),
       ...(typeof p.model === "string" ? { model: p.model.trim() } : {}),
       ...(p.effort ? { effort: p.effort as DeclaredProfile["effort"] } : {}),
