@@ -408,6 +408,7 @@ const RECORD_OUTPUT = {
     alwaysOn: { type: "boolean" },
     links: LINKS,
   },
+  additionalProperties: false,
 } as const;
 
 const MEMORY_TOOLS = {
@@ -427,7 +428,7 @@ const MEMORY_TOOLS = {
         alwaysOn: { type: "boolean" },
       },
     },
-    output: { type: "object", properties: { success: { type: "boolean" }, memory: RECORD_OUTPUT } },
+    output: { type: "object", properties: { success: { type: "boolean" }, memory: RECORD_OUTPUT }, additionalProperties: false },
   },
   recall: {
     title: "Recall memories",
@@ -442,13 +443,13 @@ const MEMORY_TOOLS = {
         limit: { type: "integer", minimum: 1, maximum: 50 },
       },
     },
-    output: { type: "object", properties: { success: { type: "boolean" }, scopes: { type: "array", items: { type: "string" } }, memories: { type: "array", items: RECORD_OUTPUT } } },
+    output: { type: "object", properties: { success: { type: "boolean" }, scopes: { type: "array", items: { type: "string" } }, memories: { type: "array", items: RECORD_OUTPUT } }, additionalProperties: false },
   },
   linkMemory: {
     title: "Link a memory",
     description: "Add edges from a memory to what it is about (graph nodes, files, sessions, people); `replace: true` makes these its only links.",
     input: { type: "object", required: ["id", "links"], properties: { id: { type: "string", minLength: 1, maxLength: 200 }, links: LINKS, replace: { type: "boolean" } } },
-    output: { type: "object", properties: { success: { type: "boolean" }, memory: RECORD_OUTPUT } },
+    output: { type: "object", properties: { success: { type: "boolean" }, memory: RECORD_OUTPUT }, additionalProperties: false },
   },
   updateMemory: {
     title: "Update a memory",
@@ -458,13 +459,13 @@ const MEMORY_TOOLS = {
       required: ["id"],
       properties: { id: { type: "string", minLength: 1, maxLength: 200 }, fact: { type: "string", maxLength: 4000 }, category: { enum: [...MEMORY_CATEGORIES] }, alwaysOn: { type: "boolean" } },
     },
-    output: { type: "object", properties: { success: { type: "boolean" }, memory: RECORD_OUTPUT } },
+    output: { type: "object", properties: { success: { type: "boolean" }, memory: RECORD_OUTPUT }, additionalProperties: false },
   },
   forget: {
     title: "Forget a memory",
     description: "Delete a memory node by id (from recall or the memory block).",
     input: { type: "object", required: ["id"], properties: { id: { type: "string", minLength: 1, maxLength: 200 } } },
-    output: { type: "object", properties: { success: { type: "boolean" }, error: { type: "string" } } },
+    output: { type: "object", properties: { success: { type: "boolean" }, error: { type: "string" } }, additionalProperties: false },
   },
 } as const;
 
