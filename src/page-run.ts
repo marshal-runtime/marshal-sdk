@@ -143,6 +143,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   let finished: FinishedPage | undefined;
   let reply = "";
   let shots: unknown[] = [];
+  let usedSkills: string[] = [];
   const warnings: string[] = [];
   let build: PageStudioBuild = {};
   try {
@@ -194,6 +195,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     log(`page ${pageId}, activity ${created.activity.id}`);
     const done = await followActivity(call, created.activity.id, (step) => log(`step: ${step} (${host.agents.list().length} sessions so far)`));
     reply = String(done.reply ?? "");
+    usedSkills = activitySkills(done);
     warnings.push(...activityWarnings(done));
     const rendered = await call("pagestudio.render", { pageId });
     const htmlFile = rendered.path ?? rendered.file;
@@ -223,6 +225,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     error: failure,
     requiredSkills: options.requiredSkills ?? [],
     loadedSkills: build.skills ?? [],
+    usedSkills,
     marshal: {
       runId: host.runId,
       engine: "page-studio",
@@ -360,6 +363,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   let route: unknown;
   let shots: unknown[] = [];
   let shotsError: string | undefined;
+  let usedSkills: string[] = [];
   const editWarnings: string[] = [];
   let build: PageStudioBuild = {};
   try {
@@ -377,6 +381,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     const done = await followActivity(call, activityId);
     reply = String(done.reply ?? "");
     route = done.route ?? done.tier ?? done.routedBy;
+    usedSkills = activitySkills(done);
     editWarnings.push(...activityWarnings(done));
     const rendered = await call("pagestudio.render", { pageId });
     finished = finishPage(fs.readFileSync(rendered.path ?? rendered.file, "utf8"), { libraryRoot: path.join(studioDir, "library"), outDir: out });
@@ -401,7 +406,8 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     since: started,
     error: failure,
     requiredSkills: [],
-    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, request: options.request, route, reply, sections: finished?.sections ?? [], shots, ...(editWarnings.length || shotsError ? { warnings: [...editWarnings, ...(shotsError ? [shotsError] : [])] } : {}) },
+    usedSkills,
+    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, request: options.request, route, reply, skills: usedSkills, sections: finished?.sections ?? [], shots, ...(editWarnings.length || shotsError ? { warnings: [...editWarnings, ...(shotsError ? [shotsError] : [])] } : {}) },
   });
   if (record) {
     writePageRunRecord(state, { ...record, edits: [...(record.edits ?? []), { at: new Date().toISOString(), request: options.request, runId: host.runId, ...(failure ? { error: failure } : {}) }] });
@@ -477,6 +483,14 @@ export async function followActivity(
     if (activity?.error) throw new Error(`Page Studio stopped: ${activity.error}`);
     if (activity?.doneAt) return activity;
   }
+}
+
+/**
+ * The skills Page Studio put into this activity's prompts (activity.skills, Page Studio f1a9260 on). Page Studio pastes
+ * skills into its protocols instead of calling the Skill tool, so Skill calls alone report none (900008: skills_used []).
+ */
+export function activitySkills(activity: { skills?: unknown }): string[] {
+  return Array.isArray(activity.skills) ? [...new Set(activity.skills.map(String))] : [];
 }
 
 /** What Page Studio's finished activity warns about (skipped critic rounds and the like), each logged once. */

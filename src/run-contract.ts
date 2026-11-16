@@ -51,6 +51,8 @@ export interface RunLogsInput {
   requiredSkills?: readonly string[];
   /** Skills an engine loads into its own prompts (Page Studio): required ones it loads are not missing. */
   loadedSkills?: readonly string[];
+  /** Skills an engine reports it put into this run's prompts (Page Studio's activity.skills): they count as used. */
+  usedSkills?: readonly string[];
   launchIssues?: readonly string[];
   marshal?: Record<string, unknown>;
 }
@@ -94,7 +96,7 @@ export function writeRunLogs(input: RunLogsInput): RunSummaryJson {
   const skills = [
     ...new Set(events.filter((row) => row.type === "system" && row.subtype === "init").flatMap((row) => (Array.isArray(row.skills) ? row.skills.map(String) : []))),
   ];
-  const used = skillCalls(events, false);
+  const used = [...new Set([...skillCalls(events, false), ...(input.usedSkills ?? [])])];
   const subagentUsed = skillCalls(events, true);
   const required = [...(input.requiredSkills ?? [])];
   const usage = sessions.reduce(

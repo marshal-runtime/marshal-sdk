@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activityWarnings, browserEnv, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { activitySkills, activityWarnings, browserEnv, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -211,6 +211,26 @@ test("a required skill Page Studio loads into its own prompts is not reported mi
 
   assert.deepEqual(summary.skills_used, [], "used still means a Skill tool call");
   assert.deepEqual(summary.skills_missing, ["page-builder-qa"]);
+});
+
+test("skills Page Studio reports it put into the activity's prompts (activity.skills) count as used", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "page-run-used-"));
+  const store = new FileSessionStore(path.join(root, "sessions"), { runId: "r1", host: { id: "t", kind: "local" } });
+  store.create({ title: "writer", runtime: "claude", model: "m", native: { kind: "claude", cwd: root }, labels: {} });
+  const used = activitySkills({ skills: ["lp-roles", "lp-copywriting", "lp-design", "lp-roles", "lp-review"] });
+  assert.deepEqual(used, ["lp-roles", "lp-copywriting", "lp-design", "lp-review"]);
+  assert.deepEqual(activitySkills({}), [], "Page Studio before f1a9260 reports none");
+
+  const summary = writeRunLogs({
+    logDir: path.join(root, "logs"),
+    storeRoot: path.join(root, "sessions"),
+    sessions: store.list({ runId: "r1" }),
+    requiredSkills: ["lp-design", "lp-visual-world"],
+    usedSkills: used,
+  });
+
+  assert.deepEqual(summary.skills_used, used);
+  assert.deepEqual(summary.skills_missing, ["lp-visual-world"]);
 });
 
 test("Page Studio's skipped critic rounds and failed steps reach the run's warnings once each", () => {
