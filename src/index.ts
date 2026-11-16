@@ -18,6 +18,9 @@ export {
 export type { RuntimePermissionHandler, RuntimePermissionRequest, RuntimePermissionResult } from "./providers.js";
 export {
   ClaudeAgentPort,
+  mergeLaunchOptions,
+  systemPromptText,
+  type LiveProcessOptions,
   type AgentLaunchOptions,
   type AgentLaunchRequest,
   type AgentPortOptions,

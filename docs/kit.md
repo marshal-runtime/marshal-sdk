@@ -514,11 +514,43 @@ these except `cwd`, `disallowedTools` and `mcpServers` runs on the Claude Agent 
 **Turns.** `usage.turns` counts Marshal turns. `usage.modelTurns` sums the SDK's own `num_turns` (model round trips),
 and summaries show it.
 
-Hooks and the spawner are functions: they live in the launching process only. A session that a later run of the host
-adopts runs without any launch options; the port does not store them.
+**The launch's own prompt** goes to the Agent SDK as `{type: "custom", prompt, snapshot: false}`. Recorded once (the
+SDK's default), a resumed or forked session keeps the prompt of its first turn, so a fork of a chat would run on the
+chat's prompt instead of its own. The host's prompt (no `systemPrompt` on the launch) stays a plain string. Other
+providers read the text through `systemPromptText`.
 
-**Not built:** warm live processes (one Claude Code process per session across turns, in streaming-input mode). Every
-turn still starts its own process.
+**Host policy on every turn (`launchOptionsFor`).** Hooks and the spawner are functions: they live in the launching
+process only, and the port does not store them. A host that must keep a policy across restarts (a tool gate, the remote
+spawner, a proxy env) passes `launchOptionsFor(session)` to the port. It is read at every turn, including turns of a
+session adopted from an earlier run of the host, and merged with the launch's own:
+
+- hooks of both run, per event, the host's first;
+- `disallowedTools` is the union;
+- `env`, `mcpServers` and `extraArgs` merge key by key, and the launch wins;
+- any other option the launch sets wins.
+
+A throw fails the turn, so a session never runs without its host's policy. Without `launchOptionsFor`, an adopted session
+runs with the host's defaults only, as before.
+
+**Live processes (`live`, off by default).** `new ClaudeAgentPort({..., live: {idleSeconds, maxLive, maxTurns}})` keeps
+one Claude Code process per session between its turns (Agent SDK streaming input). Each turn pushes one user message, and
+the turn still ends at its `result`. The process closes:
+
+- after `idleSeconds` idle (default 900);
+- when a new one is needed and `maxLive` are open: the least recently used idle one goes (default 4);
+- after `maxTurns` turns (default 20);
+- when the turn's options change: model, effort, prompt, cwd, env, tools, limits, MCP server names, or the hook events
+  and counts;
+- on cancel, on interrupt and at `dispose`.
+
+The next turn resumes the session in a new process. A live process keeps the hooks, spawner and MCP servers it started
+with: hooks that read per-turn state should read it through the session, not a fresh closure per turn. A fresh closure
+of the same shape does not restart the process.
+
+Cost: streaming input reports a running `total_cost_usd` per process, so a live turn records the difference from the
+previous result; `usage` and `num_turns` are already per turn. `maxBudgetUsd` counts the whole process. Live mode applies
+to Claude sessions only (`runtimeId` claude), and on a provider host a live turn always goes to the Claude Agent SDK, not
+the Claude client (`agentSdkOnly`). `port.liveSessions()` lists the sessions with a live process.
 
 Tests: `test/launch-options.test.ts`, with a fake backend:
 
@@ -527,3 +559,14 @@ Tests: `test/launch-options.test.ts`, with a fake backend:
 - an unchanged plain launch, and `hostMcpServers: false`;
 - the fork point on the first turn only;
 - `structuredOutput`.
+
+`test/live-process.test.ts`, with a fake streaming backend:
+
+- one process for three turns, and per-turn cost from running totals;
+- idle close, `maxLive` eviction (least recently used), recycling after `maxTurns`, a new process on a changed model,
+  and none for fresh hook closures;
+- interrupt and cancel close the process;
+- Claude only, and routed to the Agent SDK;
+- `launchOptionsFor`: an adopted session after a simulated restart still runs the host's deny gate, and the control
+  without it runs ungated; merge rules; a throw fails the turn;
+- the launch prompt's `snapshot: false` on a fork's first turn and later turns; other providers read its text.
