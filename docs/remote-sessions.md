@@ -31,8 +31,9 @@ direct tools route their runtime calls the same way.
 Tool names are the local ones (`mcp__marshal__runtime_exec`, `marshal.tool.*`), so the prompt is the same local or
 remote.
 
-The host opens the remote connection at the session's first runtime call and closes it when the turn settles, the live
-process closes or the host is disposed; a changed `remoteRuntime` value replaces it.
+The host opens one remote connection (one child, e.g. one ssh) per session at its first runtime call and keeps it across
+turns. It closes with the session: the live process closes, the host is disposed, or no call came for 10 minutes while
+no turn ran (the next call opens a new one). A changed `remoteRuntime` value replaces it.
 
 ## What the embedder does
 
