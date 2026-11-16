@@ -47,6 +47,23 @@ test("readSandboxInput maps agent-sandbox's input folder to a brand, a product p
   assert.match(read.idea, /^A page for tired parents\.\n\nThe positioning this page sells:\n## Positioning/);
 });
 
+test("without operator-request.md the request comes from the brief's content_guidelines (900011 lost its 'full of life' ask)", () => {
+  const input = inputFolder();
+  fs.rmSync(path.join(input, "page", "operator-request.md"));
+  const brief = JSON.parse(fs.readFileSync(path.join(input, "page", "brief.json"), "utf8"));
+  brief.positioning.content_guidelines = "  make this page full of life, use effects and animation  \n";
+  fs.writeFileSync(path.join(input, "page", "brief.json"), JSON.stringify(brief));
+  assert.match(readSandboxInput(input).idea, /^make this page full of life, use effects and animation\n\nThe positioning this page sells:\n## Positioning/);
+
+  delete brief.positioning.content_guidelines;
+  brief.content_guidelines = "Loud and playful.";
+  fs.writeFileSync(path.join(input, "page", "brief.json"), JSON.stringify(brief));
+  assert.match(readSandboxInput(input).idea, /^Loud and playful\.\n\nThe positioning/, "a top-level content_guidelines also counts");
+
+  fs.writeFileSync(path.join(input, "page", "operator-request.md"), "A page for tired parents.\n");
+  assert.match(readSandboxInput(input).idea, /^A page for tired parents\./, "operator-request.md still wins");
+});
+
 test("readSandboxInput refuses a folder without the brief's product", () => {
   const input = inputFolder();
   fs.rmSync(path.join(input, "products", "321"), { recursive: true });

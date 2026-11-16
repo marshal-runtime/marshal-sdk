@@ -560,7 +560,10 @@ export function readSandboxInput(inputDir: string): SandboxInput {
       domain = "";
     }
   }
-  const request = text("page/operator-request.md");
+  // agent-sandbox carries the person's request in positioning.content_guidelines when it writes no
+  // operator-request.md; 900011 (782) was built without it ("full of life, effects") and lost on exactly that.
+  const guideline = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+  const request = text("page/operator-request.md") || guideline(brief.positioning?.content_guidelines) || guideline(brief.content_guidelines);
   const positioning = typeof brief.positioning?.brief_markdown === "string" ? brief.positioning.brief_markdown.trim() : "";
   const idea = [request, positioning && `The positioning this page sells:\n${positioning}`].filter(Boolean).join("\n\n");
   return {
