@@ -627,14 +627,19 @@ async function answersPipe(chrome: string, timeoutMs = 10_000): Promise<boolean>
 }
 
 /**
- * The flags every Chrome this host starts needs. --no-sandbox with MARSHAL_SDK_CHROME_NO_SANDBOX=1: Chrome refuses
- * to run as root, and a container without user namespaces has no sandbox. --disable-dev-shm-usage on Linux:
- * containers often have a 64 MB /dev/shm, on which Chrome dies mid-render (Coder builds 900005/900006 lost their
- * look rounds to "the browser closed").
+ * The flags every Chrome this host starts needs. --no-sandbox as root on Linux or with MARSHAL_SDK_CHROME_NO_SANDBOX=1:
+ * Chrome refuses to run as root with its sandbox (Coder runs as root: "look: No Chrome"), and a container without user
+ * namespaces has no sandbox. --disable-dev-shm-usage on Linux: containers often have a 64 MB /dev/shm, on which Chrome
+ * dies mid-render (Coder builds 900005/900006 lost their look rounds to "the browser closed").
  */
-export function chromeFlags(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string[] {
+export function chromeFlags(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  uid: number | undefined = process.getuid?.(),
+): string[] {
   if (platform === "win32") return [];
-  return [...(env.MARSHAL_SDK_CHROME_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...(platform === "linux" ? ["--disable-dev-shm-usage"] : [])];
+  const noSandbox = env.MARSHAL_SDK_CHROME_NO_SANDBOX === "1" || (platform === "linux" && uid === 0);
+  return [...(noSandbox ? ["--no-sandbox"] : []), ...(platform === "linux" ? ["--disable-dev-shm-usage"] : [])];
 }
 
 /** Page Studio starts Chrome itself, so it gets a wrapper script that adds chromeFlags() when there are any. */

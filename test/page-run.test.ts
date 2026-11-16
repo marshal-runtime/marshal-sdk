@@ -249,7 +249,9 @@ test("single and deep pages refuse to start without a usable browser unless --no
 
 test("Chrome gets --disable-dev-shm-usage on Linux and --no-sandbox when asked, also through Page Studio's wrapper", () => {
   assert.deepEqual(chromeFlags("linux", { MARSHAL_SDK_CHROME_NO_SANDBOX: "1" }), ["--no-sandbox", "--disable-dev-shm-usage"]);
-  assert.deepEqual(chromeFlags("linux", {}), ["--disable-dev-shm-usage"]);
+  assert.deepEqual(chromeFlags("linux", {}, 1000), ["--disable-dev-shm-usage"]);
+  assert.deepEqual(chromeFlags("linux", {}, 0), ["--no-sandbox", "--disable-dev-shm-usage"], "root on Linux (Coder, E2B) needs no env var");
+  assert.deepEqual(chromeFlags("darwin", {}, 0), []);
   assert.deepEqual(chromeFlags("darwin", {}), []);
   assert.deepEqual(chromeFlags("win32", { MARSHAL_SDK_CHROME_NO_SANDBOX: "1" }), []);
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "chrome-wrapper-"));
