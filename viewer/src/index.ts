@@ -8,7 +8,7 @@ import { gunzipSync } from "node:zlib";
 
 import { VIEW_HTML } from "./generated/view";
 import { configuredReview } from "./review";
-import { cloudHost, configuredClouds, consoleUrl, listEdits, previewHtml, pushToCloud, readLinks, readRunJson, writeLink } from "./cloud";
+import { cloudHost, configuredClouds, rootOfState, consoleUrl, listEdits, previewHtml, pushToCloud, readLinks, readRunJson, writeLink } from "./cloud";
 import { configuredLinks, folderHost, linkedHost, linkProblem, LOCAL_HOST_ID, type Host } from "./hosts";
 import { expandHome } from "./store";
 
@@ -84,12 +84,14 @@ export function createExtension(context: Context) {
   let cloudHosts: Map<string, ReturnType<typeof cloudHost>> | undefined;
   // Agent-sandbox runs announce themselves in the org's session index ("agent-sandbox run <id> · state <gs://…>"); every linked
   // kit host that searches it adds those runs' output roots to the cloud hosts' listing.
+  // State locations a search through the org index turned up; the cloud hosts list them on their next refresh.
+  const learned = new Set<string>();
   const fromIndex = async (): Promise<string[]> => {
-    const roots: string[] = [];
+    const roots: string[] = [...learned];
     for (const host of linked.values()) {
       for (const hit of host.shared ? await host.shared("agent-sandbox run", 30) : []) {
-        const root = hit.origin?.stateLocation?.replace(/\/+$/, "").replace(/\/agent\/marshal-state$/, "");
-        if (root && /^gs:\/\/[^/]+\/.+/.test(root) && !roots.includes(root)) roots.push(root);
+        const location = hit.origin?.stateLocation?.replace(/\/+$/, "");
+        if (location && rootOfState(location) && !roots.includes(location)) roots.push(location);
       }
     }
     return roots;
@@ -125,8 +127,13 @@ export function createExtension(context: Context) {
         }
         if (seen.has(hit.sessionId)) continue;
         seen.add(hit.sessionId);
-        const outputRoot = hit.origin?.stateLocation?.replace(/\/+$/, "").replace(/\/agent\/marshal-state$/, "");
+        const outputRoot = hit.origin?.stateLocation ? rootOfState(hit.origin.stateLocation)?.root : undefined;
         let inCloud: { hostId: string; runId: string } | undefined;
+        const location = hit.origin?.stateLocation?.replace(/\/+$/, "");
+        if (location && rootOfState(location) && !learned.has(location)) {
+          learned.add(location);
+          for (const cloudHostEntry of cloud().values()) void cloudHostEntry.cloudRuns(true).catch(() => undefined);
+        }
         for (const [id, cloudHostEntry] of outputRoot ? cloud() : []) {
           const run = (await cloudHostEntry.cloudRuns(false).catch(() => [])).find((entry) => entry.outputRoot === outputRoot);
           if (run) inCloud = { hostId: id, runId: hit.origin?.runId ?? run.run?.runId ?? "" };

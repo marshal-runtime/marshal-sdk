@@ -47,6 +47,21 @@ export interface CloudRun {
 }
 
 const STATE = "agent/marshal-state";
+/**
+ * Where a root keeps its Marshal state. A run keeps it at <outputRoot>/agent/marshal-state; an agent-sandbox edit
+ * conversation (page-edit-conversations/<id>) keeps its own at <root>/marshal-state. Roots learnt from a state location
+ * the org's session index named are remembered here.
+ */
+const stateDirs = new Map<string, string>();
+export const stateOf = (root: string) => stateDirs.get(trim(root)) ?? `${trim(root)}/${STATE}`;
+/** The root a state location belongs to, and whether it is an edit conversation's own state. */
+export function rootOfState(stateLocation: string): { root: string; conversation: boolean } | null {
+  const state = trim(stateLocation);
+  if (!/^gs:\/\/[^/]+\/.+/.test(state)) return null;
+  if (state.endsWith(`/${STATE}`)) return { root: state.slice(0, -`/${STATE}`.length), conversation: false };
+  if (state.endsWith("/marshal-state")) return { root: state.slice(0, -"/marshal-state".length), conversation: true };
+  return null;
+}
 const EDITS = "agent/edits";
 const HOST_ID = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const SYNC_EVERY_MS = 20_000;
@@ -124,7 +139,12 @@ async function listRoots(config: CloudHostConfig, discovered: readonly string[] 
   for (const root of config.runs ?? []) if (!found.has(root)) found.set(root, true);
   // Runs whose sessions were shared to the org's session index (it names each run's state location); GCS still backs them.
   const bucket = config.uri.slice(0, config.uri.indexOf("/", "gs://".length) + 1);
-  for (const root of discovered) if (root.startsWith(bucket) && !found.has(trim(root))) found.set(trim(root), true);
+  for (const location of discovered) {
+    const known = rootOfState(location);
+    if (!known || !known.root.startsWith(bucket) || found.has(known.root)) continue;
+    if (known.conversation) stateDirs.set(known.root, trim(location));
+    found.set(known.root, true);
+  }
   return [...found.entries()].map(([root, marshal]) => ({ root, marshal })).slice(-MAX_RUNS);
 }
 
@@ -163,7 +183,7 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: (
           const cacheDir = path.join(cacheRoot, safe(root));
           fs.mkdirSync(cacheDir, { recursive: true });
           try {
-            await gcloud(["storage", "rsync", "-r", `${root}/${STATE}`, cacheDir], { timeoutMs: 300_000 });
+            await gcloud(["storage", "rsync", "-r", stateOf(root), cacheDir], { timeoutMs: 300_000 });
           } catch (error) {
             entry.run = { syncError: String((error as Error).message).slice(0, 300) };
           }
@@ -377,12 +397,15 @@ export interface PushResult {
  */
 export interface PushRefused {
   ok: false;
-  reason: "still-running";
+  reason: "still-running" | "edit-conversation";
   message: string;
 }
 
 export async function pushToCloud(input: PushInput): Promise<PushResult | PushRefused> {
   const root = trim(input.outputRoot);
+  if (stateOf(root) !== `${root}/${STATE}`) {
+    return { ok: false, reason: "edit-conversation", message: "This is an edit conversation's own state, not a run: push the page to the run it edits." };
+  }
   // agent-sandbox's runner keeps PAGE_STUDIO_DIR as page-studio/ and the finished page as sandbox-page.html (the
   // baseline its next edit turn diffs against); page-run folders keep it as data/.
   // Decided by where the run keeps its pages, not by page-run.json: the page generator's runs carry a run.json too and
@@ -627,7 +650,7 @@ export async function previewHtml(outputRoot: string, workDir: string): Promise<
 }
 
 export async function readRunJson(outputRoot: string): Promise<Row | undefined> {
-  return readJson(`${trim(outputRoot)}/${STATE}/run.json`);
+  return readJson(`${stateOf(outputRoot)}/run.json`);
 }
 
 export async function listEdits(outputRoot: string): Promise<Row[]> {

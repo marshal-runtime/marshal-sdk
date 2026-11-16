@@ -144,12 +144,23 @@ test("a run found in the org's session index (no pointer) is listed from its sta
   const store = new FileSessionStore(path.join(state, "host", "sessions"), { runId: "run-902", host: { id: "agent-sandbox", kind: "sandbox" } });
   store.update(store.create({ title: "Page Studio · build", runtime: "claude", native: { kind: "claude", cwd: "/ws" } }).id, { state: "idle" });
   fs.writeFileSync(path.join(state, "page-run.json"), JSON.stringify({ runId: "run-902", pageId: PAGE_ID }));
-  const discover = async () => ["gs://dev-bucket/page-generation-runs/902/output", "gs://other-bucket/x/output"];
+  // An agent-sandbox edit conversation keeps its own state at <conversation>/marshal-state, and the index names that.
+  const conversation = path.join(gcs, "dev-bucket", "page-edit-conversations", "7", "marshal-state");
+  const edits = new FileSessionStore(path.join(conversation, "host", "sessions"), { runId: "page-edit-7-1-1", host: { id: "agent-sandbox", kind: "container" } });
+  edits.update(edits.create({ title: "Page Studio fast hands", runtime: "claude", native: { kind: "claude", cwd: "/ws" } }).id, { state: "idle" });
+  fs.writeFileSync(path.join(conversation, "run.json"), JSON.stringify({ schemaVersion: 1, runId: "page-edit-7-1-1", status: "done" }));
+  const discover = async () => ["gs://dev-bucket/page-generation-runs/902/output/agent/marshal-state/", "gs://dev-bucket/page-edit-conversations/7/marshal-state/", "gs://other-bucket/x/output/agent/marshal-state"];
   const host = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot, discover);
   const runs = await host.cloudRuns(true);
   assert.equal(runs.find((run) => run.outputRoot === "gs://dev-bucket/page-generation-runs/902/output")?.run?.runId, "run-902");
   assert.equal(runs.some((run) => run.outputRoot.startsWith("gs://other-bucket")), false);
   assert.equal((await host.sessions("run-902")).length, 1);
+  const conv = runs.find((run) => run.outputRoot === "gs://dev-bucket/page-edit-conversations/7");
+  assert.equal(conv?.run?.runId, "page-edit-7-1-1");
+  assert.equal((await host.sessions("page-edit-7-1-1"))[0]?.title, "Page Studio fast hands");
+  // A page goes back to the run an edit conversation edits, never into the conversation.
+  const refused = await pushToCloud({ outputRoot: "gs://dev-bucket/page-edit-conversations/7", cloudPageId: PAGE_ID, renderedHtml: "<html></html>", pageDoc: {}, studioDir: dir, by: { name: "Omer" }, workDir: path.join(dir, "w"), capture: noChrome });
+  assert.deepEqual([refused.ok, !refused.ok && refused.reason], [false, "edit-conversation"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
