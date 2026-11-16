@@ -61,6 +61,31 @@ function portWith(backend: { query: QueryFn }): { port: ClaudeAgentPort; store: 
   return { port, store, root };
 }
 
+test("a running turn's transcript shows the backend working: eventCount grows and lastEventAt moves (Page Studio big edit)", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const query: QueryFn = () =>
+    (async function* () {
+      yield { type: "system", subtype: "init", session_id: "native-busy" };
+      yield { type: "system", subtype: "thinking_tokens", estimated_tokens: 100 };
+      await gate;
+      yield { type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "done" }] } };
+      yield { type: "result", subtype: "success", is_error: false, result: "done", usage: {} };
+    })();
+  const { port } = portWith({ query });
+  const agent = port.launch({ task: "edit the big page", idempotencyKey: "busy" });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const working = port.transcript(agent.id, 1).agent;
+  assert.equal(working.state, "running");
+  assert.equal(working.eventCount, 2);
+  assert.ok(working.lastEventAt && Date.parse(working.lastEventAt) <= Date.now());
+  release();
+  await port.wait(agent.id);
+  const done = port.transcript(agent.id, 1).agent;
+  assert.equal(done.eventCount, 4);
+  assert.ok(Date.parse(done.lastEventAt!) >= Date.parse(working.lastEventAt!));
+});
+
 test("a turn ends at its result even when the backend's stream never closes (c2-real-2 hero, 900008 critic)", async () => {
   let returned = 0;
   let nextAfterResult = 0;
