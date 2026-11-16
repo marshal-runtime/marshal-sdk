@@ -195,20 +195,9 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     if (created?.ok === false) throw new Error(`Page Studio refused the page (${String(created.code ?? "error")}): ${String(created.error ?? created.message ?? "")}`);
     pageId = created.pageId;
     log(`page ${pageId}, activity ${created.activity.id}`);
-    let step = "";
-    for (;;) {
-      const activity = await call("pagestudio.activity", { id: created.activity.id, wait: true, timeoutMs: 60_000 });
-      if (activity?.step && activity.step !== step) {
-        step = activity.step;
-        log(`step: ${step} (${host.agents.list().length} sessions so far)`);
-      }
-      if (activity?.error) throw new Error(`Page Studio stopped: ${activity.error}`);
-      if (activity?.doneAt) {
-        reply = String(activity.reply ?? "");
-        warnings.push(...activityWarnings(activity));
-        break;
-      }
-    }
+    const done = await followActivity(call, created.activity.id, (step) => log(`step: ${step} (${host.agents.list().length} sessions so far)`));
+    reply = String(done.reply ?? "");
+    warnings.push(...activityWarnings(done));
     const rendered = await call("pagestudio.render", { pageId });
     const htmlFile = rendered.path ?? rendered.file;
     finished = finishPage(fs.readFileSync(htmlFile, "utf8"), { libraryRoot: path.join(studioDir, "library"), outDir: out });
@@ -391,16 +380,10 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     const asked = await call("pagestudio.ask", { pageId, text: options.request });
     const activityId = asked?.activity?.id ?? asked?.id;
     if (!activityId) throw new Error(`pagestudio.ask returned no activity: ${JSON.stringify(asked).slice(0, 300)}`);
-    for (;;) {
-      const activity = await call("pagestudio.activity", { id: activityId, wait: true, timeoutMs: 60_000 });
-      if (activity?.error) throw new Error(`Page Studio stopped: ${activity.error}`);
-      if (activity?.doneAt) {
-        reply = String(activity.reply ?? "");
-        route = activity.route ?? activity.tier ?? activity.routedBy;
-        editWarnings.push(...activityWarnings(activity));
-        break;
-      }
-    }
+    const done = await followActivity(call, activityId);
+    reply = String(done.reply ?? "");
+    route = done.route ?? done.tier ?? done.routedBy;
+    editWarnings.push(...activityWarnings(done));
     const rendered = await call("pagestudio.render", { pageId });
     finished = finishPage(fs.readFileSync(rendered.path ?? rendered.file, "utf8"), { libraryRoot: path.join(studioDir, "library"), outDir: out });
     fs.writeFileSync(path.join(out, "index.html"), finished.html);
@@ -479,6 +462,27 @@ function skillNames(declared: unknown[]): string[] {
   return declared
     .map((entry) => (typeof entry === "string" ? entry : typeof (entry as { name?: unknown })?.name === "string" ? (entry as { name: string }).name : ""))
     .filter(Boolean);
+}
+
+/**
+ * Waits for a Page Studio activity to finish and returns it. An activity that ends in error (a refused step, or a
+ * look round whose browser failed twice: "look failed: …") fails the run with Page Studio's reason.
+ */
+export async function followActivity(
+  call: (capability: string, args: Record<string, unknown>) => Promise<any>,
+  id: string,
+  onStep?: (step: string) => void,
+): Promise<any> {
+  let step = "";
+  for (;;) {
+    const activity = await call("pagestudio.activity", { id, wait: true, timeoutMs: 60_000 });
+    if (activity?.step && activity.step !== step) {
+      step = activity.step;
+      onStep?.(step);
+    }
+    if (activity?.error) throw new Error(`Page Studio stopped: ${activity.error}`);
+    if (activity?.doneAt) return activity;
+  }
 }
 
 /** What Page Studio's finished activity warns about (skipped critic rounds and the like), each logged once. */
