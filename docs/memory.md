@@ -15,7 +15,9 @@ does not define its own; it chooses where memories are stored and which scopes a
 
 ## Prompt
 
-Before each turn the port awaits `prepareTurn`, which reads the session's scopes from the backend. The prompt's memory
+Before each turn the port awaits `prepareTurn`. It reads the backend only for a scope this host has never seen; every
+other scope comes from the host's cache (its own writes update it) and is re-read in the background at most every
+`refreshMs` (default 60 s) to pick up other hosts' writes, so a turn never waits on cloud I/O after a scope's first read. The prompt's memory
 block (`sessionContext.memories`, rendered in the untrusted-memory wrapper) then shows every always-on memory
 (preferences) of the session's scopes, followed by the newest other memories (`promptLimit`, default 20), and a count of
 the rest. `sdkBaseLayer` fills the v2 memory and session-search slots with what the host really provides.
