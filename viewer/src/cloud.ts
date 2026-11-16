@@ -11,10 +11,12 @@
 // (<cache>/<run>/state/sessions, <cache>/<run>/data), so everything the folder host does (runs, sessions,
 // transcripts, telemetry, pages, continue, open in Page Studio) works on it unchanged. Runs from the older pipeline
 // (no marshal-state) are listed too, with their preview, so their pages can be brought into Page Studio to compare.
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "fs";
+import http from "http";
 import os from "os";
 import path from "path";
+import { pathToFileURL } from "url";
 
 import { finishPage } from "../../src/page-finish";
 import { folderHost, type Host } from "./hosts";
@@ -344,6 +346,8 @@ export interface PushInput {
   by: { name?: string; email?: string };
   summary?: string;
   workDir: string;
+  /** Screenshots htmlFile into pngFile at their thumbnail's phone viewport; defaults to a headless Chrome. */
+  capture?: (htmlFile: string, pngFile: string) => Promise<void>;
 }
 
 export interface PushResult {
@@ -356,6 +360,9 @@ export interface PushResult {
   pictures: number;
   missing: string[];
   version: number;
+  /** The new preview/thumbnail.png their run list shows, or null when no Chrome could take it. */
+  thumbnail: string | null;
+  warnings: string[];
 }
 
 /**
@@ -413,6 +420,20 @@ export async function pushToCloud(input: PushInput): Promise<PushResult | PushRe
   const inlineFile = path.join(out, "inline.html");
   fs.writeFileSync(inlineFile, inline.html);
   await gcloud(["storage", "cp", "--content-type=text/html; charset=utf-8", "--cache-control=no-cache", inlineFile, inlineUri], { timeoutMs: 120_000 });
+  // Their run list shows preview/thumbnail.png, which store-manager takes once after the build (agent-sandbox's
+  // CaptureScreenshot of the preview at 393x852); without a new one the list card keeps the page from before the edit.
+  const warnings: string[] = [];
+  const thumbnailUri = `${root}/preview/thumbnail.png`;
+  let thumbnail: string | null = null;
+  try {
+    const png = path.join(out, "thumbnail.png");
+    await (input.capture ?? captureThumbnail)(inlineFile, png);
+    await gcloud(["storage", "cp", thumbnailUri, `${root}/${EDITS}/${stamp}-${who}/thumbnail.before.png`], { timeoutMs: 60_000 }).catch(() => undefined);
+    await gcloud(["storage", "cp", "--content-type=image/png", "--cache-control=no-cache", png, thumbnailUri], { timeoutMs: 60_000 });
+    thumbnail = thumbnailUri;
+  } catch (error) {
+    warnings.push(`The run list's thumbnail was not updated: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   const studio = `${root}/${STATE}/${sandboxLayout ? "page-studio" : "data"}`;
   const doc: Row = { ...input.pageDoc, id: input.cloudPageId };
@@ -459,7 +480,93 @@ export async function pushToCloud(input: PushInput): Promise<PushResult | PushRe
     pictures: finished.assets.length,
     missing: finished.missingAssets,
     version: record.version,
+    thumbnail,
+    warnings,
   };
+}
+
+/** Chrome or Chromium: $MARSHAL_SDK_CHROME, $PAGE_STUDIO_CHROME, else the usual install places (as page-run looks). */
+function findChrome(): string | null {
+  const candidates = [process.env.MARSHAL_SDK_CHROME, process.env.PAGE_STUDIO_CHROME];
+  if (process.platform === "darwin") candidates.push("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium");
+  if (process.platform === "linux") candidates.push("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable");
+  if (process.platform === "win32") {
+    for (const base of [process.env["PROGRAMFILES"], process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA]) {
+      if (base) candidates.push(path.join(base, "Google", "Chrome", "Application", "chrome.exe"));
+    }
+  }
+  return candidates.find((file): file is string => Boolean(file) && fs.existsSync(file!)) ?? null;
+}
+
+/**
+ * Their thumbnail's shape (agent-sandbox services/screenshot: a 393x852 viewport at 1x, load, then 1.5 s). Driven over
+ * DevTools because headless Chrome on a Mac won't make a window narrower than about 500 px, so --window-size=393 lays
+ * the page out wider and crops it.
+ */
+export async function captureThumbnail(htmlFile: string, pngFile: string): Promise<void> {
+  const chrome = findChrome();
+  if (!chrome) throw new Error("no Chrome or Chromium found (set MARSHAL_SDK_CHROME)");
+  if (typeof WebSocket !== "function") throw new Error("this Node has no WebSocket to drive Chrome");
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-thumb-"));
+  const child = spawn(chrome, ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, "--remote-debugging-port=0", "about:blank"], { stdio: "ignore", windowsHide: true });
+  let socket: WebSocket | undefined;
+  const timer = setTimeout(() => child.kill(), 90_000);
+  try {
+    const portFile = path.join(profile, "DevToolsActivePort");
+    for (let tries = 0; !fs.existsSync(portFile) || !fs.readFileSync(portFile, "utf8").includes("\n"); tries++) {
+      if (tries > 150 || child.exitCode !== null) throw new Error("Chrome did not open DevTools");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const port = fs.readFileSync(portFile, "utf8").split("\n")[0]!.trim();
+    const targets = await new Promise<string>((resolve, reject) => {
+      http.get(`http://127.0.0.1:${port}/json/list`, (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => resolve(body));
+      }).on("error", reject);
+    });
+    const page = (JSON.parse(targets) as Array<{ type: string; webSocketDebuggerUrl: string }>).find((target) => target.type === "page");
+    if (!page) throw new Error("Chrome has no page to drive");
+    const ws = new WebSocket(page.webSocketDebuggerUrl);
+    socket = ws;
+    await new Promise((resolve, reject) => {
+      ws.onopen = resolve;
+      ws.onerror = () => reject(new Error("could not reach Chrome's DevTools"));
+    });
+    let next = 0;
+    const pending = new Map<number, { resolve: (value: Row) => void; reject: (error: Error) => void }>();
+    const events = new Map<string, () => void>();
+    ws.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as { id?: number; method?: string; result?: Row; error?: { message: string } };
+      if (message.id !== undefined) {
+        const waiter = pending.get(message.id);
+        pending.delete(message.id);
+        if (message.error) waiter?.reject(new Error(message.error.message));
+        else waiter?.resolve(message.result ?? {});
+      } else if (message.method) events.get(message.method)?.();
+    };
+    const send = (method: string, params: Row = {}) =>
+      new Promise<Row>((resolve, reject) => {
+        const id = ++next;
+        pending.set(id, { resolve, reject });
+        ws.send(JSON.stringify({ id, method, params }));
+      });
+    await send("Emulation.setDeviceMetricsOverride", { width: 393, height: 852, deviceScaleFactor: 1, mobile: false });
+    await send("Page.enable");
+    const loaded = new Promise<void>((resolve) => events.set("Page.loadEventFired", resolve));
+    await send("Page.navigate", { url: pathToFileURL(path.resolve(htmlFile)).href });
+    await loaded;
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const shot = await send("Page.captureScreenshot", { format: "png" });
+    if (typeof shot.data !== "string" || !shot.data) throw new Error("Chrome returned no screenshot");
+    fs.writeFileSync(pngFile, Buffer.from(shot.data, "base64"));
+  } finally {
+    clearTimeout(timer);
+    socket?.close();
+    child.kill();
+    await new Promise((resolve) => (child.exitCode !== null ? resolve(undefined) : child.once("exit", resolve)));
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
 }
 
 // ---- Bring any cloud run's page (also the older pipeline's) into Page Studio as an HTML page ----
