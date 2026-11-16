@@ -132,6 +132,7 @@ const EMPTY_USAGE: SessionUsage = {
 export class FileSessionStore {
   private readonly records = new Map<string, SessionRecord>();
   private readonly counts = new Map<string, number>();
+  private readonly lastEventAt = new Map<string, string>();
 
   constructor(
     readonly root: string,
@@ -255,10 +256,15 @@ export class FileSessionStore {
   appendEvent(id: string, event: unknown): void {
     const count = (this.counts.get(id) ?? 0) + 1;
     this.counts.set(id, count);
-    fs.appendFileSync(
-      path.join(this.root, id, EVENTS_FILE),
-      `${JSON.stringify({ seq: count, at: new Date().toISOString(), event })}\n`,
-    );
+    const at = new Date().toISOString();
+    this.lastEventAt.set(id, at);
+    fs.appendFileSync(path.join(this.root, id, EVENTS_FILE), `${JSON.stringify({ seq: count, at, event })}\n`);
+  }
+
+  /** How far a session's backend has got in this process: events appended and when the latest one came. */
+  activity(id: string): { eventCount: number; lastEventAt?: string } {
+    const lastEventAt = this.lastEventAt.get(id);
+    return { eventCount: this.counts.get(id) ?? 0, ...(lastEventAt ? { lastEventAt } : {}) };
   }
 
   /** Word search over titles, labels and transcripts. A stand-in for the desktop's recall index. */

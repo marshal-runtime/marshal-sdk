@@ -67,6 +67,12 @@ export interface AgentSummary {
   reasoningEffort?: string;
   workspaceName?: string;
   sessionId?: string;
+  /**
+   * Backend events this host recorded for the session, and when the latest came: a caller waiting on a long turn
+   * (Page Studio's big edit) tells a working agent (thinking, tool calls) from a silent one by these.
+   */
+  eventCount?: number;
+  lastEventAt?: string;
   /** modelTurns: the backend's own count of model round trips (the SDK's num_turns), summed over turns. */
   usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number; costUsd: number; modelTurns?: number };
 }
@@ -651,6 +657,7 @@ export class ClaudeAgentPort {
       ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
       ...(session.workspace ? { workspaceName: session.workspace } : {}),
       ...(session.native.sessionId ? { sessionId: session.native.sessionId } : {}),
+      ...this.options.store.activity(session.id),
       usage: {
         inputTokens: session.usage.inputTokens,
         outputTokens: session.usage.outputTokens,

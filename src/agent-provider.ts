@@ -132,8 +132,11 @@ function agentSummary(agent: AgentSummary): MarshalRuntimeAgentSummary {
       outputTokens: agent.usage.outputTokens,
       cachedInputTokens: agent.usage.cachedInputTokens,
       costUsd: agent.usage.costUsd,
-      // The runtime's usage object is open; the SDK's own round-trip count rides along.
+      // The runtime's usage object is open (the agent itself is not); the SDK's own round-trip count rides along,
+      // and so does the backend's activity, which Page Studio's settle() reads to keep waiting on a working turn.
       ...(agent.usage.modelTurns ? { modelTurns: agent.usage.modelTurns } : {}),
+      ...(agent.eventCount !== undefined ? { eventCount: agent.eventCount } : {}),
+      ...(agent.lastEventAt ? { lastEventAt: agent.lastEventAt } : {}),
     },
   };
 }
