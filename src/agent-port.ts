@@ -35,7 +35,31 @@ export interface TurnExtras {
    * across turns, which only the Claude Agent SDK reads.
    */
   live?: boolean;
+  /**
+   * The id of the turn these options were built for (the queued message's id). In live mode only the turn that opens
+   * the process passes options; every user message pushed into the process carries its own turn's id under `TURN_ID`.
+   */
+  turnId?: string;
 }
+
+/**
+ * The turn id on a user message the port pushes into a live process's input (a symbol, so it never reaches the
+ * backend's wire format). A host that wraps the input can match each `result` to the turn it answers.
+ */
+export const TURN_ID: unique symbol = Symbol.for("marshal-sdk.turn-id");
+
+/** Why the port closed a session's live process (`AgentPortOptions.onLiveProcessClosed`). */
+export type LiveProcessCloseReason =
+  | "idle"
+  | "evicted"
+  | "recycled"
+  | "options changed"
+  | "turn cancelled"
+  | "turn failed"
+  | "stream ended"
+  | "cancelled"
+  | "closed"
+  | "disposed";
 
 /**
  * The text of a turn's `systemPrompt` option: a string, a list of strings, or the Agent SDK's `{type: "custom", prompt}`
@@ -225,6 +249,12 @@ export interface AgentPortOptions {
    * See `LiveProcessOptions`.
    */
   live?: LiveProcessOptions;
+  /**
+   * A session's live process closed, once per process, whatever closed it: `closed` is `closeLive`, `cancelled` is
+   * `cancel`, `disposed` is `dispose`, the rest are the port's own decisions. A host releases what it holds for that
+   * process here. A throw is logged and ignored.
+   */
+  onLiveProcessClosed?: (sessionId: string, reason: LiveProcessCloseReason) => void;
 }
 
 /**
@@ -552,6 +582,19 @@ export class ClaudeAgentPort {
     return this.summary(agentId);
   }
 
+  /**
+   * Closes the session's live process while the session is idle, keeping its queue and its stored state: its next
+   * turn starts a new process (resuming the session). For a host that ends a process on its own schedule, such as a
+   * context rollover. False when there is no live process, or the session is running (cancel it instead).
+   */
+  closeLive(agentId: string): boolean {
+    const agent = this.agent(agentId);
+    const proc = this.processes.get(agentId);
+    if (!proc || proc.busy || agent.running) return false;
+    this.closeProcess(proc, "closed");
+    return true;
+  }
+
   async wait(
     agentId: string,
     timeoutMs = 300_000,
@@ -612,7 +655,7 @@ export class ClaudeAgentPort {
       while (item !== undefined) {
         let reply: string | undefined;
         try {
-          reply = await this.turn(agent, item.text, item.attachments, item.from);
+          reply = await this.turn(agent, item.text, item.attachments, item.from, item.id);
         } finally {
           agent.lastReply = reply;
           for (const waiter of item.waiters) waiter(reply);
@@ -665,6 +708,7 @@ export class ClaudeAgentPort {
     message: string,
     attachments: readonly string[],
     from?: MessageSender,
+    turnId: string = randomUUID(),
   ): Promise<string | undefined> {
     const store = this.options.store;
     const session = this.session(agent.id);
@@ -720,6 +764,7 @@ export class ClaudeAgentPort {
       stderr: (data: string) => this.options.log?.(`agent ${agent.id} stderr: ${data.trimEnd().slice(0, 500)}`),
       [TURN_EXTRAS]: {
         sessionId: agent.id,
+        turnId,
         attachments: [...attachments],
         ...(surface ? { nativeSubagentAllowlist: [...surface.subagentAllowlist] } : {}),
         ...(launch.env ? { launchEnv: true } : {}),
@@ -728,7 +773,7 @@ export class ClaudeAgentPort {
         ...(permissionHandler ? { permissionHandler: (request) => permissionHandler(request, { sessionId: agent.id }) } : {}),
       } satisfies TurnExtras,
     };
-    if (live) return this.liveTurn(agent, session, launch, live, options, abort, message, attachments);
+    if (live) return this.liveTurn(agent, session, launch, live, options, abort, message, attachments, turnId);
     const acc: TurnAccumulator = { lastText: "" };
     // The turn ends at its result event, not when the stream closes: on 2026-11-16 (c2-real-2 hero, 900008 critic)
     // the Claude process stayed alive after `result` (end_turn), the stream never closed, and the finished answer was
@@ -822,6 +867,7 @@ export class ClaudeAgentPort {
     abort: AbortController,
     message: string,
     attachments: readonly string[],
+    turnId: string,
   ): Promise<string | undefined> {
     const store = this.options.store;
     const signature = processSignature(options, launch);
@@ -840,12 +886,12 @@ export class ClaudeAgentPort {
       proc.busy = true;
       if (abort.signal.aborted) throw new Error("Turn cancelled before it started.");
       abort.signal.addEventListener("abort", onAbort, { once: true });
-      proc.input.push(userMessage(message, attachments));
+      proc.input.push(Object.assign(userMessage(message, attachments) as object, { [TURN_ID]: turnId }));
       for (;;) {
         const next = await proc.events.next();
         if (next.done) {
           // The process ended without answering this turn: it is gone, and the next turn starts another.
-          this.closeProcess(proc, "its stream ended");
+          this.closeProcess(proc, "stream ended");
           break;
         }
         const event = next.value;
@@ -862,7 +908,7 @@ export class ClaudeAgentPort {
         }
       }
     } catch (error) {
-      if (proc) this.closeProcess(proc, "its turn failed");
+      if (proc) this.closeProcess(proc, "turn failed");
       if (abort.signal.aborted) {
         store.appendMessage(agent.id, { role: "system", content: "Turn cancelled." });
         return undefined;
@@ -926,7 +972,7 @@ export class ClaudeAgentPort {
     return proc;
   }
 
-  private closeProcess(proc: LiveProcess, why: string): void {
+  private closeProcess(proc: LiveProcess, why: LiveProcessCloseReason): void {
     if (proc.closed) return;
     proc.closed = true;
     if (proc.idleTimer) clearTimeout(proc.idleTimer);
@@ -943,6 +989,11 @@ export class ClaudeAgentPort {
       .then(() => proc.events.return?.())
       .catch((error) => this.options.log?.(`agent ${proc.agentId}: closing its live stream failed: ${errorText(error)}`));
     this.options.log?.(`agent ${proc.agentId}: live process closed (${why})`);
+    try {
+      this.options.onLiveProcessClosed?.(proc.agentId, why);
+    } catch (error) {
+      this.options.log?.(`live process closed listener for ${proc.agentId} failed: ${errorText(error)}`);
+    }
   }
 
   private summary(agentId: string): AgentSummary {
