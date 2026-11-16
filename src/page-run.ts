@@ -105,6 +105,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   // A brand-data provider in the sandbox (@zyg/brand-data-pack) serves this run's product pack (facts.md, pictures.json).
   process.env[INPUT_PACK_ENV] = env[INPUT_PACK_ENV] ??= input.productDir;
   const chrome = await resolveChrome();
+  if (!chrome) log(NO_CHROME_WARNING);
   if (chrome) {
     process.env.MARSHAL_SDK_CHROME = env.MARSHAL_SDK_CHROME = chrome;
     process.env.PAGE_STUDIO_CHROME = env.PAGE_STUDIO_CHROME = noSandboxWrapper(chrome, state);
@@ -208,7 +209,9 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     const notes = path.join(studioDir, "polish", String(pageId), "notes.md");
     if (fs.existsSync(notes)) fs.copyFileSync(notes, path.join(out, "notes.md"));
     log(`page written: ${finished.sections.length} sections, ${finished.assets.length} pictures`);
-    shots = await screenshots(path.join(out, "index.html"), path.join(out, "shots"), chrome);
+    const taken = await pageShots(path.join(out, "index.html"), path.join(out, "shots"), chrome, log);
+    shots = taken.shots;
+    if (taken.error) warnings.push(taken.error);
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
     log(`FAILED: ${failure}`);
@@ -330,6 +333,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   };
   process.env.PAGE_STUDIO_DIR = env.PAGE_STUDIO_DIR = studioDir;
   const chrome = await resolveChrome();
+  if (!chrome) log(NO_CHROME_WARNING);
   if (chrome) {
     process.env.MARSHAL_SDK_CHROME = env.MARSHAL_SDK_CHROME = chrome;
     process.env.PAGE_STUDIO_CHROME = env.PAGE_STUDIO_CHROME = noSandboxWrapper(chrome, state);
@@ -362,6 +366,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   let reply = "";
   let route: unknown;
   let shots: unknown[] = [];
+  let shotsError: string | undefined;
   let build: PageStudioBuild = {};
   try {
     if (!pageId) throw new Error(`No page to edit: ${state} has no ${PAGE_RUN_RECORD} and no --page-id was given.`);
@@ -388,7 +393,9 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     finished = finishPage(fs.readFileSync(rendered.path ?? rendered.file, "utf8"), { libraryRoot: path.join(studioDir, "library"), outDir: out });
     fs.writeFileSync(path.join(out, "index.html"), finished.html);
     log(`edit applied (${String(route ?? "routed")}): ${reply.slice(0, 160)}`);
-    shots = await screenshots(path.join(out, "index.html"), path.join(out, "shots"), chrome);
+    const taken = await pageShots(path.join(out, "index.html"), path.join(out, "shots"), chrome, log);
+    shots = taken.shots;
+    shotsError = taken.error;
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
     log(`FAILED: ${failure}`);
@@ -404,7 +411,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     since: started,
     error: failure,
     requiredSkills: [],
-    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, request: options.request, route, reply, sections: finished?.sections ?? [], shots },
+    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, request: options.request, route, reply, sections: finished?.sections ?? [], shots, ...(shotsError ? { warnings: [shotsError] } : {}) },
   });
   if (record) {
     writePageRunRecord(state, { ...record, edits: [...(record.edits ?? []), { at: new Date().toISOString(), request: options.request, runId: host.runId, ...(failure ? { error: failure } : {}) }] });
@@ -540,6 +547,9 @@ export function readSandboxInput(inputDir: string): SandboxInput {
  * Testing" on macOS starts but never answers the pipe, so every Page Studio look and polish waited out its 90-120 s
  * kill timer; a given path is trusted, the others are probed.
  */
+const NO_CHROME_WARNING =
+  "WARNING no Chrome or Playwright Chromium found: Page Studio's renders and critic screenshots will fail. Install one (npx playwright install chromium chromium-headless-shell) or set MARSHAL_SDK_CHROME.";
+
 async function resolveChrome(): Promise<string | undefined> {
   const given = process.env.MARSHAL_SDK_CHROME || process.env.PAGE_STUDIO_CHROME;
   if (given) return given;
@@ -591,6 +601,26 @@ function noSandboxWrapper(chrome: string, state: string): string {
   const wrapper = path.join(state, "chrome-no-sandbox.sh");
   fs.writeFileSync(wrapper, `#!/bin/sh\nexec '${chrome.replaceAll("'", "'\\''")}' --no-sandbox "$@"\n`, { mode: 0o755 });
   return wrapper;
+}
+
+/**
+ * The page's screenshots, never fatal: the page is written before they are taken, and a missing browser build
+ * (e.g. Playwright's headless shell not installed in the image) must not fail a run that already has its page.
+ */
+export async function pageShots(
+  htmlFile: string,
+  shotsDir: string,
+  chrome: string | undefined,
+  log: (line: string) => void,
+  take: typeof screenshots = screenshots,
+): Promise<{ shots: unknown[]; error?: string }> {
+  try {
+    return { shots: await take(htmlFile, shotsDir, chrome) };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message.split("\n")[0]! : String(error);
+    log(`screenshots skipped: ${reason}`);
+    return { shots: [], error: `screenshots skipped (the page is written): ${reason}` };
+  }
 }
 
 /** Phone (390 px, 2x) and desktop (1280 px) full-page captures at a real viewport width. */
