@@ -252,6 +252,11 @@ export interface AgentPortOptions {
    */
   live?: LiveProcessOptions;
   /**
+   * Which sessions run in live mode when `live` is set (default: every one). A host whose sessions mix live processes
+   * (a chat kept warm between turns) and one process per turn (a job, a worker) says which is which here.
+   */
+  liveFor?: (session: SessionRecord) => boolean;
+  /**
    * A session's live process closed, once per process, whatever closed it: `closed` is `closeLive`, `cancelled` is
    * `cancel`, `disposed` is `dispose`, the rest are the port's own decisions. A host releases what it holds for that
    * process here. A throw is logged and ignored.
@@ -731,7 +736,7 @@ export class ClaudeAgentPort {
     const hostPrompt = basePrompt !== undefined && session.systemPromptAppend ? `${basePrompt}\n\n${session.systemPromptAppend}` : basePrompt;
     const systemPrompt = agent.systemPrompt ?? hostPrompt;
     const launch = mergeLaunchOptions(this.options.launchOptionsFor?.(session), agent.launchOptions);
-    const live = this.options.live && (this.options.runtimeId ?? "claude") === "claude" ? this.options.live : undefined;
+    const live = this.options.live && (this.options.runtimeId ?? "claude") === "claude" && (this.options.liveFor?.(session) ?? true) ? this.options.live : undefined;
     agent.structuredOutput = undefined;
     const extraArgs = { ...launch.extraArgs, ...(launch.disableSlashCommands ? { "disable-slash-commands": null } : {}) };
     // A fork carries its parent's prompt, so it counts as the host's prompt when the text is the same.

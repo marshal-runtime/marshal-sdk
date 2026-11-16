@@ -158,6 +158,19 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * session's tools are served elsewhere. A session adopted after a restart runs behind them too.
    */
   launchOptionsFor?: AgentPortOptions["launchOptionsFor"];
+  /** Keep sessions' Claude Code processes alive between turns (the port's live mode); `liveFor` picks which sessions. */
+  live?: AgentPortOptions["live"];
+  liveFor?: AgentPortOptions["liveFor"];
+  /** A session's live process closed (the port's `onLiveProcessClosed`). */
+  onLiveProcessClosed?: AgentPortOptions["onLiveProcessClosed"];
+  /** A session went idle or failed, after the host's own handling (run records, automations, org store). */
+  onSessionEvent?: AgentPortOptions["onSessionEvent"];
+  /**
+   * The host's guard on Claude's native subagent tool (a PreToolUse hook allowing only the native subagent types the
+   * host lists). False leaves it off: for an embedder that removes the native Agent tool with `disallowedTools` and runs
+   * no hooks. Default true.
+   */
+  nativeSubagentGuard?: boolean;
 }
 
 /** The org bridge without what the host supplies; `host` defaults to the host's id. */
@@ -324,7 +337,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     query: options.query ?? provider?.query ?? (claudeQuery as unknown as QueryFn),
     runtimeId: provider?.id ?? "claude",
     projectSettings: repoRules,
-    nativeTools: { disabled: DISABLED_NATIVE_TOOLS, subagentAllowlist: NATIVE_SUBAGENT_ALLOWLIST },
+    ...(options.nativeSubagentGuard === false ? {} : { nativeTools: { disabled: DISABLED_NATIVE_TOOLS, subagentAllowlist: NATIVE_SUBAGENT_ALLOWLIST } }),
     store: sessions,
     cwd: workspacePath,
     env: provider?.env ?? options.env ?? definedEnv(process.env),
@@ -335,6 +348,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     workspaceName: path.basename(workspacePath),
     systemPrompt: (session) => prompts?.forSession(session),
     ...(options.launchOptionsFor ? { launchOptionsFor: options.launchOptionsFor } : {}),
+    ...(options.live ? { live: options.live } : {}),
+    ...(options.liveFor ? { liveFor: options.liveFor } : {}),
+    ...(options.onLiveProcessClosed ? { onLiveProcessClosed: options.onLiveProcessClosed } : {}),
     prepareTurn: (session) => memory.warm(session, log),
     mcpServers: (session) => serversFor(session),
     log,
@@ -344,6 +360,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       if (typeof payload.sessionId === "string") publisher?.schedule(payload.sessionId);
       if (typeof payload.sessionId === "string") runRecords?.schedule(payload.sessionId);
       if (typeof payload.sessionId === "string" && (type === "session.idle" || type === "session.failed")) orgStore?.schedule(payload.sessionId);
+      try {
+        options.onSessionEvent?.(type, payload);
+      } catch (error) {
+        log(`onSessionEvent ${type}: ${String(error)}`);
+      }
     },
   });
   automations = new HostAutomations({
