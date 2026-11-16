@@ -75,6 +75,15 @@ test("the list is one row per page artifact from the run manifests; runs without
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("an artifact the runner listed with current 0 (no versions yet) is a legacy row that still opens from the run's own page", async () => {
+  const { dir, host, gcs } = await world();
+  const state = path.join(gcs, "dev-bucket", "runs", "run-b", "agent", "marshal-state");
+  fs.writeFileSync(path.join(state, "run.json"), JSON.stringify(extendRunJson({ schemaVersion: 1, runId: "run-b", title: "Bare run", status: "done", pageId: "brand--b" }, { runId: "run-b", artifacts: [{ app: "page", kind: "landing-page", id: "brand--b", title: "B", current: 0 }] })));
+  const row = pageRows(await host.cloudRuns(true)).find((candidate) => candidate.artifact.id === "brand--b")!;
+  assert.deepEqual([row.artifact.current, row.artifact.legacy], [null, true]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("listing downloads nothing: no page, picture or session file reaches the cache", async () => {
   const { dir, host } = await world();
   const cache = new CloudCache(path.join(dir, "cache"));

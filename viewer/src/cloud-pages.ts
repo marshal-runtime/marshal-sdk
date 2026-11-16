@@ -66,7 +66,7 @@ export function pageRows(runs: readonly CloudRun[]): PageRow[] {
     };
     const artifacts = Array.isArray(info.artifacts) ? (info.artifacts as Row[]).filter((a) => a && a.app === "page" && typeof a.id === "string") : [];
     if (artifacts.length) {
-      for (const a of artifacts) rows.push({ ...base, artifact: { app: "page", kind: text(a.kind) || "landing-page", id: a.id, title: text(a.title) || base.runTitle, current: Number.isInteger(a.current) ? a.current : null, legacy: false } });
+      for (const a of artifacts) rows.push({ ...base, artifact: { app: "page", kind: text(a.kind) || "landing-page", id: a.id, title: text(a.title) || base.runTitle, current: Number.isInteger(a.current) && a.current >= 1 ? a.current : null, legacy: !(Number.isInteger(a.current) && a.current >= 1) } });
     } else if (run.marshal && typeof info.pageId === "string") {
       rows.push({ ...base, artifact: { app: "page", kind: "landing-page", id: info.pageId, title: base.runTitle, current: null, legacy: true } });
     } else {
