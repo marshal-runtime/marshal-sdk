@@ -14,6 +14,11 @@ export function toClaudeHostToolName(runtimeName: string): string {
   return `mcp__${CLAUDE_HOST_MCP_SERVER_NAME}__${runtimeName}`;
 }
 
+/** An MCP server's name as it appears in Claude tool names (`mcp__<server>__<tool>`). */
+export function toClaudeMcpToolServerName(serverName: string): string {
+  return serverName.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 export function parseClaudeToolName(sdkName: string): ClaudeToolName {
   const match = /^mcp__(.+?)__(.+)$/.exec(sdkName);
   if (!match) {

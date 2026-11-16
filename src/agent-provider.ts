@@ -27,7 +27,8 @@ const output = (required: string[], properties: Record<string, unknown>) => ({
  * `marshal.agent.*` is the runtime's own provider (@marshal/runtime/delegation): the desktop's names, schemas,
  * permissions and errors, so an extension written against the desktop calls the same capabilities here. This host
  * registers its Claude Agent SDK sessions as the port. Desktop-only launch fields (worktrees, souls, runtime accounts,
- * allowedTools, repository agents) are accepted and ignored: a headless host has one backend and one checkout.
+ * allowedTools, mcpServers, skills, repository agents) are accepted and ignored: a headless host has one backend
+ * and one checkout. The desktop's own runtime host (packages/host) applies allowedTools, mcpServers and skills.
  */
 export function createAgentProvider(
   port: ClaudeAgentPort,

@@ -55,7 +55,7 @@
       "@marshal/agent-runtime-composer": "file:vendor/packs/marshal-agent-runtime-composer-0.1.0-marshal-host-72.tgz",
       "@marshal/agent-runtime-conformance": "file:vendor/packs/marshal-agent-runtime-conformance-0.1.0-marshal-host-72.tgz",
       "@marshal/agent-runtime-core": "file:vendor/packs/marshal-agent-runtime-core-0.1.0-marshal-host-84.tgz",
-      "@marshal/agent-runtime-delegation": "file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-88.tgz",
+      "@marshal/agent-runtime-delegation": "file:vendor/packs/marshal-agent-runtime-delegation-0.1.0-marshal-host-89.tgz",
       "@marshal/agent-runtime-effects": "file:vendor/packs/marshal-agent-runtime-effects-0.1.0-marshal-host-72.tgz",
       "@marshal/agent-runtime-extensions": "file:vendor/packs/marshal-agent-runtime-extensions-0.1.0-marshal-host-88.tgz",
       "@marshal/agent-runtime-host": "file:vendor/packs/marshal-agent-runtime-host-0.1.0-marshal-host-88.tgz",

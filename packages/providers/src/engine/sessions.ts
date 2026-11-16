@@ -5607,6 +5607,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
           model: sessionModel,
           runtimeAgentRole: existing?.runtimeAgentRole,
           allowedTools: existing?.allowedTools,
+          scopedMcp: existing?.scopedMcp,
+          scopedSkills: existing?.scopedSkills,
           ...(existing?.systemPromptOverride !== undefined ? { projectContext: false } : {}),
           ...this.disabledNativeToolsFor(existing),
           reasoningEffort: this.modelManager.resolveReasoningEffort({
@@ -5713,6 +5715,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
               model,
               runtimeAgentRole: existingData?.runtimeAgentRole,
               allowedTools: existingData?.allowedTools,
+              scopedMcp: existingData?.scopedMcp,
+              scopedSkills: existingData?.scopedSkills,
               ...(existingData?.systemPromptOverride !== undefined
                 ? { projectContext: false }
                 : {}),

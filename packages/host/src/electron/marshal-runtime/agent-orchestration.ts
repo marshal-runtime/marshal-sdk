@@ -56,8 +56,14 @@ export interface MarshalRuntimeAgentLaunchRequest {
   /** Wake the owner session with a readiness notice whenever the agent goes idle.
    *  Host callers that collect results through `wait` (swarm, Brain, advisors) leave it unset. */
   readonly wakeParentOnIdle?: boolean;
-  /** Host tool names the child may call; every other tool, MCP server, and skill is excluded. */
+  /** Host tool names the child may call; every other tool, MCP server, and skill is excluded unless listed below. */
   readonly allowedTools?: readonly string[];
+  /** Host MCP server keys the child may use, applied even with `allowedTools`; absent keeps the default
+   *  (the owner's MCP scope, none under `allowedTools`). */
+  readonly mcpServers?: readonly string[];
+  /** Skill names the child may use, applied even with `allowedTools`; absent keeps the default
+   *  (the owner's skill scope, none under `allowedTools`). */
+  readonly skills?: readonly string[];
   /** Replaces Marshal's assembled system prompt and excludes repository context. */
   readonly systemPrompt?: string;
   /** Absolute file paths attached to the child's first message. */
@@ -746,7 +752,15 @@ export class SessionManagerRuntimeAgentAdapter implements MarshalRuntimeAgentPor
       return this.adoptCallerSession(request, owner);
     }
     const toolFree = isToolFreeRuntimeAgentRole(request.runtimeAgentRole);
+    if (toolFree && (request.mcpServers?.length || request.skills?.length)) {
+      throw runtimeError(
+        "invalid_request",
+        `A ${request.runtimeAgentRole} agent is tool-free; omit mcpServers and skills.`,
+      );
+    }
     const restrictedTools = toolFree || request.allowedTools !== undefined;
+    const skills = request.skills ?? (restrictedTools ? [] : owner.scopedSkills);
+    const mcp = request.mcpServers ?? (restrictedTools ? [] : owner.scopedMcp);
     const created = await this.sessions.createSubagentSession({
       task: request.task,
       name: request.name,
@@ -771,8 +785,8 @@ export class SessionManagerRuntimeAgentAdapter implements MarshalRuntimeAgentPor
       ...(request.allowedTools ? { allowedTools: [...request.allowedTools] } : {}),
       ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
       ...(request.attachments?.length ? { attachments: [...request.attachments] } : {}),
-      skills: restrictedTools ? [] : owner.scopedSkills ? [...owner.scopedSkills] : undefined,
-      mcp: restrictedTools ? [] : owner.scopedMcp ? [...owner.scopedMcp] : undefined,
+      skills: skills ? [...skills] : undefined,
+      mcp: mcp ? [...mcp] : undefined,
       suppressInitialTodoInstruction: true,
       returnAfterBackendAcceptance: true,
       suppressParentReadinessWake: request.wakeParentOnIdle !== true,
