@@ -581,8 +581,16 @@ export class ClaudeAgentPort {
     let lastText = "";
     let final: string | undefined;
     let failed: string | undefined;
+    // The turn ends at its result event, not when the stream closes: on 2026-11-16 (c2-real-2 hero, 900008 critic)
+    // the Claude process stayed alive after `result` (end_turn), the stream never closed, and the finished answer was
+    // never recorded until the caller cancelled the turn 25-40 min later.
+    const events = this.options.query({ prompt: promptOf(message, attachments), options })[Symbol.asyncIterator]();
+    let ended = false;
     try {
-      for await (const event of this.options.query({ prompt: promptOf(message, attachments), options })) {
+      for (;;) {
+        const next = await events.next();
+        if (next.done) break;
+        const event = next.value;
         store.appendEvent(agent.id, slim(event));
         if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
           store.update(agent.id, { native: { ...this.session(agent.id).native, sessionId: event.session_id } });
@@ -602,6 +610,8 @@ export class ClaudeAgentPort {
             turns: 1,
             modelTurns: num(event.num_turns),
           });
+          ended = true;
+          break;
         }
       }
     } catch (error) {
@@ -614,7 +624,8 @@ export class ClaudeAgentPort {
     } finally {
       agent.abort = undefined;
     }
-    if (abort.signal.aborted) {
+    if (ended) closeAfterResult(events, abort, (error) => this.options.log?.(`agent ${agent.id}: closing its stream after the result failed: ${errorText(error)}`));
+    else if (abort.signal.aborted) {
       store.appendMessage(agent.id, { role: "system", content: "Turn cancelled." });
       return undefined;
     }
@@ -718,6 +729,21 @@ function promptOf(message: string, attachments: readonly string[]): unknown {
   return (async function* () {
     yield { type: "user", message: { role: "user", content }, parent_tool_use_id: null, session_id: "" };
   })();
+}
+
+/** How long a backend gets to close its stream after the result before its turn is aborted (the process is killed). */
+export const CLOSE_AFTER_RESULT_MS = 10_000;
+
+/** Asks the backend's stream to close without waiting on it; a stream that doesn't close in time is aborted. */
+function closeAfterResult(events: AsyncIterator<unknown>, abort: AbortController, onError: (error: unknown) => void): void {
+  const timer = setTimeout(() => abort.abort(), CLOSE_AFTER_RESULT_MS);
+  timer.unref?.();
+  Promise.resolve()
+    .then(() => events.return?.())
+    .then(() => clearTimeout(timer), (error) => {
+      clearTimeout(timer);
+      onError(error);
+    });
 }
 
 function textOf(content: unknown): string {
