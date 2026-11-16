@@ -9,7 +9,9 @@ import {
   mergeLaunchOptions,
   systemPromptText,
   TURN_EXTRAS,
+  TURN_ID,
   type AgentLaunchOptions,
+  type LiveProcessCloseReason,
   type AgentPortOptions,
   type QueryFn,
 } from "../src/agent-port.js";
@@ -21,6 +23,8 @@ interface Started {
   options: Record<string, any>;
   /** Text of each user message the process read. */
   messages: string[];
+  /** The port's turn id on each user message the process read (live). */
+  turnIds: unknown[];
   ended: boolean;
   aborted: boolean;
 }
@@ -29,12 +33,12 @@ interface Started {
  * A fake Claude Agent SDK. A streaming prompt gets one process that answers each user message with a result whose
  * total_cost_usd is the process's running total (as the SDK reports it); a string prompt gets one turn. A message
  * "hang" waits until the process is aborted. Every turn first runs the PreToolUse hooks on a Bash call and answers
- * "denied: <reason>" when one denies it.
+ * "denied: <reason>" when one denies it. A message "boom" fails the stream; "end" ends it without an answer.
  */
 function backend(costPerTurn = 0.1) {
   const started: Started[] = [];
   const query: QueryFn = ({ prompt, options }) => {
-    const run: Started = { options, messages: [], ended: false, aborted: false };
+    const run: Started = { options, messages: [], turnIds: [], ended: false, aborted: false };
     started.push(run);
     const abort = options.abortController as AbortController | undefined;
     abort?.signal.addEventListener("abort", () => (run.aborted = true), { once: true });
@@ -42,6 +46,7 @@ function backend(costPerTurn = 0.1) {
     let total = 0;
     async function* answer(text: string): AsyncGenerator<Record<string, any>> {
       run.messages.push(text);
+      if (text === "boom") throw new Error("backend exploded");
       if (text === "hang") {
         await new Promise<void>((resolve) => {
           if (abort?.signal.aborted) resolve();
@@ -69,6 +74,8 @@ function backend(costPerTurn = 0.1) {
         }
         for await (const message of prompt as AsyncIterable<any>) {
           const content = message.message.content;
+          run.turnIds.push(message[TURN_ID]);
+          if (content === "end") return;
           yield* answer(typeof content === "string" ? content : String(content.at(-1)?.text));
         }
       } finally {
@@ -349,4 +356,174 @@ test("other providers read a launch's custom prompt as its text", () => {
   assert.equal(systemPromptText({ type: "preset", preset: "claude_code" }), undefined);
   const config = sessionConfig({ systemPrompt: { type: "custom", prompt: "Own prompt.", snapshot: false } }, "/tmp", undefined);
   assert.deepEqual(config.systemMessage, { content: "Own prompt.", mode: "replace" });
+});
+
+/** A rig that records every onLiveProcessClosed call. */
+function closingRig(extra: Partial<AgentPortOptions> = {}) {
+  const closed: [string, LiveProcessCloseReason][] = [];
+  const r = rig({ onLiveProcessClosed: (id, reason) => closed.push([id, reason]), ...extra });
+  return { ...r, closed };
+}
+
+test("onLiveProcessClosed: idle", async () => {
+  const { port, closed } = closingRig({ live: { idleSeconds: 0.05 } });
+  const agent = port.launch({ task: "one", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  assert.deepEqual(closed, [], "not while the process waits for its next turn");
+  await eventually(() => closed.length > 0, "idle close");
+  assert.deepEqual(closed, [[agent.id, "idle"]]);
+  await port.dispose();
+  assert.equal(closed.length, 1, "a closed process is reported once, dispose does not repeat it");
+});
+
+test("onLiveProcessClosed: evicted", async () => {
+  const { port, closed } = closingRig({ live: { maxLive: 1 } });
+  const a = port.launch({ task: "a", idempotencyKey: "a" });
+  await port.wait(a.id);
+  const b = port.launch({ task: "b", idempotencyKey: "b" });
+  await port.wait(b.id);
+  assert.deepEqual(closed, [[a.id, "evicted"]]);
+  await port.dispose();
+  assert.deepEqual(closed, [[a.id, "evicted"], [b.id, "disposed"]]);
+});
+
+test("onLiveProcessClosed: recycled after maxTurns", async () => {
+  const { port, closed } = closingRig({ live: { maxTurns: 1 } });
+  const agent = port.launch({ task: "one", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  await turn(port, agent.id, "two");
+  assert.deepEqual(closed, [[agent.id, "recycled"]]);
+  await port.dispose();
+});
+
+test("onLiveProcessClosed: options changed", async () => {
+  const { port, closed } = closingRig({ live: {} });
+  const agent = port.launch({ task: "one", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  port.setModel(agent.id, "other");
+  await turn(port, agent.id, "two");
+  assert.deepEqual(closed, [[agent.id, "options changed"]]);
+  await port.dispose();
+});
+
+test("onLiveProcessClosed: turn cancelled (an interrupt)", async () => {
+  const { port, started, closed } = closingRig({ live: {} });
+  const agent = port.launch({ task: "hang", idempotencyKey: "k" });
+  while (started[0]?.messages.length !== 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  port.send(agent.id, "after", "interrupt");
+  await port.wait(agent.id, 5_000);
+  assert.deepEqual(closed, [[agent.id, "turn cancelled"]], "the abort's close is the only one; the turn's catch finds it closed");
+  await port.dispose();
+});
+
+test("onLiveProcessClosed: turn failed", async () => {
+  const { port, closed } = closingRig({ live: {} });
+  const agent = port.launch({ task: "boom", idempotencyKey: "k" });
+  await port.wait(agent.id, 5_000);
+  assert.equal(port.get(agent.id)?.state, "failed");
+  assert.deepEqual(closed, [[agent.id, "turn failed"]]);
+  await port.dispose();
+});
+
+test("onLiveProcessClosed: stream ended", async () => {
+  const { port, closed } = closingRig({ live: {} });
+  const agent = port.launch({ task: "end", idempotencyKey: "k" });
+  await port.wait(agent.id, 5_000);
+  assert.deepEqual(closed, [[agent.id, "stream ended"]]);
+  await port.dispose();
+});
+
+test("onLiveProcessClosed: cancelled", async () => {
+  const { port, closed } = closingRig({ live: {} });
+  const agent = port.launch({ task: "one", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  port.cancel(agent.id);
+  assert.deepEqual(closed, [[agent.id, "cancelled"]]);
+});
+
+test("onLiveProcessClosed: disposed, one call per open process", async () => {
+  const { port, closed } = closingRig({ live: {} });
+  const a = port.launch({ task: "a", idempotencyKey: "a" });
+  const b = port.launch({ task: "b", idempotencyKey: "b" });
+  await port.wait(a.id);
+  await port.wait(b.id);
+  await port.dispose();
+  assert.deepEqual(closed.map(([, reason]) => reason), ["disposed", "disposed"]);
+  assert.deepEqual(closed.map(([id]) => id).sort(), [a.id, b.id].sort());
+});
+
+test("onLiveProcessClosed: a throwing listener is logged and the process still closes", async () => {
+  const { port, logs, started } = rig({
+    live: {},
+    onLiveProcessClosed: () => {
+      throw new Error("listener broke");
+    },
+  });
+  const agent = port.launch({ task: "one", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  port.cancel(agent.id);
+  assert.deepEqual(port.liveSessions(), []);
+  assert.equal(started[0]!.aborted, true);
+  assert.ok(logs.some((line) => line.includes(`live process closed listener for ${agent.id} failed: listener broke`)));
+});
+
+test("closeLive: closes an idle session's process, keeps the session; the next turn resumes it in a new process", async () => {
+  const { port, started, closed, store } = closingRig({ live: {} });
+  const agent = port.launch({ task: "one", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  assert.equal(port.closeLive(agent.id), true);
+  assert.deepEqual(closed, [[agent.id, "closed"]]);
+  assert.deepEqual(port.liveSessions(), []);
+  assert.equal(port.closeLive(agent.id), false, "no live process left");
+  assert.equal(port.get(agent.id)?.state, "idle");
+  assert.equal(await turn(port, agent.id, "two"), "answer to two");
+  assert.equal(started.length, 2);
+  assert.equal(started[1]!.options.resume, "native-1");
+  assert.ok(!store.messages(agent.id, 20).some((m) => m.content === "Turn cancelled."));
+  await port.dispose();
+});
+
+test("closeLive: refuses while the session runs, and leaves its queue alone", async () => {
+  const { port, started, closed } = closingRig({ live: {} });
+  const agent = port.launch({ task: "hang", idempotencyKey: "k" });
+  while (started[0]?.messages.length !== 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  port.send(agent.id, "queued");
+  assert.equal(port.closeLive(agent.id), false);
+  assert.deepEqual(closed, []);
+  port.send(agent.id, "after", "interrupt");
+  const done = await port.wait(agent.id, 5_000);
+  assert.equal(done.result, "answer to queued", "the queued message still ran, after the interrupting one");
+  await port.dispose();
+});
+
+test("closeLive: false for a session without a live process (live off)", async () => {
+  const { port } = closingRig();
+  const agent = port.launch({ task: "one", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  assert.equal(port.closeLive(agent.id), false);
+});
+
+test("turn ids: the opening turn's options carry its id, and every pushed message carries its own", async () => {
+  const { port, started } = rig({ live: {} });
+  const agent = port.launch({ task: "one", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  await turn(port, agent.id, "two");
+  const extras = started[0]!.options[TURN_EXTRAS as never] as { turnId?: string };
+  const ids = started[0]!.turnIds;
+  assert.equal(ids.length, 2);
+  assert.equal(typeof ids[0], "string");
+  assert.equal(extras.turnId, ids[0], "the process was opened by the first turn");
+  assert.notEqual(ids[1], ids[0]);
+  assert.equal(JSON.stringify({ x: 1, [TURN_ID]: "t" }), '{"x":1}', "the id never reaches a serialized message");
+  await port.dispose();
+});
+
+test("turn ids: a per-turn backend gets a fresh id in each turn's options", async () => {
+  const { port, started } = rig();
+  const agent = port.launch({ task: "one", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  await turn(port, agent.id, "two");
+  const id = (run: Started) => (run.options[TURN_EXTRAS as never] as { turnId?: string }).turnId;
+  assert.equal(typeof id(started[0]!), "string");
+  assert.notEqual(id(started[0]!), id(started[1]!));
 });
