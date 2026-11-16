@@ -27,9 +27,10 @@ const output = (required: string[], properties: Record<string, unknown>) => ({
  * `marshal.agent.*` is the runtime's own provider (@marshal/runtime/delegation): the desktop's names, schemas,
  * permissions and errors, so an extension written against the desktop calls the same capabilities here. This host
  * registers its Claude Agent SDK sessions as the port. Desktop-only launch fields (worktrees, souls, runtime accounts,
- * allowedTools, skills, repository agents) are accepted and ignored: a headless host has one backend and one
- * checkout. The agent profile fields are applied: `extensions` (the session's extension scope, enforced by the shared
- * host), `systemPromptAppend` and `mcpServers` (the host MCP servers the session keeps).
+ * allowedTools, repository agents) are accepted and ignored: a headless host has one backend and one checkout. The
+ * agent profile fields are applied: `extensions` (the session's extension scope, enforced by the shared host),
+ * `skills`, `systemPromptAppend`, `mcpServers` (the host MCP servers the session keeps) and `nativeTools` (the
+ * Claude backend's built-in tool list). `PROFILE_PINS` (profile.ts) lists them; a test fails for a pin without an effect.
  */
 export function createAgentProvider(
   port: ClaudeAgentPort,
@@ -53,6 +54,8 @@ export function createAgentProvider(
  */
 interface ProfileLaunchFields {
   extensions?: readonly string[];
+  skills?: readonly string[];
+  nativeTools?: readonly string[];
   systemPromptAppend?: string;
   mcpServers?: readonly string[];
 }
@@ -78,6 +81,8 @@ function sessionAgentPort(
           ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
           ...(request.attachments ? { attachments: request.attachments } : {}),
           ...(request.extensions ? { extensions: request.extensions } : {}),
+          ...(request.skills ? { skills: request.skills } : {}),
+          ...(request.nativeTools ? { nativeTools: request.nativeTools } : {}),
           ...(request.systemPromptAppend ? { systemPromptAppend: request.systemPromptAppend } : {}),
           ...(request.mcpServers ? { mcpServerNames: request.mcpServers } : {}),
           ...(knownSession(request.scope.sessionId) ? { parentId: request.scope.sessionId } : {}),

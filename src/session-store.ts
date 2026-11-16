@@ -66,6 +66,10 @@ export interface SessionRecord {
   fork?: SessionFork;
   /** Agent profile: extension identities whose capabilities and skills this session sees (absent: all installed). */
   extensions?: string[];
+  /** Agent profile: skill names the session sees besides its extensions' skills (absent with extensions: only theirs). */
+  skills?: string[];
+  /** Agent profile: the backend's built-in tools the session keeps (absent: the host's default surface). */
+  nativeTools?: string[];
   /** Agent profile: sections appended to the host prompt. */
   systemPromptAppend?: string;
   /** Agent profile: the MCP server names this session keeps (absent: all). */
@@ -114,6 +118,8 @@ export interface NewSession {
   launchedBy?: string;
   fork?: SessionFork;
   extensions?: readonly string[];
+  skills?: readonly string[];
+  nativeTools?: readonly string[];
   systemPromptAppend?: string;
   mcpServerNames?: readonly string[];
   workspace?: string;
@@ -180,6 +186,8 @@ export class FileSessionStore {
       ...(input.launchedBy ? { launchedBy: input.launchedBy } : {}),
       ...(input.fork ? { fork: input.fork } : {}),
       ...(input.extensions ? { extensions: [...input.extensions] } : {}),
+      ...(input.skills ? { skills: [...input.skills] } : {}),
+      ...(input.nativeTools ? { nativeTools: [...input.nativeTools] } : {}),
       ...(input.systemPromptAppend ? { systemPromptAppend: input.systemPromptAppend } : {}),
       ...(input.mcpServerNames ? { mcpServerNames: [...input.mcpServerNames] } : {}),
       runId: this.origin.runId,

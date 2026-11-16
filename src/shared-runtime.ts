@@ -125,7 +125,15 @@ export async function createSharedRuntime(options: SharedRuntimeOptions): Promis
     throw new Error("The shared Marshal runtime host has no getRuntimeBindings(): packages/host predates the SDK host options.");
   }
   return {
-    kernel: bindings.kernel,
+    // Search goes through the host's own search(), which applies a session's extension scope; the rest is the kernel's.
+    kernel: new Proxy(bindings.kernel, {
+      get: (target, property) =>
+        property === "search"
+          ? (request: unknown, context: unknown) => host.search(request, context)
+          : typeof target[property] === "function"
+            ? target[property].bind(target)
+            : target[property],
+    }),
     core: bindings.core,
     resources: bindings.resources,
     lifecycle: bindings.lifecycle,
