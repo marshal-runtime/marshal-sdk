@@ -261,13 +261,15 @@ test("agent-sandbox's runner layout (host/sessions, page-studio/, page-run.json,
   assert.equal(fs.existsSync(path.join(state, "data")), false);
   assert.match(fs.readFileSync(path.join(state, "sandbox-page.html"), "utf8"), /new/);
   // No Chrome to retake their list thumbnail: the push still lands and says so.
+  // The run had no versions: its build became version 1 and this push is version 2.
+  assert.ok(late.ok && late.artifact.version === 2 && late.artifact.seeded);
   assert.ok(late.ok && late.thumbnail === null && /thumbnail was not updated: no Chrome/.test(late.warnings[0] ?? ""));
 
   // A page-generator run mid-flight: a run.json and page-studio/pages, page-run.json not written yet. Still the sandbox layout.
   fs.rmSync(path.join(state, "page-run.json"));
   fs.writeFileSync(path.join(state, "run.json"), JSON.stringify({ schemaVersion: 1, runId: "run-902", status: "done", title: "sdk-781-saffpro" }));
   await pushToCloud({
-    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work2"), capture: noChrome,
+    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, baseVersion: late.ok ? late.artifact.version : 0, workDir: path.join(dir, "work2"), capture: noChrome,
     renderedHtml: '<html><body><section data-key="hero"><h1>newer</h1></section></body></html>',
     pageDoc: { id: "local", title: "SaffPro", brand: { id: "233", name: "SaffPro" }, product: null, source: "imported", version: 4, updatedAt: new Date().toISOString(), updatedBy: "Omer", notes: [], sections: [] },
   });
@@ -345,5 +347,31 @@ test("previewHtml inlines an older run's pictures and names the missing ones; li
   assert.deepEqual(out.missing, ["gone.png"]);
   writeLink(pullRoot, "local-page", { hostId: "sandbox", outputRoot: "gs://dev-bucket/runs/demo-1", cloudPageId: PAGE_ID, linkedAt: "2026-11-16T00:00:00Z" });
   assert.equal(readLinks(pullRoot)["local-page"]!.cloudPageId, PAGE_ID);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a push from a copy that is behind the cloud page is refused and leaves the run's preview untouched; the next push builds on the version it saw", async () => {
+  const { pullRoot, runRoot, dir } = setup();
+  void pullRoot;
+  const studioDir = path.join(dir, "studio");
+  fs.mkdirSync(path.join(studioDir, "library"), { recursive: true });
+  const outputRoot = "gs://dev-bucket/runs/demo-1";
+  const doc = (version: number) => ({ id: "local", title: "RAWDOG", brand: { id: "1617", name: "RAWDOG" }, product: null, source: "imported", version, updatedAt: new Date().toISOString(), updatedBy: "Omer", notes: [], sections: [] });
+  const push = (baseVersion: number, heading: string, version: number) =>
+    pushToCloud({ outputRoot, cloudPageId: PAGE_ID, studioDir, by: { name: "Omer" }, workDir: path.join(dir, `w-${heading}`), capture: noChrome, baseVersion, renderedHtml: `<html><body><section data-key="hero"><h1>${heading}</h1></section></body></html>`, pageDoc: doc(version) });
+  const first = await push(0, "first", 2);
+  assert.ok(first.ok && first.artifact.version === 2);
+  const previewFile = path.join(runRoot, "preview", "index.html");
+  assert.match(fs.readFileSync(previewFile, "utf8"), /first/);
+  const stale = await push(0, "stale", 3);
+  assert.ok(!stale.ok && stale.reason === "cloud-moved" && stale.current === 2);
+  assert.match(fs.readFileSync(previewFile, "utf8"), /first/);
+  assert.doesNotMatch(fs.readFileSync(previewFile, "utf8"), /stale/);
+  const next = await push(2, "next", 3);
+  assert.ok(next.ok && next.artifact.version === 3);
+  assert.match(fs.readFileSync(previewFile, "utf8"), /next/);
+  // The run manifest follows: the page's current version is recorded in run.json, their own fields kept.
+  const runJson = JSON.parse(fs.readFileSync(path.join(runRoot, "agent", "marshal-state", "run.json"), "utf8"));
+  assert.deepEqual([runJson.title, runJson.artifacts[0].id, runJson.artifacts[0].current, runJson.workspace], ["Rawdog quick", PAGE_ID, 3, "pages"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });

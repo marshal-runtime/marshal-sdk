@@ -42,7 +42,7 @@ cpSync(path.join(root, "README.md"), path.join(out, "README.md"));
 writeFileSync(path.join(out, "package.json"), `${JSON.stringify({ name: manifest.identity, version: manifest.version, private: true, type: "commonjs", main: manifest.entrypoint }, null, 2)}\n`);
 
 await build({
-  entryPoints: ["store", "pages", "questions", "cloud", "shared", "review"].map((name) => path.join(root, "test", `${name}.test.ts`)),
+  entryPoints: ["store", "pages", "questions", "cloud", "shared", "review", "artifacts", "cache", "cloud-pages"].map((name) => path.join(root, "test", `${name}.test.ts`)),
   outdir: path.join(root, "out", "test"),
   outExtension: { ".js": ".cjs" },
   bundle: true,
