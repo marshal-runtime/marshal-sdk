@@ -27,6 +27,9 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const OUTPUT_KINDS = ["file", "artifact", "reply-intent", "alert-intent", "proposal"] as const;
 
 export type PromptMode = "replace" | "append";
+
+/** The host's runtime MCP server: the one path to runtime capabilities. A declared profile never drops it. */
+export const RUNTIME_MCP_SERVER = "marshal";
 export type OutputKind = (typeof OUTPUT_KINDS)[number];
 
 /** A profile as the manifest states it. */
@@ -43,7 +46,10 @@ export interface DeclaredProfile {
   skills?: string[];
   /** Claude built-in tools the session keeps. Absent: the host's default surface. */
   nativeTools?: string[];
-  /** Host MCP server names the session keeps. Absent: all. */
+  /**
+   * Extra host MCP server names the session keeps besides the host's runtime server (`marshal`, the only path to
+   * runtime capabilities, always kept). Absent: all of the host's servers.
+   */
   mcpServers?: string[];
   /** Named context slots (brand, clock, speaker, people, ...) the host fills on every launch. */
   context?: string[];
@@ -234,7 +240,7 @@ export function agentLaunchFields(
     extensions: profile.extensions,
     ...(profile.skills ? { skills: profile.skills } : {}),
     ...(profile.nativeTools ? { nativeTools: profile.nativeTools } : {}),
-    ...(profile.mcpServers ? { mcpServerNames: profile.mcpServers } : {}),
+    ...(profile.mcpServers ? { mcpServerNames: [RUNTIME_MCP_SERVER, ...profile.mcpServers.filter((name) => name !== RUNTIME_MCP_SERVER)] } : {}),
     ...(profile.limits?.maxTurns !== undefined || profile.limits?.maxBudgetUsd !== undefined
       ? {
           options: {

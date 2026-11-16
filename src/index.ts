@@ -59,6 +59,7 @@ export {
   profileFingerprint,
   readExtensionAgents,
   resolveAgent,
+  RUNTIME_MCP_SERVER,
   type AgentEntry,
   type ContextValues,
   type DeclaredProfile,
