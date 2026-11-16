@@ -67,7 +67,7 @@ test("launch options reach every turn of the session as the SDK's own options", 
     assert.deepEqual(options.allowedTools, ["Read"]);
     assert.deepEqual(options.disallowedTools, ["Bash", "WebFetch"]);
     assert.equal(options.cwd, workdir);
-    assert.deepEqual(options.env, { CLAUDE_CONFIG_DIR: "/accounts/chat-42", PATH: "/bin", ANTHROPIC_BASE_URL: "http://proxy" });
+    assert.deepEqual(options.env, { CLAUDE_CONFIG_DIR: "/accounts/chat-42", PATH: "/bin", ANTHROPIC_BASE_URL: "http://proxy", CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1" });
     assert.equal(options.pathToClaudeCodeExecutable, "/opt/claude/2.1.0/claude");
     assert.deepEqual(options.extraArgs, { "debug-to-stderr": null, "disable-slash-commands": null });
     assert.equal(options.hooks.PreToolUse[0].hooks[0], hook);

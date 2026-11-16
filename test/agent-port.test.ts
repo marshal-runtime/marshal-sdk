@@ -82,6 +82,24 @@ test("a launch is a Marshal session: one user and one assistant message, idle, w
   assert.deepEqual(record.usage, { inputTokens: 10, outputTokens: 5, cacheReadTokens: 100, cacheWriteTokens: 7, costUsd: 0.01, turns: 1, modelTurns: 0 });
   assert.equal(backend.calls[0]!.options.systemPrompt, "You are a Marshal agent.");
   assert.equal(backend.calls[0]!.options.permissionMode, "bypassPermissions");
+  assert.equal(backend.calls[0]!.options.env.CLAUDE_CODE_DISABLE_BUNDLED_SKILLS, "1");
+});
+
+test("a host that sets CLAUDE_CODE_DISABLE_BUNDLED_SKILLS keeps its own value", async () => {
+  const backend = fakeBackend((text) => `echo: ${text}`);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-test-"));
+  const store = new FileSessionStore(path.join(root, "sessions"), { runId: "run-1", host: { id: "test", kind: "local" } });
+  const port = new ClaudeAgentPort({
+    query: backend.query,
+    store,
+    cwd: root,
+    env: { CLAUDE_CONFIG_DIR: "/accounts/test", CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "0" },
+    defaultModel: "test-model",
+    systemPrompt: () => "You are a Marshal agent.",
+    mcpServers: () => ({}),
+  });
+  await port.wait(port.launch({ task: "hi", idempotencyKey: "keep" }).id);
+  assert.equal(backend.calls[0]!.options.env.CLAUDE_CODE_DISABLE_BUNDLED_SKILLS, "0");
 });
 
 test("a second message resumes the same native session and adds two messages", async () => {

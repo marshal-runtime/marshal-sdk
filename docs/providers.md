@@ -83,6 +83,11 @@ skills and agents), and the rest (`AGENTS.md` at any depth, `.github/copilot-ins
 listed, not inlined. `repoRules: false` loads nothing from the checkout (`settingSources: []`, `projectContext: false`).
 The section is read once, when the host starts.
 
+Claude sessions start with `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1`, so Claude Code's own skills (loop, update-config,
+claude-api, batch, …) stay out of a host's skill list: a probe of the init event went from 19 skills to 3 (`design`,
+`doctor` and `plugin-authoring` are built into the CLI and stay). A host that sets the variable in its env (say, to `0`)
+keeps its own value. Project skills and plugins are unaffected.
+
 `test/native-tools.test.ts` fails when the desktop's lists change (run with `MARSHAL_DESKTOP_DIR`, or with the desktop
 checked out beside this repo).
 
