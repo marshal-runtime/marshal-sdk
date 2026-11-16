@@ -689,6 +689,8 @@ export class ClaudeAgentPort {
       cwd: launch.cwd ?? this.options.cwd,
       env: withoutBundledSkills(launch.env ? mergeEnv(this.options.env, launch.env) : this.options.env),
       abortController: abort,
+      // Deltas keep the session's activity time moving while one long message (a whole page in one tool call) streams.
+      includePartialMessages: true,
       ...(permissionHandler
         ? { permissionMode: "default", canUseTool: claudeCanUseTool(permissionHandler, agent.id) }
         : { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true }),
@@ -765,6 +767,11 @@ export class ClaudeAgentPort {
   /** Records one backend event; true at the turn's result. `costUsd` is what this turn cost. */
   private takeEvent(agent: LiveAgent, event: Record<string, any>, acc: TurnAccumulator, costUsd: number): boolean {
     const store = this.options.store;
+    // A streamed delta of a message still being written: proof the backend is working, not a record of the turn.
+    if (event.type === "stream_event") {
+      store.touch(agent.id);
+      return false;
+    }
     store.appendEvent(agent.id, slim(event));
     if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
       store.update(agent.id, { native: { ...this.session(agent.id).native, sessionId: event.session_id } });

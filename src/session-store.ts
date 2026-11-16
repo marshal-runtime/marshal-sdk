@@ -129,6 +129,8 @@ export interface NewSession {
 const INDEX_FILE = "index.json";
 const TRANSCRIPT_FILE = "transcript.jsonl";
 const EVENTS_FILE = "events.jsonl";
+/** The most often a streamed delta refreshes a session's activity time. */
+const TOUCH_INTERVAL_MS = 1000;
 const TODOS_FILE = "todos.json";
 const EMPTY_USAGE: SessionUsage = {
   inputTokens: 0,
@@ -155,6 +157,7 @@ export class FileSessionStore {
   private readonly records = new Map<string, SessionRecord>();
   private readonly counts = new Map<string, number>();
   private readonly lastEventAt = new Map<string, string>();
+  private readonly touchedAt = new Map<string, number>();
   private readonly environments = new Map<string, SessionEnvironment>();
 
   constructor(
@@ -287,6 +290,18 @@ export class FileSessionStore {
     const at = new Date().toISOString();
     this.lastEventAt.set(id, at);
     fs.appendFileSync(path.join(this.root, id, EVENTS_FILE), `${JSON.stringify({ seq: count, at, event })}\n`);
+  }
+
+  /**
+   * The backend is still producing something (a streamed delta of a message that has not landed yet): refreshes
+   * lastEventAt, at most once a second, and nothing else (no event row, no count), so a long tool call or a long
+   * answer is not read as silence.
+   */
+  touch(id: string): void {
+    const now = Date.now();
+    if (now - (this.touchedAt.get(id) ?? 0) < TOUCH_INTERVAL_MS) return;
+    this.touchedAt.set(id, now);
+    this.lastEventAt.set(id, new Date(now).toISOString());
   }
 
   /** How far a session's backend has got in this process: events appended and when the latest one came. */
