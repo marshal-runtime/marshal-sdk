@@ -51,8 +51,8 @@ export interface ForkTask {
 export interface ForkGroupResult {
   groupId: string;
   forks: { sessionId: string; name: string; task: string }[];
-  /** How the forks started: a copy of the parent's file at its open fork call, or a backend fork of its last turn. */
-  mode: "file-copy" | "backend-fork";
+  /** How the forks started: a copy of the parent's file at its open fork call, a backend fork (of its last turn, or at the embedder's point), or fresh. */
+  mode: "file-copy" | "backend-fork" | "fresh";
 }
 
 export interface ForksOptions {
@@ -61,7 +61,17 @@ export interface ForksOptions {
   log?: (line: string) => void;
   /** How long to wait for the parent's open fork call to reach its session file. Default 5 s (the shared helper's). */
   flushTimeoutMs?: number;
+  /** See ForkPointOf. */
+  forkPoint?: ForkPointOf;
 }
+
+/**
+ * Where a parent whose Claude session file is not on this host (a remote session) is forked: `{forkAt}` resumes the parent's conversation up to that
+ * message uuid under a new session (the backend fork, on the machine that holds the file), `{fresh: true}` starts the fork with its task alone (the
+ * parent has no point to fork at yet). Undefined: the default, a copy of the parent's file at its open fork call while it runs, else a backend fork of
+ * its whole conversation.
+ */
+export type ForkPointOf = (parent: SessionRecord) => { forkAt: string } | { fresh: true } | undefined;
 
 /** The message a parent gets when one of its forks goes idle or fails, worded as the desktop words it. */
 export function forkReport(fork: SessionRecord, outcome: SessionOutcome): string | undefined {
@@ -113,7 +123,8 @@ export class SessionForks {
       sessionId: randomUUID(),
       name: task.name?.trim() || forkName(task.task),
     }));
-    const inTurn = calledByParent && this.port.isRunning(parentId);
+    const point = this.options.forkPoint?.(parent);
+    const inTurn = point === undefined && calledByParent && this.port.isRunning(parentId);
     const configDir = this.options.configDir ?? this.port.backendEnv.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
     const natives = new Map<string, string>();
     const discards: (() => Promise<void>)[] = [];
@@ -164,16 +175,20 @@ export class SessionForks {
         ...(systemPrompt ? { systemPrompt } : {}),
         parentId,
         from: { kind: "session", sessionId: parentId, name: parent.title },
-        native: inTurn ? { sessionId: natives.get(fork.sessionId)! } : { forkOf: parentNative },
+        ...(inTurn
+          ? { native: { sessionId: natives.get(fork.sessionId)! } }
+          : point && "fresh" in point
+            ? {}
+            : { native: { forkOf: parentNative, ...(point ? { forkAt: point.forkAt } : {}) } }),
         fork: { groupId, index: fork.index, total, task: fork.task },
         labels: { ...parent.labels },
       });
     }
-    this.options.log?.(`session ${parentId} forked into ${total} (group ${groupId}, ${inTurn ? "file copy" : "backend fork"})`);
+    this.options.log?.(`session ${parentId} forked into ${total} (group ${groupId}, ${inTurn ? "file copy" : point && "fresh" in point ? "fresh" : "backend fork"})`);
     return {
       groupId,
       forks: planned.map((fork) => ({ sessionId: fork.sessionId, name: fork.name, task: fork.task })),
-      mode: inTurn ? "file-copy" : "backend-fork",
+      mode: inTurn ? "file-copy" : point && "fresh" in point ? "fresh" : "backend-fork",
     };
   }
 

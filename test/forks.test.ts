@@ -310,3 +310,36 @@ test("the host serves the fork tools under the desktop's names", async () => {
     await host.dispose();
   }
 });
+
+test("forkPoint: a running parent whose file is elsewhere forks through the backend at the embedder's point, or fresh", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-forks-point-"));
+  const { store, port, backend } = setup(undefined, dir);
+  let point: { forkAt: string } | { fresh: true } = { forkAt: "11111111-2222-3333-4444-555555555555" };
+  const forks = new SessionForks(port, store, { flushTimeoutMs: 300, forkPoint: () => point });
+  backend.holdTurn("plan");
+  const parent = port.launch({ task: "plan", idempotencyKey: "p" });
+  await until(() => backend.held("plan"));
+  await until(() => store.get(parent.id)!.native.sessionId !== undefined);
+  const parentNative = store.get(parent.id)!.native.sessionId!;
+
+  // In the parent's turn: no session file on this host, and none is looked for.
+  const group = await forks.fork(parent.id, [{ task: "write the API" }], true);
+  assert.equal(group.mode, "backend-fork");
+  await port.wait(group.forks[0]!.sessionId, 2000);
+  const call = backend.calls.find((entry) => entry.prompt.includes("Your task:\nwrite the API"))!;
+  assert.equal(call.options.resume, parentNative);
+  assert.equal(call.options.forkSession, true);
+  assert.equal(call.options.resumeSessionAt, "11111111-2222-3333-4444-555555555555");
+  assert.equal(store.get(group.forks[0]!.sessionId)!.native.forkOf, parentNative);
+
+  point = { fresh: true };
+  const fresh = await forks.fork(parent.id, [{ task: "write the UI" }], true);
+  assert.equal(fresh.mode, "fresh");
+  await port.wait(fresh.forks[0]!.sessionId, 2000);
+  const freshCall = backend.calls.find((entry) => entry.prompt.includes("Your task:\nwrite the UI"))!;
+  assert.equal(freshCall.options.resume, undefined);
+  assert.equal(freshCall.options.forkSession, undefined);
+  assert.equal(store.get(fresh.forks[0]!.sessionId)!.labels.brand, store.get(parent.id)!.labels.brand);
+  backend.release("plan");
+  await port.wait(parent.id, 2000);
+});
