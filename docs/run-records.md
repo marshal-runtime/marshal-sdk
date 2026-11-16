@@ -73,12 +73,10 @@ Who may read a run is the workspace's rule on the server (its `access.auditors` 
 
 ## Not done here (see the report for owners)
 
-- **No brand filter on the server.** The run index filters by `workspace`, `workflow`, `q` and the rest, but has no
-  filter on a `chat` link. Today a brand is found with `q=<brand name>`, which matches the title. A real filter needs:
-  - a `chat` query parameter in the contract's `OrgRunQuery` (`@marshal/agent-runtime-org` runs.ts, the parser and
-    `orgRunQueryParams`);
-  - the same `link("chat", …)` clause as `channel` and `thread` in zyg-agents `src/shared/org-runs/index-store.ts`;
-  - `chat` in the desktop's `AuditSearchInput` (`packages/marshal-org/src/org-session-audit.ts`).
+- **Brand and env filter on the server (in review).** The contract adds `labels` on rows and a repeated
+  `label=key:value` filter (agent-runtime-org PR #59); the zyg-agents index stores `summary.labels` and filters on them,
+  and the desktop's `AuditSearchInput` passes `label` through (separate PRs). Until they ship, the SDK viewer's
+  Procedures tab filters by brand and env from the records themselves (viewer/README.md).
 - **Runs older than two days are not re-indexed.** The sweeper looks back at most two days by run-id day, so a
   conversation updated after that is not re-indexed.
 - **Envelopes are not served.** The index's envelope route is off until forking a run ships, so `envelopes` stays off.
