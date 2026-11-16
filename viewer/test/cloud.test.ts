@@ -225,7 +225,7 @@ test("pushToCloud replaces the preview, keeps the old one, writes the page recor
   const rendered = `<html><body><section data-key="hero"><h1>Look awake on every call.</h1><img src="file://${studioDir}/library/1617/pictures/A01-jar.png"></section></body></html>`;
   const pageDoc = {
     id: "local-copy", title: "RAWDOG", brand: { id: "1617", name: "RAWDOG" }, product: null, source: "imported from cloud sandbox", version: 3, updatedAt: new Date().toISOString(), updatedBy: "Omer",
-    notes: [{ key: "hero", body: "@Bar ok to ship?", status: "open" }],
+    notes: [{ key: "hero", body: "@Bar ok to ship?", status: "open", uid: "note-1" }],
     sections: [{ key: "hero", label: "Hero", kind: "html", src: "<section><h1>Look awake on every call.</h1></section>" }],
   };
   fs.mkdirSync(path.join(runRoot, "preview"), { recursive: true });
@@ -235,14 +235,16 @@ test("pushToCloud replaces the preview, keeps the old one, writes the page recor
     shot = fs.readFileSync(htmlFile, "utf8");
     fs.writeFileSync(pngFile, "NEW-THUMB");
   };
-  const result = await pushToCloud({ outputRoot: "gs://dev-bucket/runs/demo-1", cloudPageId: PAGE_ID, renderedHtml: rendered, pageDoc, studioDir, by: { name: "Omer" }, summary: "headline", workDir: path.join(dir, "work"), capture });
+  const result = await pushToCloud({ outputRoot: "gs://dev-bucket/runs/demo-1", cloudPageId: PAGE_ID, renderedHtml: rendered, pageDoc, studioDir, by: { name: "Omer" }, summary: "headline", workDir: path.join(dir, "work"), capture, review: { url: "http://127.0.0.1:9" } });
   assert.equal(result.ok, true);
   // Their run list's card shows preview/thumbnail.png: retaken from the edited page, the old one kept beside the backup.
   assert.match(shot, /every call/);
   assert.match(shot, /data:image\/[a-z]+;base64,/);
   assert.equal(fs.readFileSync(path.join(runRoot, "preview", "thumbnail.png"), "utf8"), "NEW-THUMB");
   assert.ok(result.ok && result.thumbnail === "gs://dev-bucket/runs/demo-1/preview/thumbnail.png");
-  assert.deepEqual(result.ok && result.warnings, []);
+  // This run has no page generator run id (its runId is a uuid), so the note stays in the page record and the push says so.
+  assert.ok(result.ok && result.review === null);
+  assert.deepEqual(result.ok && result.warnings, ["This run has no page generator run id, so its notes stay in the page record only."]);
   const preview = fs.readFileSync(path.join(runRoot, "preview", "index.html"), "utf8");
   assert.match(preview, /every call/);
   assert.match(preview, /src="\.\.\/images\/[^"]+"/);
