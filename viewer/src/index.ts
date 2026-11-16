@@ -507,7 +507,7 @@ export function createExtension(context: Context) {
             continue;
           }
           try {
-            const local = await host.runs();
+            const local = await host.pulledRuns();
             for (const run of await host.cloudRuns(input.refresh === true)) {
               const sdkRun = local.find((row) => row.cloud?.outputRoot === run.outputRoot);
               runs.push({

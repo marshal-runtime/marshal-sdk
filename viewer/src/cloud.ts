@@ -14,6 +14,7 @@
 import { execFile, spawn } from "node:child_process";
 import fs from "fs";
 import http from "http";
+import https from "https";
 import os from "os";
 import path from "path";
 import { pathToFileURL } from "url";
@@ -88,6 +89,97 @@ export function gcloud(args: string[], options: { timeoutMs?: number; input?: st
   });
 }
 
+// ---- Reading the bucket ----
+// Listing runs touches a handful of small objects per run. Spawning gcloud for each costs about a second apiece, so
+// when gcloud is the real CLI one access token is fetched once and objects are read over the JSON API in parallel.
+// A MARSHAL_SDK_GCLOUD override (tests, other CLIs) keeps every call on that binary.
+let tokenCache: { token: string; at: number } | undefined;
+const gcsAgent = new https.Agent({ keepAlive: true, maxSockets: 16 });
+const useRest = () => !process.env.MARSHAL_SDK_GCLOUD && process.env.MARSHAL_SDK_GCS_REST !== "0";
+
+async function accessToken(): Promise<string> {
+  if (tokenCache && Date.now() - tokenCache.at < 45 * 60_000) return tokenCache.token;
+  const token = (await gcloud(["auth", "print-access-token"], { timeoutMs: 30_000 })).trim();
+  if (!token) throw new Error("gcloud returned no access token");
+  tokenCache = { token, at: Date.now() };
+  return token;
+}
+
+const splitUri = (uri: string) => {
+  const rest = uri.replace(/^gs:\/\//, "");
+  const slash = rest.indexOf("/");
+  return { bucket: slash < 0 ? rest : rest.slice(0, slash), object: slash < 0 ? "" : rest.slice(slash + 1) };
+};
+
+async function restGet(url: string): Promise<Buffer> {
+  const token = await accessToken();
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, { headers: { authorization: `Bearer ${token}` }, timeout: 30_000, agent: gcsAgent }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => {
+        if ((res.statusCode ?? 0) >= 400) {
+          if (res.statusCode === 401) tokenCache = undefined;
+          reject(new Error(`gcs ${res.statusCode}: ${Buffer.concat(chunks).toString("utf8").slice(0, 200)}`));
+        } else resolve(Buffer.concat(chunks));
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("gcs request timed out")));
+    request.on("error", reject);
+  });
+}
+
+/** An object's text. Rejects when it does not exist. */
+export async function gcsCat(uri: string): Promise<string> {
+  if (!useRest()) return gcloud(["storage", "cat", uri], { timeoutMs: 30_000 });
+  const { bucket, object } = splitUri(uri);
+  return (await restGet(`https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}?alt=media`)).toString("utf8");
+}
+
+const globRegExp = (pattern: string) => new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(?:.*/)?").replace(/\*/g, "[^/]*") + "$");
+
+/** Object URIs matching a gs:// glob (* within a folder, **\/ across folders); [] when none match. */
+export async function gcsGlob(pattern: string): Promise<string[]> {
+  if (!useRest()) {
+    try {
+      return (await gcloud(["storage", "ls", pattern], { timeoutMs: 60_000 })).split("\n").map((line) => line.trim()).filter(Boolean);
+    } catch (error) {
+      if (/matched no objects|One or more URLs matched no objects|not found/i.test(String((error as Error).message))) return [];
+      throw error;
+    }
+  }
+  const star = pattern.indexOf("*");
+  const { bucket, object } = splitUri(star < 0 ? pattern : pattern.slice(0, star));
+  const re = globRegExp(pattern);
+  const hits: string[] = [];
+  let pageToken = "";
+  do {
+    const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o?prefix=${encodeURIComponent(object)}&fields=items(name),nextPageToken&maxResults=1000${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
+    const body = JSON.parse((await restGet(url)).toString("utf8")) as { items?: { name: string }[]; nextPageToken?: string };
+    for (const item of body.items ?? []) {
+      const uri = `gs://${bucket}/${item.name}`;
+      if (re.test(uri)) hits.push(uri);
+    }
+    pageToken = body.nextPageToken ?? "";
+  } while (pageToken);
+  return hits;
+}
+
+/** Runs fn over items with at most `limit` in flight. */
+async function pool<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const index = next++;
+        out[index] = await fn(items[index]!);
+      }
+    }),
+  );
+  return out;
+}
+
 export function configuredClouds(configuration: Row | undefined): { clouds: CloudHostConfig[]; problems: string[] } {
   const clouds: CloudHostConfig[] = [];
   const problems: string[] = [];
@@ -112,34 +204,31 @@ export function configuredClouds(configuration: Row | undefined): { clouds: Clou
 }
 
 /** Output roots under a prefix: runs on the SDK (agent/marshal-state/run.json) and older-pipeline runs (preview only). */
-async function listRoots(config: CloudHostConfig, discovered: readonly string[] = []): Promise<{ root: string; marshal: boolean }[]> {
+async function listRoots(config: CloudHostConfig, discoveredLocations: Promise<readonly string[]> = Promise.resolve([])): Promise<{ root: string; marshal: boolean }[]> {
   const found = new Map<string, boolean>();
-  const ls = async (pattern: string) => {
-    try {
-      return (await gcloud(["storage", "ls", pattern], { timeoutMs: 60_000 })).split("\n").map((line) => line.trim()).filter(Boolean);
-    } catch (error) {
-      if (/matched no objects|One or more URLs matched no objects|not found/i.test(String((error as Error).message))) return [];
-      throw error;
-    }
-  };
+  const ls = gcsGlob;
   // run.json (page-run folders) or page-run.json (agent-sandbox's runner) marks a run with Marshal state.
-  for (const line of await ls(`${config.uri}/**/${STATE}/*.json`)) {
+  const [states, previews, pointers] = await Promise.all([
+    ls(`${config.uri}/**/${STATE}/*.json`),
+    ls(`${config.uri}/**/preview/index.html`),
+    // Runs whose output root is elsewhere in the bucket (their page-generation-runs/<id>/output) announce themselves with a
+    // pointer under the prefix: <uri>/index/<run>.json {outputRoot}. Listing a whole bucket for marshal-state is too slow.
+    ls(`${config.uri}/index/*.json`),
+  ]);
+  for (const line of states) {
     const name = line.slice(line.lastIndexOf("/") + 1);
     if (name === "run.json" || name === "page-run.json") found.set(line.slice(0, -`/${STATE}/${name}`.length), true);
   }
-  for (const line of await ls(`${config.uri}/**/preview/index.html`)) {
+  for (const line of previews) {
     const root = line.slice(0, -"/preview/index.html".length);
     if (!found.has(root)) found.set(root, false);
   }
-  // Runs whose output root is elsewhere in the bucket (their page-generation-runs/<id>/output) announce themselves with a
-  // pointer under the prefix: <uri>/index/<run>.json {outputRoot}. Listing a whole bucket for marshal-state is too slow.
-  const pointers = await ls(`${config.uri}/index/*.json`);
-  const roots = await Promise.all(pointers.map(async (uri) => (await readJson(uri))?.outputRoot));
+  const roots = await pool(pointers, 12, async (uri) => (await readJson(uri))?.outputRoot);
   for (const root of roots) if (typeof root === "string" && /^gs:\/\/[^/]+\/.+/.test(root) && !found.has(trim(root))) found.set(trim(root), true);
   for (const root of config.runs ?? []) if (!found.has(root)) found.set(root, true);
   // Runs whose sessions were shared to the org's session index (it names each run's state location); GCS still backs them.
   const bucket = config.uri.slice(0, config.uri.indexOf("/", "gs://".length) + 1);
-  for (const location of discovered) {
+  for (const location of await discoveredLocations) {
     const known = rootOfState(location);
     if (!known || !known.root.startsWith(bucket) || found.has(known.root)) continue;
     if (known.conversation) stateDirs.set(known.root, trim(location));
@@ -150,7 +239,7 @@ async function listRoots(config: CloudHostConfig, discovered: readonly string[] 
 
 async function readJson(uri: string): Promise<Row | undefined> {
   try {
-    return JSON.parse(await gcloud(["storage", "cat", uri], { timeoutMs: 30_000 })) as Row;
+    return JSON.parse(await gcsCat(uri)) as Row;
   } catch {
     return undefined;
   }
@@ -159,6 +248,7 @@ async function readJson(uri: string): Promise<Row | undefined> {
 /** A cloud host: the folder host over a local mirror of each run's marshal-state, plus the cloud's own run list. */
 export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: () => Promise<string[]> = async () => []): Host & {
   cloudRuns(refresh?: boolean): Promise<CloudRun[]>;
+  pulledRuns(): Promise<Row[]>;
   rootOfRun(runId: string): Promise<string | undefined>;
   cacheRoot: string;
 } {
@@ -166,73 +256,83 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: (
   const local = () => folderHost([cacheRoot]);
   let listed: CloudRun[] = [];
   let syncedAt = 0;
-  let syncing: Promise<CloudRun[]> | undefined;
+  let listing: Promise<CloudRun[]> | undefined;
+  const pulled = new Map<string, number>();
+  const pulling = new Map<string, Promise<void>>();
   const olderRuns = new Map<string, Row>();
 
-  const sync = async (force = false): Promise<CloudRun[]> => {
-    if (!force && Date.now() - syncedAt < SYNC_EVERY_MS && listed.length) return listed;
-    if (syncing) return syncing;
-    syncing = (async () => {
-      fs.mkdirSync(cacheRoot, { recursive: true });
-      const roots = await listRoots(config, await discover().catch(() => []));
-      const runs: CloudRun[] = [];
-      for (const { root, marshal } of roots) {
-        const previewUri = `${root}/preview/index.html`;
-        const entry: CloudRun = { hostId: config.id, outputRoot: root, marshal, previewUri, previewUrl: consoleUrl(previewUri) };
-        if (marshal) {
-          const cacheDir = path.join(cacheRoot, safe(root));
-          fs.mkdirSync(cacheDir, { recursive: true });
-          try {
-            await gcloud(["storage", "rsync", "-r", stateOf(root), cacheDir], { timeoutMs: 300_000 });
-          } catch (error) {
-            entry.run = { syncError: String((error as Error).message).slice(0, 300) };
-          }
-          fs.writeFileSync(path.join(cacheDir, ".cloud.json"), JSON.stringify({ hostId: config.id, outputRoot: root, syncedAt: new Date().toISOString() }));
-          const pageRunFile = path.join(cacheDir, "page-run.json");
-          if (!fs.existsSync(path.join(cacheDir, "run.json")) && fs.existsSync(pageRunFile)) {
-            try {
-              const pageRun = JSON.parse(fs.readFileSync(pageRunFile, "utf8")) as Row;
-              entry.run = { ...(entry.run ?? {}), runId: pageRun.runId, pageId: pageRun.pageId, depth: pageRun.depth, edits: Array.isArray(pageRun.edits) ? pageRun.edits.length : 0 };
-            } catch {
-              /* a partial upload; the next sync reads it */
-            }
-          }
-          const runFile = path.join(cacheDir, "run.json");
-          if (fs.existsSync(runFile)) {
-            try {
-              entry.run = { ...(entry.run ?? {}), ...(JSON.parse(fs.readFileSync(runFile, "utf8")) as Row) };
-            } catch {
-              /* a partial upload; the next sync reads it */
-            }
-          }
-          // agent-sandbox's run.json carries no title or brand: they live in the run's page (pageId) in page-studio/.
-          const pageId = entry.run?.pageId;
-          if (!entry.run?.title && typeof pageId === "string" && /^[A-Za-z0-9._-]+$/.test(pageId)) {
-            try {
-              const page = JSON.parse(fs.readFileSync(path.join(cacheDir, "page-studio", "pages", `${pageId}.json`), "utf8")) as Row;
-              entry.run = { ...(entry.run ?? {}), ...(typeof page.title === "string" ? { title: page.title } : {}), ...(page.brand?.name ? { brand: page.brand.name } : {}) };
-            } catch {
-              /* the page isn't written yet */
-            }
-          }
-          entry.cacheDir = cacheDir;
-        } else {
-          // Their pipeline's plan (agent/plan.json) names the product and the page idea; a finished run doesn't change.
-          if (!olderRuns.has(root)) {
-            const plan = await readJson(`${root}/agent/plan.json`);
-            olderRuns.set(root, plan ? { title: typeof plan.product === "string" ? plan.product : undefined, idea: typeof plan.page_idea === "string" ? plan.page_idea.slice(0, 300) : undefined } : {});
-          }
-          entry.run = { ...olderRuns.get(root) };
-        }
-        runs.push(entry);
+  // Listing reads a few small objects per run straight from the bucket. A run's whole Marshal state (sessions, pictures,
+  // Claude files: 100-300 MB) is mirrored into the cache only when something asks for that run: its sessions, pages,
+  // transcript or files.
+  const pageRecordOf = async (state: string, pageId: string): Promise<Row | undefined> =>
+    (await readJson(`${state}/page-studio/pages/${pageId}.json`)) ?? (await readJson(`${state}/data/pages/${pageId}.json`));
+
+  const describe = async (root: string, marshal: boolean): Promise<CloudRun> => {
+    const previewUri = `${root}/preview/index.html`;
+    const entry: CloudRun = { hostId: config.id, outputRoot: root, marshal, previewUri, previewUrl: consoleUrl(previewUri) };
+    if (!marshal) {
+      // Their pipeline's plan (agent/plan.json) names the product and the page idea; a finished run doesn't change.
+      if (!olderRuns.has(root)) {
+        const plan = await readJson(`${root}/agent/plan.json`);
+        olderRuns.set(root, plan ? { title: typeof plan.product === "string" ? plan.product : undefined, idea: typeof plan.page_idea === "string" ? plan.page_idea.slice(0, 300) : undefined } : {});
       }
+      entry.run = { ...olderRuns.get(root) };
+      return entry;
+    }
+    const state = stateOf(root);
+    const [pageRun, runJson] = await Promise.all([readJson(`${state}/page-run.json`), readJson(`${state}/run.json`)]);
+    if (pageRun) entry.run = { runId: pageRun.runId, pageId: pageRun.pageId, depth: pageRun.depth, edits: Array.isArray(pageRun.edits) ? pageRun.edits.length : 0 };
+    if (runJson) entry.run = { ...(entry.run ?? {}), ...runJson };
+    // agent-sandbox's run.json carries no title or brand: they live in the run's page (pageId) in page-studio/.
+    const pageId = entry.run?.pageId;
+    if (!entry.run?.title && typeof pageId === "string" && /^[A-Za-z0-9._-]+$/.test(pageId)) {
+      const page = await pageRecordOf(state, pageId);
+      if (page) entry.run = { ...(entry.run ?? {}), ...(typeof page.title === "string" ? { title: page.title } : {}), ...(page.brand?.name ? { brand: page.brand.name } : {}) };
+    }
+    if (pulled.has(root)) entry.cacheDir = path.join(cacheRoot, safe(root));
+    return entry;
+  };
+
+  const list = async (force = false): Promise<CloudRun[]> => {
+    if (!force && Date.now() - syncedAt < SYNC_EVERY_MS && listed.length) return listed;
+    if (listing) return listing;
+    listing = (async () => {
+      fs.mkdirSync(cacheRoot, { recursive: true });
+      const roots = await listRoots(config, discover().catch(() => []));
+      const runs = await pool(roots, 12, ({ root, marshal }) => describe(root, marshal));
       listed = runs;
       syncedAt = Date.now();
       return runs;
     })().finally(() => {
-      syncing = undefined;
+      listing = undefined;
     });
-    return syncing;
+    return listing;
+  };
+
+  /** Mirrors one run's Marshal state into the cache (once per SYNC_EVERY_MS unless forced). */
+  const pull = async (root: string, force = false): Promise<void> => {
+    const at = pulled.get(root);
+    if (!force && at !== undefined && Date.now() - at < SYNC_EVERY_MS) return;
+    const running = pulling.get(root);
+    if (running) return running;
+    const job = (async () => {
+      const cacheDir = path.join(cacheRoot, safe(root));
+      fs.mkdirSync(cacheDir, { recursive: true });
+      await gcloud(["storage", "rsync", "-r", stateOf(root), cacheDir], { timeoutMs: 300_000 });
+      fs.writeFileSync(path.join(cacheDir, ".cloud.json"), JSON.stringify({ hostId: config.id, outputRoot: root, syncedAt: new Date().toISOString() }));
+      pulled.set(root, Date.now());
+      const entry = listed.find((candidate) => candidate.outputRoot === root);
+      if (entry) entry.cacheDir = cacheDir;
+    })().finally(() => {
+      pulling.delete(root);
+    });
+    pulling.set(root, job);
+    return job;
+  };
+
+  const pullAll = async (force = false): Promise<void> => {
+    const runs = (await list()).filter((run) => run.marshal);
+    await pool(runs, 4, (run) => pull(run.outputRoot, force).catch(() => undefined));
   };
 
   /** The run's output root from the cache folder holding its session store. */
@@ -253,33 +353,80 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: (
     });
 
   const base = local();
+  /** Mirrors the run (or, with no run named, every run) a request is about before the folder host answers it. */
+  const pullFor = async (runId?: string, force = false): Promise<void> => {
+    await list();
+    const root = runId ? await rootOfRunId(runId) : undefined;
+    if (root && listed.some((entry) => entry.outputRoot === root && entry.marshal)) await pull(root, force);
+    else await pullAll(force);
+  };
+  /** A session id alone does not name its run: look in what is pulled, then pull the rest. */
+  const pullForSession = async (sessionId: string): Promise<void> => {
+    if (!(await local().session(sessionId))) await pullAll();
+  };
   const host: Host = {
     ...base,
     summary: { id: config.id, name: config.name ?? `Cloud (${config.uri.replace(/^gs:\/\//, "")})`, kind: "folder", roots: [cacheRoot], url: config.uri },
     async info() {
-      const runs = await sync().catch(() => listed);
-      return { status: "cloud", mode: "cloud", uri: config.uri, cache: cacheRoot, runs: runs.length, marshalRuns: runs.filter((run) => run.marshal).length, files: ["workspace", "output", "data"] };
+      const runs = await list().catch(() => listed);
+      return { status: "cloud", mode: "cloud", uri: config.uri, cache: cacheRoot, runs: runs.length, marshalRuns: runs.filter((run) => run.marshal).length, pulled: pulled.size, files: ["workspace", "output", "data"] };
     },
     async runs() {
-      await sync();
+      await pullAll();
       return annotate(await local().runs());
     },
     async sessions(runId) {
+      await pullFor(runId);
       return local().sessions(runId);
     },
     async session(sessionId) {
+      await pullForSession(sessionId);
       return local().session(sessionId);
     },
     async transcript(sessionId, options) {
+      await pullForSession(sessionId);
       return local().transcript(sessionId, options);
     },
     async watch(sessionId, options) {
-      // A live cloud run keeps uploading its state; pull it before each watch.
-      await sync(true).catch(() => undefined);
+      // A live cloud run keeps uploading its state; pull it again before each watch.
+      await pullForSession(sessionId);
+      const row = await local().session(sessionId);
+      const root = row ? rootOfStore(String((row as Row).store ?? "")) : undefined;
+      if (root) await pull(root, true).catch(() => undefined);
       return local().watch(sessionId, { ...options, waitMs: Math.min(options.waitMs, 2_000) });
     },
+    async telemetry(target) {
+      if (target.sessionId) await pullForSession(target.sessionId);
+      else await pullFor(target.runId);
+      return base.telemetry(target);
+    },
+    async files(runId, root, relative) {
+      await pullFor(runId);
+      return base.files(runId, root, relative);
+    },
+    async readFile(runId, root, relative, maxBytes) {
+      await pullFor(runId);
+      return base.readFile(runId, root, relative, maxBytes);
+    },
+    async events(sessionId, since, limit) {
+      await pullForSession(sessionId);
+      return base.events(sessionId, since, limit);
+    },
+    async search(query, limit) {
+      await pullAll();
+      return base.search(query, limit);
+    },
+    async decisions(filter) {
+      await pullAll();
+      return base.decisions(filter);
+    },
+    async native(sessionId) {
+      await pullForSession(sessionId);
+      return base.native(sessionId);
+    },
     async pages(runId) {
-      await sync();
+      await list();
+      await pullFor(runId);
       // One cache folder holds one run, so every page in it is that run's, also after an edit pushed later than the
       // run's time window (the folder host attributes pages by updatedAt).
       const root = runId ? await rootOfRunId(runId) : undefined;
@@ -293,7 +440,7 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: (
       return { ...listedPages, pages: pages.map((page) => ({ ...page, runId })) };
     },
     async pageFolder(pageId, runId) {
-      await sync();
+      await pullFor(runId);
       const folder = await local().pageFolder(pageId, runId, cacheRoot);
       const root = runId ? await rootOfRunId(runId) : undefined;
       return { ...folder, origin: `cloud ${config.id}${root ? ` ${root.replace(/^gs:\/\//, "")}` : ""}` };
@@ -310,16 +457,20 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: (
   };
 
   const rootOfRunId = async (runId: string): Promise<string | undefined> => {
+    await list();
+    const named = listed.find((entry) => entry.run?.runId === runId || path.basename(entry.outputRoot) === runId)?.outputRoot;
+    if (named) return named;
     const runs = await local().runs();
     const row = runs.find((entry) => entry.runId === runId);
     const store = row ? String(row.store ?? row.sources?.[0]?.store ?? "") : "";
-    if (store) return rootOfStore(store);
-    return listed.find((entry) => entry.run?.runId === runId || path.basename(entry.outputRoot) === runId)?.outputRoot;
+    return store ? rootOfStore(store) : undefined;
   };
 
   return Object.assign(host, {
     cacheRoot,
-    cloudRuns: (refresh?: boolean) => sync(Boolean(refresh)),
+    cloudRuns: (refresh?: boolean) => list(Boolean(refresh)),
+    /** Runs already mirrored into the cache (no pulling): their sessions and cost. */
+    pulledRuns: async () => annotate(await local().runs()),
     rootOfRun: rootOfRunId,
   });
 }
