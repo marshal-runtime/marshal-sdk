@@ -92,6 +92,7 @@
   "electron/marshal-runtime/contracts.ts",
   "electron/marshal-runtime/delegation-instructions.ts",
   "electron/marshal-runtime/document-annotations.ts",
+  "electron/marshal-runtime/extension-scope.ts",
   "electron/marshal-runtime/extension-secrets.ts",
   "electron/marshal-runtime/first-party-extension-catalog.ts",
   "electron/marshal-runtime/health-cleanup-provider.ts",

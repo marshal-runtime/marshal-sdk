@@ -59,6 +59,10 @@ with trusted Node, orchestrator without runtime, tool-free, swarm worker), the S
 rendered from desktop `36452cec2`; `node scripts/desktop-prompt-fixture.mjs [desktop checkout]` regenerates them
 (it bundles the desktop's assembler with the desktop's own esbuild and runs it in that checkout).
 
+`desktopSurface()` (`src/prompt-desktop.ts`) is that same layer's slots as a ready surface, so a host can run the
+`marshal` profile (Marshal's own prompt) instead of the cloud-headless text: `prompt: {surface: desktopSurface()}`. A
+cloud host's own facts (`cloudRunLayer`) go on top. `test/prompt.test.ts` pins its slots to the fixture.
+
 The desktop's words (its 24 slot values, role texts, browser guidance, notable-extensions list) stay in the desktop
 as its layer; they describe the desktop. Everything the hosts share is already in the package.
 

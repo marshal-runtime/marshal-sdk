@@ -21,7 +21,20 @@ const MAX_TRANSCRIPT_MESSAGE_CHARS = 2_000;
 
 export type MarshalRuntimeAgentState = "running" | "idle";
 
+/** What the host serves an agent: names only, so two hosts running one profile can be compared. */
+export interface MarshalRuntimeAgentEnvironment {
+  /** Extension identities the agent is limited to; null = every enabled extension. */
+  readonly extensions: readonly string[] | null;
+  readonly mcpServers: readonly string[] | null;
+  readonly skills: readonly string[];
+  /** The host does not enumerate its built-in tools. */
+  readonly tools: readonly string[];
+}
+
 export interface MarshalRuntimeAgentSummary extends Partial<SessionExecutionEvidence> {
+  readonly usage?: SessionExecutionEvidence["usage"] & {
+    readonly environment?: MarshalRuntimeAgentEnvironment;
+  };
   readonly id: string;
   readonly name: string;
   readonly state: MarshalRuntimeAgentState;
@@ -64,8 +77,14 @@ export interface MarshalRuntimeAgentLaunchRequest {
   /** Skill names the child may use, applied even with `allowedTools`; absent keeps the default
    *  (the owner's skill scope, none under `allowedTools`). */
   readonly skills?: readonly string[];
+  /** Extension identities whose capabilities and skills the child sees; absent = every enabled extension. */
+  readonly extensions?: readonly string[];
+  /** Runtime built-in tools the child may use; absent = all. Not supported by this host yet. */
+  readonly nativeTools?: readonly string[];
   /** Replaces Marshal's assembled system prompt and excludes repository context. */
   readonly systemPrompt?: string;
+  /** Extra sections added after Marshal's assembled system prompt. */
+  readonly systemPromptAppend?: string;
   /** Absolute file paths attached to the child's first message. */
   readonly attachments?: readonly string[];
   readonly createWorktree?: boolean;
@@ -168,6 +187,7 @@ export interface MarshalRuntimeAgentSessionPort {
     sessionId: string,
     executionId?: string,
   ): SessionExecutionEvidence | undefined;
+  getRuntimeEnvironment?(sessionId: string): MarshalRuntimeAgentEnvironment | undefined;
   listSubagentSessions(parentSessionId?: string): SessionMetadata[];
   isSessionBusy(sessionId: string): boolean;
   /** Optional for older test/embedded session ports; native production wiring supplies both. */
@@ -194,8 +214,10 @@ export interface MarshalRuntimeAgentSessionPort {
     runtimeTaskController?: string;
     skills?: string[];
     mcp?: string[];
+    extensions?: string[];
     allowedTools?: string[];
     systemPrompt?: string;
+    systemPromptAppend?: string;
     attachments?: string[];
     /** Runtime-managed agents must not enter the chat subagent todo/goal
      *  lifecycle; the owning extension manages the assignment explicitly. */
@@ -784,6 +806,10 @@ export class SessionManagerRuntimeAgentAdapter implements MarshalRuntimeAgentPor
       runtimeTaskController: request.runtimeTaskController,
       ...(request.allowedTools ? { allowedTools: [...request.allowedTools] } : {}),
       ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
+      ...(request.systemPromptAppend !== undefined
+        ? { systemPromptAppend: request.systemPromptAppend }
+        : {}),
+      ...(request.extensions !== undefined ? { extensions: [...request.extensions] } : {}),
       ...(request.attachments?.length ? { attachments: [...request.attachments] } : {}),
       skills: skills ? [...skills] : undefined,
       mcp: mcp ? [...mcp] : undefined,
@@ -891,7 +917,15 @@ export class SessionManagerRuntimeAgentAdapter implements MarshalRuntimeAgentPor
       ...(session.soul ? { soul: session.soul } : {}),
       ...(session.runtimeAgentRole ? { runtimeAgentRole: session.runtimeAgentRole } : {}),
       ...this.sessions.getRuntimeExecutionEvidence?.(session.id),
+      ...this.withEnvironment(session.id),
     };
+  }
+
+  private withEnvironment(sessionId: string): Pick<MarshalRuntimeAgentSummary, "usage"> {
+    const environment = this.sessions.getRuntimeEnvironment?.(sessionId);
+    if (!environment) return {};
+    const usage = this.sessions.getRuntimeExecutionEvidence?.(sessionId)?.usage;
+    return { usage: { ...usage, environment } };
   }
 
   private toTranscript(session: PersistedSession, limit: number): MarshalRuntimeAgentTranscript {

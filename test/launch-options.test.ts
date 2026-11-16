@@ -117,3 +117,23 @@ test("structured output comes back from wait", async () => {
   const waited = await port.wait(agent.id);
   assert.deepEqual(waited.structuredOutput, { verdict: "pass", score: 4 });
 });
+
+test("an agent profile appends to the host prompt, keeps named MCP servers and records its extension scope", async () => {
+  const { port, store, calls } = rig();
+  const plain = port.launch({ task: "a", idempotencyKey: "plain" });
+  await port.wait(plain.id);
+  const profiled = port.launch({
+    task: "b",
+    idempotencyKey: "profiled",
+    extensions: ["@zyg/page-studio"],
+    systemPromptAppend: "Build one page.",
+    mcpServerNames: ["other"],
+  });
+  await port.wait(profiled.id);
+  assert.equal(calls[0].systemPrompt, "host prompt");
+  assert.equal(calls[1].systemPrompt, "host prompt\n\nBuild one page.");
+  assert.deepEqual(Object.keys(calls[0].mcpServers), ["marshal"]);
+  assert.deepEqual(calls[1].mcpServers, {});
+  assert.deepEqual(store.get(profiled.id)?.extensions, ["@zyg/page-studio"]);
+  assert.equal(store.get(plain.id)?.extensions, undefined);
+});

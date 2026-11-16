@@ -91,6 +91,11 @@ import {
   type MarshalRuntimeStatus,
   type ResolvedMarshalRuntimeScope,
 } from "./contracts";
+import {
+  extensionScopeDecision,
+  filterSearchByExtensionScope,
+  type SessionExtensionScope,
+} from "./extension-scope";
 import type { RuntimeExtensionSecrets } from "./extension-secrets";
 import {
   createFirstPartyExtensionPackageLoader,
@@ -765,6 +770,8 @@ export interface MarshalRuntimeHostOptions {
   ) => void;
   readonly restrictedServices?: ReadonlyMap<string, (extensionIdentity: string) => boolean>;
   readonly applicationAuthority?: RuntimeApplicationAuthority;
+  /** The extensions a launched agent is limited to (its profile); undefined = every enabled extension. */
+  readonly sessionExtensionScope?: SessionExtensionScope;
   readonly extensionSecrets?: RuntimeExtensionSecrets;
   readonly onApplicationInvalidated?: (owner: RuntimeUiOwnerIdentity) => Promise<void>;
   readonly resolveApplicationWorkspace?: (scope: RuntimeUiScope) => Promise<string | null>;
@@ -1052,7 +1059,24 @@ export class MarshalRuntimeHost {
 
   async search(request: RuntimeSearchRequest, context: RuntimeCallContext) {
     const bindings = await this.requireBindings();
-    return bindings.kernel.search(request, context);
+    const response = await bindings.kernel.search(request, context);
+    const scope = this.extensionScopeOf(context.sessionId);
+    if (scope === undefined) return response;
+    return filterSearchByExtensionScope(response, scope, await this.installedExtensionIds());
+  }
+
+  private extensionScopeOf(sessionId: string | undefined): readonly string[] | undefined {
+    return sessionId ? this.options.sessionExtensionScope?.(sessionId) : undefined;
+  }
+
+  private async installedExtensionIds(): Promise<ReadonlySet<string>> {
+    return new Set((await this.listExtensions()).map((record) => record.identity));
+  }
+
+  private async scopeDecision(check: PermissionCheck): Promise<PermissionDecision | undefined> {
+    const scope = this.extensionScopeOf(check.context.scope?.sessionId);
+    if (scope === undefined) return undefined;
+    return extensionScopeDecision(check, scope, await this.installedExtensionIds());
   }
 
   /** Runtime `startSession` for a Marshal session; pins its workspace for `endRuntimeSession`. */
@@ -1560,6 +1584,8 @@ export class MarshalRuntimeHost {
         permissionBroker: {
           decide: async (check) => {
             assertCapabilityInput(check.capability, check.request.input);
+            const scoped = await this.scopeDecision(check);
+            if (scoped) return scoped;
             return (
               (await this.options.applicationAuthority?.decide(check)) ??
               decidePermission(

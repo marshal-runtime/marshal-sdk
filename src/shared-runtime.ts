@@ -38,6 +38,8 @@ export interface SharedRuntimeOptions {
   nodeExecutable?: string;
   trustedTypeScript?: boolean;
   version: string;
+  /** The extension identities a session may see (agent profile); undefined: all installed. */
+  sessionExtensionScope?: (sessionId: string) => readonly string[] | undefined;
   diagnostics?: (type: string, details?: Record<string, unknown>) => void;
 }
 
@@ -101,6 +103,7 @@ export async function createSharedRuntime(options: SharedRuntimeOptions): Promis
       getSessionContext: async () => null,
     },
     serviceContainer: options.serviceContainer,
+    ...(options.sessionExtensionScope ? { sessionExtensionScope: options.sessionExtensionScope } : {}),
     ...(options.compositionRegistry ? { compositionRegistry: options.compositionRegistry } : {}),
     additionalProviderSources: options.providerSources,
     ...(options.nodeExecutable ? { nodeExecutable: options.nodeExecutable } : {}),

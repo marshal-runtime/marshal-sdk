@@ -7,13 +7,26 @@ type LaunchOverride = Pick<MarshalRuntimeAgentLaunchRequest, "systemPrompt" | "a
 /** Maps the session-shaping fields of a delegation launch request to an agent launch. */
 export function delegationLaunchOverride(request: {
   readonly systemPrompt?: string;
+  readonly systemPromptAppend?: string;
   readonly tools?: readonly string[];
   readonly attachments?: readonly string[];
   readonly mcpServers?: readonly string[];
   readonly skills?: readonly string[];
+  readonly extensions?: readonly string[];
+  readonly nativeTools?: readonly string[];
 }): LaunchOverride &
-  Pick<MarshalRuntimeAgentLaunchRequest, "allowedTools" | "mcpServers" | "skills"> {
+  Pick<
+    MarshalRuntimeAgentLaunchRequest,
+    "allowedTools" | "mcpServers" | "skills" | "extensions" | "nativeTools" | "systemPromptAppend"
+  > {
   return {
+    ...(request.systemPromptAppend === undefined
+      ? {}
+      : { systemPromptAppend: request.systemPromptAppend }),
+    ...(request.mcpServers === undefined ? {} : { mcpServers: [...request.mcpServers] }),
+    ...(request.skills === undefined ? {} : { skills: [...request.skills] }),
+    ...(request.extensions === undefined ? {} : { extensions: [...request.extensions] }),
+    ...(request.nativeTools === undefined ? {} : { nativeTools: [...request.nativeTools] }),
     ...(request.tools === undefined ? {} : { allowedTools: [...request.tools] }),
     ...(request.mcpServers === undefined ? {} : { mcpServers: [...request.mcpServers] }),
     ...(request.skills === undefined ? {} : { skills: [...request.skills] }),
@@ -26,6 +39,33 @@ export function delegationLaunchOverride(request: {
 export async function assertLaunchOverride(
   request: MarshalRuntimeAgentLaunchRequest,
 ): Promise<void> {
+  if (request.nativeTools !== undefined) {
+    throw invalidRuntimeRequest(
+      new TypeError(
+        "nativeTools is not supported by this host yet; omit it to keep every built-in tool.",
+      ),
+    );
+  }
+  if (request.systemPrompt !== undefined && request.systemPromptAppend !== undefined) {
+    throw invalidRuntimeRequest(
+      new TypeError("systemPrompt replaces the prompt; use systemPromptAppend alone to add to it."),
+    );
+  }
+  if (
+    request.sessionId !== undefined &&
+    (request.systemPromptAppend !== undefined ||
+      request.extensions !== undefined ||
+      request.mcpServers !== undefined ||
+      request.skills !== undefined)
+  ) {
+    throw invalidRuntimeRequest(
+      new TypeError(
+        "systemPromptAppend, extensions, mcpServers and skills cannot change an already running session.",
+      ),
+    );
+  }
+  if (request.systemPromptAppend !== undefined)
+    assertLaunchSystemPrompt(request.systemPromptAppend);
   if (request.systemPrompt === undefined && request.attachments === undefined) return;
   if (request.sessionId !== undefined) {
     throw invalidRuntimeRequest(
