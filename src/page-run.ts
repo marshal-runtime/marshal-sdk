@@ -913,7 +913,11 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
   return summary.error ? 1 : 0;
 }
 
-/** The cloud run layer of the run's sessions (src/prompt-cloud.ts): who it is for, where results and state go. */
+/**
+ * The cloud run layer of the run's sessions (src/prompt-cloud.ts): host facts only (who it is for, where results and
+ * state go, which tools exist). How the page is built, which skills apply and what a run may spend belong to the Page
+ * Studio extension, the same as on a desktop, so no process text (Page Studio how-to, limits nudge) is added here.
+ */
 function runPrompt(
   job: string,
   options: { kit?: readonly KitPartName[]; publish?: SessionsPublishOptions; startedBy?: string; stateLocation?: string; runLabel?: string; model?: string; effort?: string },
@@ -926,12 +930,10 @@ function runPrompt(
     job,
     purpose: run.purpose,
     contract: run.contract,
-    pageStudio: true,
     kit: { brain: parts.has("brain") || parts.has("memory"), memory: parts.has("memory"), sessions: parts.has("sessions"), publishes: Boolean(options.publish) },
     ...(options.runLabel ? { runId: options.runLabel } : {}),
     ...(startedBy ? { startedBy } : {}),
     ...(stateLocation ? { stateLocation } : {}),
-    ...(options.model ? { limits: `model ${options.model}${options.effort ? ` at ${options.effort} effort` : ""}` } : {}),
   });
 }
 
