@@ -81,6 +81,29 @@ export interface AutomationRun {
   outcome?: "finished" | "failed";
 }
 
+/**
+ * Runs a server job the host registered under `id` (HostAutomationsOptions.jobs) instead of starting a session: for work
+ * that is a clock or an event but not an agent (a watch, a sync). The trigger, fire policy, owed fires and tenant rules are
+ * the same as for an agent; the run is recorded with the session id `job:<automation id>` (no session exists).
+ */
+export interface AutomationJobBody {
+  id: string;
+  /** The job's input, given to the handler as data. */
+  input?: Record<string, unknown>;
+}
+
+/** What a registered job handler is given when its automation fires. */
+export interface JobRequest {
+  automation: Automation;
+  tenant?: string;
+  trigger: AutomationRunTrigger;
+  event?: { type: string; payload: Record<string, unknown> };
+  input: Record<string, unknown>;
+  at: Date;
+}
+
+export type JobHandler = (request: JobRequest) => void | Promise<void>;
+
 /** Starts an agent an extension declares (contributes.agents) with its pinned profile, instead of a plain prompt. */
 export interface AutomationExtensionBody {
   id: string;
@@ -149,6 +172,8 @@ export interface Automation {
   prompt: string;
   /** Start this agent extension (with its declared profile) instead of a plain prompt session. */
   extension?: AutomationExtensionBody;
+  /** Run a registered server job instead of a session. */
+  job?: AutomationJobBody;
   /** The tenant (a brand) it belongs to. Its fires, events and `after` chains stay inside the tenant. */
   tenant?: string;
   /** The routine file id it came from, so `after` triggers can name it. */
@@ -188,6 +213,8 @@ export interface AutomationInput {
   /** Required unless `extension` is given. */
   prompt?: string;
   extension?: AutomationExtensionBody;
+  /** Host API only: a registered server job (see AutomationJobBody). */
+  job?: AutomationJobBody;
   /** Host API only: the capability never sets these. */
   tenant?: string;
   routineId?: string;
@@ -226,6 +253,8 @@ export interface HostAutomationsOptions {
   store?: AutomationStore;
   /** Finds agent extension packages for `extension` bodies. Without it an extension body cannot run. */
   extensions?: AgentExtensionSource;
+  /** Server jobs an automation's `job` body can name. Without a handler of that name the automation cannot be created. */
+  jobs?: Readonly<Record<string, JobHandler>>;
   /**
    * Asked before every automatic fire (schedule, condition, event, after; a manual run is not a fire): go runs it,
    * hold keeps it owed and asks again on later ticks, skip drops it. Default: go.
@@ -405,8 +434,10 @@ export class HostAutomations {
 
   async create(input: AutomationInput, createdBy?: string): Promise<Automation> {
     const name = requireText(input.name, "name");
+    if (input.job && (input.extension || input.targetSessionId)) throw invalid("A job body runs a server job; it has no extension and wakes no session.");
     const extension = input.extension ? this.checkExtension(input.extension, input.tenant) : undefined;
-    const prompt = extension ? (input.prompt ?? "").trim() : requireText(input.prompt, "prompt");
+    const job = input.job ? this.checkJob(input.job) : undefined;
+    const prompt = extension || job ? (input.prompt ?? "").trim() : requireText(input.prompt, "prompt");
     if (extension && input.targetSessionId) throw invalid("An extension body starts its own session; it cannot wake another one.");
     const trigger = this.triggerOf(input);
     if (input.targetSessionId && !this.options.sessions.get(input.targetSessionId)) {
@@ -420,6 +451,7 @@ export class HostAutomations {
       description: input.description ?? "",
       prompt,
       ...(extension ? { extension } : {}),
+      ...(job ? { job } : {}),
       ...(input.tenant ? { tenant: input.tenant } : {}),
       ...(input.routineId ? { routineId: input.routineId } : {}),
       ...(input.labels ? { labels: { ...input.labels } } : {}),
@@ -592,6 +624,14 @@ export class HostAutomations {
     return (automation.tenant && this.options.timezoneFor?.(automation.tenant)) || this.timezone;
   }
 
+  /** A job body is valid only when the host registered a handler of that name. */
+  private checkJob(body: AutomationJobBody): AutomationJobBody {
+    const id = requireText(body?.id, "job.id");
+    if (body.input !== undefined && (!body.input || typeof body.input !== "object" || Array.isArray(body.input))) throw invalid("job.input must be an object.");
+    if (!this.options.jobs || !Object.hasOwn(this.options.jobs, id)) throw invalid(`Job ${id} is not registered on this host.`);
+    return { id, ...(body.input ? { input: { ...body.input } } : {}) };
+  }
+
   /** An extension body is valid only when its package resolves and declares that agent. */
   private checkExtension(body: AutomationExtensionBody, tenant: string | undefined): AutomationExtensionBody {
     const id = requireText(body?.id, "extension.id");
@@ -736,7 +776,26 @@ export class HostAutomations {
       ...(automation.labels ?? {}),
       ...(automation.tenant ? { [this.tenantLabel]: automation.tenant } : {}),
     };
-    if (automation.extension) {
+    let jobFailure: string | undefined;
+    if (automation.job) {
+      const handler = this.options.jobs && Object.hasOwn(this.options.jobs, automation.job.id) ? this.options.jobs[automation.job.id] : undefined;
+      if (!handler) throw invalid(`Job ${automation.job.id} is not registered on this host.`);
+      sessionId = `job:${automation.id}`;
+      try {
+        await handler({
+          automation,
+          ...(automation.tenant ? { tenant: automation.tenant } : {}),
+          trigger,
+          ...(extra.event ? { event: extra.event } : {}),
+          input: { ...(automation.job.input ?? {}) },
+          at: this.now(),
+        });
+      } catch (error) {
+        // A job is not retried by the clock: the failure is the automation's lastError and the next fire runs as usual.
+        jobFailure = error instanceof Error ? error.message : String(error);
+        this.options.log?.(`automation ${automation.id} job failed: ${jobFailure}`);
+      }
+    } else if (automation.extension) {
       const source = this.options.extensions?.resolve(automation.extension.id, automation.tenant);
       if (!source) throw invalid(`Extension ${automation.extension.id} is not available to this host${automation.tenant ? ` for ${automation.tenant}` : ""}.`);
       const resolved = resolveAgent(source.packageRoot, automation.extension.agent, {
@@ -817,6 +876,7 @@ export class HostAutomations {
     const finished = current.oneShot && trigger !== "manual";
     const next: Automation = { ...current, runs, updatedAt: this.now().toISOString(), ...(finished ? { state: "completed" as const } : {}) };
     delete next.lastError;
+    if (jobFailure !== undefined) next.lastError = jobFailure;
     this.definitions.set(automation.id, next);
     this.save();
     // The scheduler completes a once schedule itself; a condition's check interval has to be cancelled.

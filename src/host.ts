@@ -15,7 +15,7 @@ import { z } from "zod";
 import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
 import { marshalProviderTools, PROVIDER_TOOLS, resolveProvider, type ProviderSelection } from "./provider-selection.js";
 import { callerSessionId, createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
-import { createAutomationsProvider, HostAutomations, type AgentExtensionSource, type AutomationStore, type HostAutomationsOptions } from "./automations.js";
+import { createAutomationsProvider, HostAutomations, type AgentExtensionSource, type AutomationStore, type HostAutomationsOptions, type JobHandler } from "./automations.js";
 import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decisions.js";
 import { createModelServices, createModelsProvider, type ModelServices, type ModelsConfig } from "./models/index.js";
 import { skillVisibleTo } from "./profile.js";
@@ -153,6 +153,8 @@ export type MarshalHostOrgOptions = Omit<OrgBridgeOptions, "store" | "agents" | 
 };
 
 export interface MarshalHostAutomationOptions {
+  /** Server jobs an automation's `job` body can name (docs/automations.md). */
+  jobs?: Readonly<Record<string, JobHandler>>;
   /** The scheduler's clock. Tests pass a fake one with start: false and call host.automations.tick(). */
   now?: () => Date;
   /** How often the scheduler looks for due runs. Default 5 s. */
@@ -324,6 +326,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     ...(options.automations?.timezone ? { timezone: options.automations.timezone } : {}),
     ...(options.automations?.store ? { store: options.automations.store } : {}),
     ...(options.automations?.extensions ? { extensions: options.automations.extensions } : {}),
+    ...(options.automations?.jobs ? { jobs: options.automations.jobs } : {}),
     ...(options.automations?.firePolicy ? { firePolicy: options.automations.firePolicy } : {}),
     ...(options.automations?.contextFor ? { contextFor: options.automations.contextFor } : {}),
     ...(options.automations?.timezoneFor ? { timezoneFor: options.automations.timezoneFor } : {}),
