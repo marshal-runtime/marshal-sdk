@@ -341,6 +341,9 @@ test("page-run's dry path writes the whole run contract from an input folder, wi
   assert.ok(marshal.sections.includes("hero") && marshal.sections.includes("proof"), marshal.sections.join(","));
   for (const file of ["run.jsonl", "summary.json", "query/system_prompt.md", "query/task.md", "query/options.json"]) assert.ok(fs.existsSync(path.join(logs, file)), file);
   for (const file of ["shots/mobile.png", "shots/desktop.png"]) assert.ok(fs.existsSync(path.join(out, file)), file);
+  const rendered = fs.readFileSync(path.join(logs, "query", "system_prompt.md"), "utf8");
+  assert.match(rendered, /## This run/, "the run's host facts stay");
+  assert.match(rendered, /forkSubagents/, "the marshal profile renders the desktop's own prompt words (delegation section)");
   assert.deepEqual(summary.skills_missing, [], "Page Studio loads lp-design into its own prompts");
   assert.ok((summary.marshal as { pageStudio: { skills?: string[] } }).pageStudio.skills?.includes("lp-design"));
   assert.ok(summary.results.length >= 2, "the whole-page writer and the critic ran as sessions");
