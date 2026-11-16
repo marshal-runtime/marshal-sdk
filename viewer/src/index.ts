@@ -570,6 +570,7 @@ export function createExtension(context: Context) {
           ...(typeof input.summary === "string" ? { summary: input.summary } : {}),
           workDir: path.join(expandHome(pullRoot()), ".push"),
         });
+        if (!pushed.ok) return { ...pushed, outputRoot, pageId, cloudPageId };
         if (link) writeLink(pullRoot(), pageId, { ...link, pushedAt: new Date().toISOString() });
         for (const host of cloud().values()) void host.cloudRuns(true).catch(() => undefined);
         return { ...pushed, outputRoot, pageId, cloudPageId, message: `Pushed version ${pushed.version} of the page to ${outputRoot}; their page generator shows it at preview/index.html.` };
