@@ -39,7 +39,31 @@ export {
   type Automation,
   type AutomationInput,
   type AutomationTrigger,
+  type AutomationRun,
+  type AutomationExtensionBody,
+  type AutomationStore,
+  type AgentExtensionSource,
+  type FireDecision,
+  type FireRequest,
+  type OwedFire,
+  FileAutomationStore,
+  localTimeOn,
+  parseDuration,
 } from "./automations.js";
+export {
+  agentLaunchFields,
+  AgentEntryError,
+  profileFingerprint,
+  readExtensionAgents,
+  resolveAgent,
+  type AgentEntry,
+  type ContextValues,
+  type DeclaredProfile,
+  type ExtensionAgents,
+  type ResolvedAgent,
+  type ResolvedProfile,
+} from "./agent-entries.js";
+export { parseRoutineFile, routineAutomations, RoutineDefinitionSchema, type ParsedRoutine, type RoutineDefinition } from "./routine-file.js";
 export {
   createDecisionsProvider,
   DecisionDesk,
