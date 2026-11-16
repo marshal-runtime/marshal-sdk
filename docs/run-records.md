@@ -21,11 +21,12 @@ runs/<day>-<workflow>-<12 hex>/
 const host = await createMarshalHost({
   …,
   runRecords: {
+    env: "production",                                      // local | staging | production, from the host's config
     sink: gcsRunSink({ bucket: "<records bucket>", accessToken: () => workloadToken() }),
     allow: (root) => TEST_BRANDS.has(root.labels.brand),   // default: nothing leaves the host
   },
 });
-host.agents.launch({ task, idempotencyKey, labels: { procedure: "marley-chat", brand, brandName, conversation, channel: "whatsapp", kind: "dm", role: "front" } });
+host.agents.launch({ task, idempotencyKey, labels: { procedure: "marley-chat", brand, conversation, channel: "whatsapp", kind: "dm", role: "front" } });
 ```
 
 ## The grouping
@@ -40,8 +41,14 @@ host.agents.launch({ task, idempotencyKey, labels: { procedure: "marley-chat", b
 - **Run.** A run is one root session (a session without a parent) together with its forks. A fork going idle
   republishes its root's whole run. The run id starts with the day the root started, because the sweeper lists runs by
   that day. It is stable, so every publish overwrites the same objects.
-- **Brand.** It is a `chat` link `<brand>:<conversation>`. `brandName`, `channel`, `kind` and the session title make
-  the run title.
+- **Brand.** It is a `chat` link `<brand>:<conversation>`.
+- **Labels.** `summary.labels` carries `procedure`, `env`, `brand`, `conversation`, `channel` and `kind` (ids and keys
+  only, each matching `[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}`). `env` comes from the host's `runRecords.env`, never from a
+  session label, so local, staging and production runs of one procedure can be told apart.
+- **No message text in a row.** The title is built from those ids (`marley-chat · <brand> · <conversation> · dm · production`);
+  the record holds ids, states and times; an error is `failed`. The index builds its row and search text from the title,
+  the error, the first task and the last answer, so a row says nothing beyond its labels. Message text is only in the
+  session stream, fetched when someone opens the run.
 - **Requester.** It is the `requester` label when there is one. A run without one is read only by the workspace's
   auditors.
 - **Custom grouping.** `labelRunGrouping()` is the default. A host can pass its own `grouping(root)`.

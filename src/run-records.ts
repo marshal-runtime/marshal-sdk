@@ -39,7 +39,16 @@ export interface RunGroup {
   links: RunLink[];
   /** The person the run was for (`user:` principal or email), when there is one; a run without one is read by auditors only. */
   user?: string;
+  /**
+   * Facets a reader filters by (`procedure`, `env`, `brand`, `conversation`, `channel`, `kind`): ids and keys only,
+   * never message text. Written as `summary.labels`.
+   */
+  labels?: Record<string, string>;
 }
+
+/** Where the host runs; every run carries it, so local, staging and production runs of one procedure can be told apart. */
+export type RunEnv = "local" | "staging" | "production";
+export const RUN_ENVS: readonly RunEnv[] = ["local", "staging", "production"];
 
 /** Decides the run of a root session (a session without a parent); undefined publishes nothing for it. */
 export type RunGrouping = (root: SessionRecord) => RunGroup | undefined;
@@ -52,6 +61,8 @@ export interface RunRecordSink {
 export interface RunRecordsOptions {
   store: Pick<FileSessionStore, "get" | "list" | "events" | "messages">;
   sink: RunRecordSink;
+  /** The host's environment, from its own config (never a session label): stamped on every run as `labels.env`. */
+  env: RunEnv;
   /** Default `labelRunGrouping()`. */
   grouping?: RunGrouping;
   /**
@@ -95,6 +106,8 @@ interface SessionSummary {
 }
 
 export interface RunSummary {
+  /** Filter facets (procedure, env, brand, conversation, channel, kind); ids only. */
+  labels: Record<string, string>;
   version: number;
   runId: string;
   workflow: string;
@@ -119,22 +132,30 @@ const MAX_KEY = 256;
 
 const slug = (value: string, max: number) => value.replace(NAME_PART, "-").replace(/^[-._]+/, "").slice(0, max) || "x";
 
+/** The labels a run row may carry: ids and keys a reader filters by. Anything else on a session stays on the host. */
+export const RUN_LABEL_KEYS = ["procedure", "brand", "conversation", "channel", "kind"] as const;
+const LABEL_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/;
+
 /**
  * The default grouping: a root session's labels name its run. `procedure` (or `workflow`) is the workflow; `brand` and
- * `conversation` make a `chat` link `<brand>:<conversation>`; `channel` and `kind` go into the title. A root session
- * without a procedure label publishes nothing.
+ * `conversation` make a `chat` link `<brand>:<conversation>`. The title is built from those ids only (never the session
+ * title, a brand name or message text), so a row in the index says nothing a reader could not filter by anyway. A root
+ * session without a procedure label publishes nothing.
  */
-export function labelRunGrouping(options: { titlePrefix?: string } = {}): RunGrouping {
+export function labelRunGrouping(): RunGrouping {
   return (root) => {
-    const labels = root.labels ?? {};
-    const workflow = labels.procedure ?? labels.workflow;
+    const source = root.labels ?? {};
+    const workflow = source.procedure ?? source.workflow;
     if (!workflow) return undefined;
+    const labels: Record<string, string> = { procedure: workflow };
+    for (const key of RUN_LABEL_KEYS) {
+      const value = key === "procedure" ? workflow : source[key];
+      if (typeof value === "string" && LABEL_VALUE.test(value)) labels[key] = value;
+    }
     const links: RunLink[] = [];
     if (labels.brand) links.push({ kind: "chat", key: `${labels.brand}:${labels.conversation ?? root.id}`.slice(0, MAX_KEY), role: "origin" });
-    const parts = [options.titlePrefix, labels.brandName ?? labels.brand, labels.channel, labels.kind, root.title].filter(
-      (part): part is string => typeof part === "string" && part.length > 0,
-    );
-    return { workflow, title: parts.join(" · ").slice(0, MAX_TITLE), links, ...(labels.requester ? { user: labels.requester } : {}) };
+    const title = [workflow, labels.brand, labels.conversation, labels.kind].filter(Boolean).join(" · ").slice(0, MAX_TITLE);
+    return { workflow, title, links, labels, ...(source.requester ? { user: source.requester } : {}) };
   };
 }
 
@@ -193,7 +214,7 @@ export function buildRun(
   store: RunRecordsOptions["store"],
   root: SessionRecord,
   group: RunGroup,
-  options: Pick<RunRecordsOptions, "envelopes" | "nativeState"> = {},
+  options: Pick<RunRecordsOptions, "env" | "envelopes" | "nativeState">,
 ): BuiltRun {
   const runId = runIdOf(root, group);
   const all = store.list();
@@ -228,13 +249,13 @@ export function buildRun(
       const native = (options.nativeState ?? readNative)(member);
       if (native) files.push({ name: `sessions/${name}.claude.jsonl`, body: native, contentType: "application/x-ndjson" });
     }
-    const messages = store.messages(member.id);
-    const task = messages.find((message) => message.role === "user")?.content;
-    const output = [...messages].reverse().find((message) => message.role === "assistant" && !message.error)?.content;
+    // The record and the summary are what the index turns into a row and its search text (title, error, first task,
+    // last answer). They carry ids, states and counts only: message text stays in the session stream, which a reader
+    // fetches when they open the run.
     const status = statusOf(member);
-    record.push({ type: "session_started", at: member.createdAt, session: name, role: member.labels?.role ?? name.split("-")[0], ...(task ? { task: scrubText(task, roots) } : {}) });
+    record.push({ type: "session_started", at: member.createdAt, session: name, role: member.labels?.role ?? name.split("-")[0], });
     if (status !== "running") {
-      record.push({ type: "session_finished", at: member.updatedAt, session: name, status, ...(output ? { output: scrubText(output, roots) } : {}) });
+      record.push({ type: "session_finished", at: member.updatedAt, session: name, status });
     }
     sessions.push({
       session: name,
@@ -247,7 +268,7 @@ export function buildRun(
       turns: member.usage.turns,
       ...(member.native.sessionId ? { sessionId: member.native.sessionId } : {}),
       ...(member.labels?.conversation ? { conversation: member.labels.conversation } : {}),
-      ...(member.lastError ? { error: scrubText(member.lastError, roots).slice(0, 2000) } : {}),
+      ...(member.lastError ? { error: "failed" } : {}),
       toolCalls: calls,
       toolErrors: errors,
     });
@@ -262,14 +283,15 @@ export function buildRun(
     runId,
     workflow: group.workflow,
     source: "chat",
-    title: group.title,
+    title: `${group.title} · ${options.env}`.slice(0, MAX_TITLE),
+    labels: { ...group.labels, env: options.env },
     status,
     startedAt: root.createdAt,
     ...(finishedAt ? { finishedAt, durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(root.createdAt)) } : {}),
     costUsd: Math.round(members.reduce((sum, member) => sum + member.usage.costUsd, 0) * 1e6) / 1e6,
     ...(group.user ? { user: group.user } : {}),
     dryRun: false,
-    ...(root.lastError ? { error: scrubText(root.lastError, { workspaceRoot: root.native.cwd, homeDir }).slice(0, 2000) } : {}),
+    ...(root.lastError ? { error: "failed" } : {}),
     links: group.links,
     sessions,
     counts: { events: eventCount, toolCalls, toolErrors, evidenceCalls: 0, publications: 0, failedPublications: 0 },
@@ -334,6 +356,7 @@ export class RunRecordsPublisher {
   private readonly published = new Map<string, { at: string; runId: string; files: number }>();
 
   constructor(private readonly options: RunRecordsOptions) {
+    if (!RUN_ENVS.includes(options.env)) throw new Error(`runRecords.env must be one of ${RUN_ENVS.join(", ")}`);
     this.grouping = options.grouping ?? labelRunGrouping();
     // Keyed by root session: a fork going idle republishes its whole run.
     this.queue = new SessionPublisher((rootId) => this.publishRoot(rootId), options.log, "the run records");

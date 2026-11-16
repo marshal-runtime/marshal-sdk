@@ -60,15 +60,16 @@ function marleyChat(store: FileSessionStore, brand: string, conversation: string
 test("buildRun writes the run index's format: summary, record and one stream per session, grouped by procedure with the brand as a chat link", () => {
   const { store } = tempStore();
   const { front } = marleyChat(store, "brand-a", "conv-1");
-  const group = labelRunGrouping({ titlePrefix: "Marley" })(front)!;
+  const group = labelRunGrouping()(front)!;
   assert.equal(group.workflow, "marley-chat");
   assert.deepEqual(group.links, [{ kind: "chat", key: "brand-a:conv-1", role: "origin" }]);
-  assert.equal(group.title, "Marley · Brand brand-a · whatsapp · dm · DM with the owner");
+  assert.equal(group.title, "marley-chat · brand-a · conv-1 · dm", "ids only: no session title, brand name or message text");
+  assert.deepEqual(group.labels, { procedure: "marley-chat", brand: "brand-a", conversation: "conv-1", channel: "whatsapp", kind: "dm" });
 
-  const run = buildRun(store, front, group);
+  const run = buildRun(store, front, group, { env: "staging" });
   const day = front.createdAt.slice(0, 10);
   assert.match(run.runId, new RegExp(`^${day}-marley-chat-[0-9a-f]{12}$`));
-  assert.equal(buildRun(store, front, group).runId, run.runId, "the id is stable across publishes");
+  assert.equal(buildRun(store, front, group, { env: "staging" }).runId, run.runId, "the id is stable across publishes");
 
   const names = run.files.map((file) => file.name);
   assert.deepEqual(names.slice(-2), ["record.jsonl", "summary.json"], "the summary is written last");
@@ -77,6 +78,8 @@ test("buildRun writes the run index's format: summary, record and one stream per
   assert.equal(s.runId, run.runId);
   assert.equal(s.workflow, "marley-chat");
   assert.equal(s.source, "chat");
+  assert.equal(s.title, "marley-chat · brand-a · conv-1 · dm · staging");
+  assert.deepEqual(s.labels, { procedure: "marley-chat", brand: "brand-a", conversation: "conv-1", channel: "whatsapp", kind: "dm", env: "staging" });
   assert.equal(s.status, "succeeded");
   assert.equal(s.costUsd, 0.42);
   assert.equal(s.user, undefined, "no requester: only the workspace's auditors read it");
@@ -97,8 +100,10 @@ test("buildRun writes the run index's format: summary, record and one stream per
 
   const record = String(run.files.find((file) => file.name === "record.jsonl")!.body).trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(record.map((event) => event.type), ["run_started", "session_started", "session_finished", "session_started", "session_finished", "run_finished"]);
-  assert.equal(record[1].task, "how were sales yesterday?");
-  assert.equal(record[2].output, "Yesterday: 41 orders.");
+  const rowText = JSON.stringify(s) + String(run.files.find((file) => file.name === "record.jsonl")!.body);
+  for (const said of ["sales", "41 orders", "weekly report", "report ready", "DM with the owner", "Brand brand-a"]) {
+    assert.doesNotMatch(rowText, new RegExp(said), `the summary and record carry no message text or names (${said})`);
+  }
   assert.equal(run.files.some((file) => file.name.endsWith(".claude.jsonl")), false, "no envelope unless asked");
 });
 
@@ -106,7 +111,7 @@ test("a run with a session still running is running, has no finish and no sessio
   const { store } = tempStore();
   const { front } = marleyChat(store, "brand-a", "conv-2");
   store.update(front.id, { state: "running" });
-  const run = buildRun(store, store.get(front.id)!, labelRunGrouping()(front)!);
+  const run = buildRun(store, store.get(front.id)!, labelRunGrouping()(front)!, { env: "local" });
   assert.equal(run.summary.status, "running");
   assert.equal(run.summary.finishedAt, undefined);
   assert.equal(run.summary.sessions[0]!.finishedAt, undefined);
@@ -115,7 +120,7 @@ test("a run with a session still running is running, has no finish and no sessio
 test("envelopes: the native Claude transcript goes beside the stream only when asked", () => {
   const { store } = tempStore();
   const { front } = marleyChat(store, "brand-a", "conv-3");
-  const run = buildRun(store, front, labelRunGrouping()(front)!, { envelopes: true, nativeState: (record) => new TextEncoder().encode(`{"native":"${record.native.sessionId}"}\n`) });
+  const run = buildRun(store, front, labelRunGrouping()(front)!, { env: "local", envelopes: true, nativeState: (record) => new TextEncoder().encode(`{"native":"${record.native.sessionId}"}\n`) });
   const envelopes = run.files.filter((file) => file.name.endsWith(".claude.jsonl"));
   assert.equal(envelopes.length, 2);
 });
@@ -128,12 +133,12 @@ test("the publisher writes only allowed runs, republishes the whole run when a f
 
   const out = path.join(root, "records");
   const lines: string[] = [];
-  const nothing = new RunRecordsPublisher({ store, sink: directoryRunSink(out), log: (line) => lines.push(line) });
+  const nothing = new RunRecordsPublisher({ store, env: "production", sink: directoryRunSink(out), log: (line) => lines.push(line) });
   nothing.schedule(a.front.id);
   await nothing.flush();
   assert.equal(fs.existsSync(out), false, "no allow rule: nothing leaves the host");
 
-  const publisher = new RunRecordsPublisher({ store, sink: directoryRunSink(out), allow: (rootSession) => rootSession.labels.brand === "brand-a", log: (line) => lines.push(line) });
+  const publisher = new RunRecordsPublisher({ store, env: "production", sink: directoryRunSink(out), allow: (rootSession) => rootSession.labels.brand === "brand-a", log: (line) => lines.push(line) });
   publisher.schedule(a.worker.id);
   publisher.schedule(b.front.id);
   publisher.schedule(unlabeled.id);
@@ -146,7 +151,7 @@ test("the publisher writes only allowed runs, republishes the whole run when a f
   assert.equal(Object.values(publisher.status())[0]!.runId, runs[0]);
 
   const failing: RunRecordSink = { put: async () => { throw new Error("bucket down"); } };
-  const broken = new RunRecordsPublisher({ store, sink: failing, allow: () => true, log: (line) => lines.push(line) });
+  const broken = new RunRecordsPublisher({ store, env: "production", sink: failing, allow: () => true, log: (line) => lines.push(line) });
   broken.schedule(a.front.id);
   await broken.flush();
   assert.ok(lines.some((line) => line.includes("to the run records failed: bucket down")), lines.join("\n"));
@@ -164,7 +169,7 @@ test("a turn that ends during an upload queues exactly one more upload of the ru
       await gate;
     },
   };
-  const publisher = new RunRecordsPublisher({ store, sink, allow: () => true });
+  const publisher = new RunRecordsPublisher({ store, env: "production", sink, allow: () => true });
   publisher.schedule(a.front.id);
   publisher.schedule(a.worker.id);
   publisher.schedule(a.front.id);
@@ -195,6 +200,15 @@ test("gcsRunSink uploads over the JSON API with the host's token and never puts 
   });
 });
 
+test("a publisher refuses an env outside local, staging and production, and a session label cannot set it", () => {
+  const { store } = tempStore();
+  assert.throws(() => new RunRecordsPublisher({ store, sink: directoryRunSink("/tmp/x"), env: "prod" as never }), /must be one of local, staging, production/);
+  const { front } = marleyChat(store, "brand-a", "conv-env");
+  store.update(front.id, { labels: { ...front.labels, env: "production" } });
+  const run = buildRun(store, store.get(front.id)!, labelRunGrouping()(store.get(front.id)!)!, { env: "local" });
+  assert.equal(run.summary.labels.env, "local");
+});
+
 test("directoryRunSink refuses an object name that leaves its folder", async () => {
   const { root } = tempStore();
   await assert.rejects(directoryRunSink(path.join(root, "out")).put("../escape.json", "{}", "application/json"), /escapes/);
@@ -210,7 +224,7 @@ test("a host with runRecords publishes a labelled session's run when it goes idl
     stateRoot: path.join(root, "state"),
     browser: false,
     automations: { start: false },
-    runRecords: { sink: directoryRunSink(out), allow: (session) => session.labels.brand === "brand-test" },
+    runRecords: { env: "local", sink: directoryRunSink(out), allow: (session) => session.labels.brand === "brand-test" },
     query: () =>
       (async function* () {
         yield { type: "system", subtype: "init", session_id: "native-host-1" };
@@ -234,6 +248,7 @@ test("a host with runRecords publishes a labelled session's run when it goes idl
     assert.equal(summary.workflow, "marley-chat");
     assert.equal(summary.status, "succeeded");
     assert.deepEqual(summary.links, [{ kind: "chat", key: "brand-test:c-1", role: "origin" }]);
+    assert.equal(summary.labels.env, "local", "the env comes from the host's config");
   } finally {
     await host.dispose();
   }
