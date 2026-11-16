@@ -695,6 +695,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       forks.dispose();
       await models.dispose().catch(() => undefined);
       await agents.dispose();
+      // Stopping the agents ends their running turns, which schedules one more publish each; it must reach the
+      // Brain before the runtime takes its capabilities down (2026-11-16: capability_not_found on the last upload).
+      await publisher?.close();
       await provider?.query?.dispose();
       await runtime.dispose();
       // After the runtime: the org extension publishes its last turns through it while it closes.

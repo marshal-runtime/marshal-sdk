@@ -110,6 +110,20 @@ test("SessionPublisher uploads once per session at a time and once more for turn
   assert.equal(publisher.status().bad!.ok, false);
 });
 
+test("SessionPublisher.close finishes what is scheduled and takes nothing after", async () => {
+  const seen: string[] = [];
+  const publisher = new SessionPublisher(async (id) => {
+    seen.push(id);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { status: "stored" };
+  });
+  publisher.schedule("a");
+  await publisher.close();
+  publisher.schedule("b");
+  await publisher.flush();
+  assert.deepEqual(seen, ["a"]);
+});
+
 test("page-run's hostKit adds the Brain and sessions when the run publishes", () => {
   assert.deepEqual(hostKit(undefined, undefined), {});
   assert.deepEqual(hostKit(["memory"], undefined), { kit: { parts: ["memory"] } });
