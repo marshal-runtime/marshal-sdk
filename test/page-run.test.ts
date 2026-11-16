@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { extraExtensions, fakeAnswer, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { extraExtensions, fakeAnswer, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -178,6 +178,22 @@ test("page-run loads a bundled brand-data provider (and no other bundled extensi
   assert.deepEqual(extraExtensions(undefined, { MARSHAL_SDK_EXTENSIONS: `/a${path.delimiter}/b` }, root), ["/a", "/b"]);
   assert.deepEqual(extraExtensions([], { MARSHAL_SDK_EXTENSIONS: "/a" }, root), [], "an explicit empty list loads none");
   assert.deepEqual(extraExtensions(undefined, {}, path.join(root, "missing")), []);
+});
+
+test("a browser that cannot launch skips the screenshots with a warning instead of failing the run", async () => {
+  const logged: string[] = [];
+  const missing = async () => {
+    throw new Error("browserType.launch: Executable doesn't exist at /ms-playwright/chromium_headless_shell-1212/chrome\nLooks like Playwright was just installed");
+  };
+
+  const taken = await pageShots("/page/index.html", "/page/shots", undefined, (line) => logged.push(line), missing);
+
+  assert.deepEqual(taken.shots, []);
+  assert.match(taken.error ?? "", /^screenshots skipped \(the page is written\): browserType\.launch: Executable doesn't exist/);
+  assert.ok(!taken.error?.includes("Looks like"), "only the first line of the browser's error");
+  assert.equal(logged.length, 1);
+  const ok = await pageShots("/page/index.html", "/page/shots", undefined, () => undefined, async () => [{ name: "mobile" }]);
+  assert.deepEqual(ok, { shots: [{ name: "mobile" }] });
 });
 
 test("page-run's dry path writes the whole run contract from an input folder, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 90_000 }, async () => {
