@@ -68,12 +68,12 @@ export interface BrainMemoryRoute {
     sessionId?: string;
     author?: string;
   }): Promise<BrainMemory>;
-  /** `links` replaces the memory's whole link set. */
-  update(input: { id: string; content?: string; category?: MemoryCategory; alwaysOn?: boolean; links?: BrainMemoryLink[] }): Promise<BrainMemory>;
+  /** `links` replaces the memory's whole link set. `scopes`: the session's scopes, where the memory is looked for. */
+  update(input: { id: string; scopes: string[]; content?: string; category?: MemoryCategory; alwaysOn?: boolean; links?: BrainMemoryLink[] }): Promise<BrainMemory>;
   /** Adds edges. */
-  link(input: { id: string; links: BrainMemoryLink[] }): Promise<BrainMemory>;
-  /** False when no memory has that id. */
-  delete(input: { id: string }): Promise<boolean>;
+  link(input: { id: string; scopes: string[]; links: BrainMemoryLink[] }): Promise<BrainMemory>;
+  /** False when no memory of the session's scopes has that id. */
+  delete(input: { id: string; scopes: string[] }): Promise<boolean>;
   /** The Brain's existing hybrid search restricted to memory nodes of these scopes (its ranking, unchanged). */
   search(input: { query: string; scopes: string[]; limit: number; category?: MemoryCategory }): Promise<BrainMemory[]>;
   /** Memories of one scope, newest first: the prompt block (`alwaysOn`) and a day's review (`since`). */
@@ -336,7 +336,8 @@ export class HostMemory {
   async link(session: SessionRecord | undefined, input: { id: string; links: BrainMemoryLink[]; replace?: boolean }): Promise<BrainMemory> {
     const store = this.requireStore(session);
     const links = checkedLinks(input.links);
-    const record = input.replace ? await store.route.update({ id: input.id, links }) : await store.route.link({ id: input.id, links });
+    const scopes = this.scopesOf(session).map(({ key }) => key);
+    const record = input.replace ? await store.route.update({ id: input.id, scopes, links }) : await store.route.link({ id: input.id, scopes, links });
     this.hold(store.route, record);
     return record;
   }
@@ -349,6 +350,7 @@ export class HostMemory {
     const category = (MEMORY_CATEGORIES as readonly string[]).includes(input.category ?? "") ? (input.category as MemoryCategory) : undefined;
     const record = await store.route.update({
       id: input.id,
+      scopes: this.scopesOf(session).map(({ key }) => key),
       ...(input.fact?.trim() ? { content: input.fact.trim() } : {}),
       ...(category ? { category } : {}),
       ...(typeof input.alwaysOn === "boolean" ? { alwaysOn: input.alwaysOn } : {}),
@@ -360,7 +362,7 @@ export class HostMemory {
   /** Deletes a memory node; false when the store holds no memory of that id. */
   async forget(session: SessionRecord | undefined, id: string): Promise<boolean> {
     const store = this.requireStore(session);
-    const removed = await store.route.delete({ id });
+    const removed = await store.route.delete({ id, scopes: this.scopesOf(session).map(({ key }) => key) });
     if (removed) this.drop(store.route, id);
     return removed;
   }
