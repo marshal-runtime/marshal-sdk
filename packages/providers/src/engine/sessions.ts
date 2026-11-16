@@ -635,6 +635,8 @@ interface CreateSessionOptions {
   mcp?: string[];
   allowedTools?: string[];
   systemPromptOverride?: string;
+  systemPromptAppend?: string;
+  scopedExtensions?: string[];
   launchAttachments?: string[];
   cloudSyncEnabled?: boolean;
   reasoningEffort?: ReasoningEffort;
@@ -4927,6 +4929,19 @@ export class SessionManager
     workspaceDirOverride?: string;
     isSubagent?: boolean;
   }): { content: string; mode?: "append" | "replace" } {
+    const message = this.buildBaseSystemMessage(opts);
+    const extra = this.store.loadSessionData(opts.sessionId)?.systemPromptAppend;
+    return extra ? { ...message, content: `${message.content}\n\n${extra}` } : message;
+  }
+
+  private buildBaseSystemMessage(opts: {
+    soul?: string;
+    conversationContext?: string;
+    subagentContext?: string;
+    sessionId: string;
+    workspaceDirOverride?: string;
+    isSubagent?: boolean;
+  }): { content: string; mode?: "append" | "replace" } {
     const { sessionId, ...rest } = opts;
     const sessionData = this.store.loadSessionData(sessionId);
     if (sessionData?.systemPromptOverride !== undefined) {
@@ -7717,6 +7732,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       skills: source.scopedSkills,
       allowedTools: source.allowedTools,
       systemPromptOverride: source.systemPromptOverride,
+      systemPromptAppend: source.systemPromptAppend,
+      scopedExtensions: source.scopedExtensions,
       playwrightHeadless: source.playwrightHeadless,
       sandbox: source.sandbox,
       initialMessages: messages,
@@ -8039,6 +8056,10 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       ...(options?.systemPromptOverride !== undefined
         ? { systemPromptOverride: options.systemPromptOverride }
         : {}),
+      ...(options?.systemPromptAppend !== undefined
+        ? { systemPromptAppend: options.systemPromptAppend }
+        : {}),
+      ...(options?.scopedExtensions ? { scopedExtensions: [...options.scopedExtensions] } : {}),
       leanPrompt: resolveLeanPromptForNewSession(
         this.selfToolDeps?.settingsManager.get().experiments?.leanPrompt,
       ),
@@ -9491,15 +9512,29 @@ This accountable main/user session was explicitly launched in workspace ${worksp
 
   listSkillsForSession(sessionId?: string): Skill[] {
     const workspaceRoot = this.getWorkspaceRootForSession(sessionId);
-    return this.skillCatalog.list({
+    const skills = this.skillCatalog.list({
       runtimeRoots: this.backend.sessions.getSkillProviderRoots(workspaceRoot),
     });
+    const extensions = sessionId ? this.getSessionExtensionScope(sessionId) : undefined;
+    if (extensions === undefined) return skills;
+    const named = sessionId ? this.getSessionSkillsScope(sessionId) : undefined;
+    return skills.filter(
+      (skill) =>
+        (skill.scope === "extension" &&
+          skill.extension !== undefined &&
+          extensions.includes(skill.extension)) ||
+        named?.includes(skill.name) === true,
+    );
   }
 
   getSkillInstructionsForSession(
     name: string,
     sessionId?: string,
   ): { instructions: string; resourceDir: string | null } | null {
+    if (sessionId && !this.listSkillsForSession(sessionId).some((skill) => skill.name === name)) {
+      const extensions = this.getSessionExtensionScope(sessionId);
+      if (extensions !== undefined) return null;
+    }
     const workspaceRoot = this.getWorkspaceRootForSession(sessionId);
     return this.skillCatalog.getInstructions(name, {
       runtimeRoots: this.backend.sessions.getSkillProviderRoots(workspaceRoot),
@@ -9950,6 +9985,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
             allowedTools: parent.allowedTools,
             runtimeAgentRole: parent.runtimeAgentRole,
             systemPromptOverride: parent.systemPromptOverride,
+            systemPromptAppend: parent.systemPromptAppend,
+            scopedExtensions: parent.scopedExtensions,
             playwrightHeadless: parent.playwrightHeadless,
             sandbox: parent.sandbox,
             // The parent's history is context here, not something asked of the fork.
@@ -10344,6 +10381,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     mcp?: string[];
     allowedTools?: string[];
     systemPrompt?: string;
+    systemPromptAppend?: string;
+    extensions?: string[];
     attachments?: string[];
     cloudSyncEnabled?: boolean;
     source?: SessionSource;
@@ -10451,6 +10490,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       mcp: args.mcp,
       allowedTools: args.allowedTools,
       systemPromptOverride: args.systemPrompt,
+      systemPromptAppend: args.systemPromptAppend,
+      scopedExtensions: args.extensions,
       launchAttachments: args.attachments,
       cloudSyncEnabled: args.cloudSyncEnabled,
       deferBackendStart: args.deferBackendStart,
@@ -11534,6 +11575,40 @@ This accountable main/user session was explicitly launched in workspace ${worksp
    *  R1-FIXES A13. */
   getSessionSkillsScope(id: string): readonly string[] | undefined {
     return this.getSessionMetadata(id)?.scopedSkills;
+  }
+
+  /** The extensions, MCP servers and skills this session is served (names only). */
+  getRuntimeEnvironment(id: string):
+    | {
+        extensions: string[] | null;
+        mcpServers: string[] | null;
+        skills: string[];
+        tools: string[];
+      }
+    | undefined {
+    const meta = this.getSessionMetadata(id);
+    if (!meta) return undefined;
+    const named = meta.scopedSkills;
+    const skills = this.listSkillsForSession(id)
+      .filter(
+        (skill) =>
+          skill.enabled &&
+          (meta.scopedExtensions !== undefined ||
+            named === undefined ||
+            named.includes(skill.name)),
+      )
+      .map((skill) => skill.name);
+    return {
+      extensions: meta.scopedExtensions ? [...meta.scopedExtensions] : null,
+      mcpServers: meta.scopedMcp ? [...meta.scopedMcp] : null,
+      skills,
+      tools: [],
+    };
+  }
+
+  /** Extension identities a launched agent may use, or undefined when it sees every enabled extension. */
+  getSessionExtensionScope(id: string): readonly string[] | undefined {
+    return this.getSessionMetadata(id)?.scopedExtensions;
   }
 
   /**

@@ -9,6 +9,7 @@ import { CLOUD_SLACK_SURFACE, ROLE_DELTAS } from "@marshal/agent-runtime-prompt"
 
 import type { QueryFn } from "../src/agent-port.js";
 import { createMarshalHost } from "../src/host.js";
+import { desktopSurface } from "../src/prompt-desktop.js";
 import { assembleHostPrompt, mergePromptLayers, renderMemoryBlock, type PromptLayer } from "../src/prompt.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -54,6 +55,14 @@ test("desktop layer: the SDK renders the desktop's v2 prompt byte for byte", () 
     assert.equal(layer.override, undefined, "the desktop adds layers, never an override");
     const rendered = assembleHostPrompt(layer).content;
     assert.equal(rendered, expected, `${name}: differs at ${[...expected].findIndex((char, index) => rendered[index] !== char)}`);
+  }
+});
+
+test("desktopSurface() holds the slots the desktop's renderer was fixtured with, so the marshal profile renders its prompt", () => {
+  assert.deepEqual(desktopSurface().coreSlots, fixture.slots);
+  for (const { name, input, expected } of fixture.cases) {
+    const rendered = assembleHostPrompt({ ...desktopLayer(input), surface: desktopSurface() }).content;
+    assert.equal(rendered, expected, name);
   }
 });
 

@@ -435,6 +435,8 @@ export interface ISelfToolsSessionManager extends IBackgroundToolInvocationManag
     parentSessionId?: string;
     runtimeAgentRole?: SessionRuntimeAgentRole;
     allowedTools?: string[];
+    systemPromptAppend?: string;
+    extensions?: string[];
     suppressInitialTodoInstruction?: boolean;
     returnAfterBackendAcceptance?: boolean;
     suppressParentReadinessWake?: boolean;
@@ -527,6 +529,7 @@ export interface ISelfToolsSessionManager extends IBackgroundToolInvocationManag
    *  list-time filtering. Undefined = inherit global; `[]` = no skills.
    *  See R1-FIXES A13. */
   getSessionSkillsScope(id: string): readonly string[] | undefined;
+  getSessionExtensionScope(id: string): readonly string[] | undefined;
   /** Async counterpart of getSession that also honors pending deletions and
    *  repairs the stored copy (workspace-binding flag, stale live-turn
    *  checkpoint) before returning it. */

@@ -27,8 +27,9 @@ const output = (required: string[], properties: Record<string, unknown>) => ({
  * `marshal.agent.*` is the runtime's own provider (@marshal/runtime/delegation): the desktop's names, schemas,
  * permissions and errors, so an extension written against the desktop calls the same capabilities here. This host
  * registers its Claude Agent SDK sessions as the port. Desktop-only launch fields (worktrees, souls, runtime accounts,
- * allowedTools, mcpServers, skills, repository agents) are accepted and ignored: a headless host has one backend
- * and one checkout. The desktop's own runtime host (packages/host) applies allowedTools, mcpServers and skills.
+ * allowedTools, skills, repository agents) are accepted and ignored: a headless host has one backend and one
+ * checkout. The agent profile fields are applied: `extensions` (the session's extension scope, enforced by the shared
+ * host), `systemPromptAppend` and `mcpServers` (the host MCP servers the session keeps).
  */
 export function createAgentProvider(
   port: ClaudeAgentPort,
@@ -50,12 +51,20 @@ export function createAgentProvider(
  * The runtime's agent port over this host's sessions. Every agent on the host is visible to every caller (one
  * tenant per host); a launch from a known session records it as the parent.
  */
+interface ProfileLaunchFields {
+  extensions?: readonly string[];
+  systemPromptAppend?: string;
+  mcpServers?: readonly string[];
+}
+
 function sessionAgentPort(
   port: ClaudeAgentPort,
   knownSession: (sessionId: string | undefined) => boolean,
 ): MarshalRuntimeAgentPort {
   return {
-    async launch(request) {
+    async launch(launchRequest) {
+      // The profile fields arrive with the runtime pack that declares them (host-90); typed here until the pin has them.
+      const request = launchRequest as typeof launchRequest & ProfileLaunchFields;
       if (request.sessionId) {
         return agentSummary(port.send(request.sessionId, request.task, "queue"));
       }
@@ -68,6 +77,9 @@ function sessionAgentPort(
           ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
           ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
           ...(request.attachments ? { attachments: request.attachments } : {}),
+          ...(request.extensions ? { extensions: request.extensions } : {}),
+          ...(request.systemPromptAppend ? { systemPromptAppend: request.systemPromptAppend } : {}),
+          ...(request.mcpServers ? { mcpServerNames: request.mcpServers } : {}),
           ...(knownSession(request.scope.sessionId) ? { parentId: request.scope.sessionId } : {}),
         }),
       );

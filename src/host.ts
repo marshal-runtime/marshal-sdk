@@ -329,6 +329,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     serviceContainer: options.serviceContainer ?? createRuntimeServiceContainer(),
     ...(options.compositionRegistry ? { compositionRegistry: options.compositionRegistry } : {}),
     broker,
+    sessionExtensionScope: (id) => sessions.get(id)?.extensions,
     principal: {
       id: `${HARNESS_ID}:${runId}`,
       kind: "agent",

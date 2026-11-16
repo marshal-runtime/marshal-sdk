@@ -151,6 +151,12 @@ export interface AgentLaunchRequest {
   /** Where the conversation starts: a native session to resume, or one the first turn forks (resume + forkSession). */
   native?: { sessionId?: string; forkOf?: string; forkAt?: string };
   fork?: SessionFork;
+  /** Agent profile: extension identities the session sees (capabilities and skills). Absent: every installed extension. */
+  extensions?: readonly string[];
+  /** Agent profile: sections appended to the host prompt (ignored when the launch replaces the prompt). */
+  systemPromptAppend?: string;
+  /** Agent profile: the host MCP server names the session keeps. Absent: all. */
+  mcpServerNames?: readonly string[];
   /** SDK options for every turn of this session. */
   options?: AgentLaunchOptions;
 }
@@ -407,6 +413,9 @@ export class ClaudeAgentPort {
         ...(request.native?.forkOf && !request.native.sessionId ? { forkOf: request.native.forkOf } : {}),
       },
       ...(request.fork ? { fork: request.fork } : {}),
+      ...(request.extensions ? { extensions: request.extensions } : {}),
+      ...(request.systemPromptAppend ? { systemPromptAppend: request.systemPromptAppend } : {}),
+      ...(request.mcpServerNames ? { mcpServerNames: request.mcpServerNames } : {}),
       ...(request.parentId ? { parentId: request.parentId } : {}),
       ...(request.launchedBy ? { launchedBy: request.launchedBy } : {}),
       ...(this.options.workspaceName ? { workspace: this.options.workspaceName } : {}),
@@ -656,7 +665,8 @@ export class ClaudeAgentPort {
     store.appendMessage(agent.id, { role: "user", content: message, ...(from ? { from } : {}) });
     const abort = new AbortController();
     agent.abort = abort;
-    const hostPrompt = this.options.systemPrompt(session);
+    const basePrompt = this.options.systemPrompt(session);
+    const hostPrompt = basePrompt !== undefined && session.systemPromptAppend ? `${basePrompt}\n\n${session.systemPromptAppend}` : basePrompt;
     const systemPrompt = agent.systemPrompt ?? hostPrompt;
     const launch = mergeLaunchOptions(this.options.launchOptionsFor?.(session), agent.launchOptions);
     const live = this.options.live && (this.options.runtimeId ?? "claude") === "claude" ? this.options.live : undefined;
@@ -786,7 +796,10 @@ export class ClaudeAgentPort {
   }
 
   private mcpServersOf(session: SessionRecord, launch: AgentLaunchOptions): Record<string, unknown> {
-    return { ...(launch.hostMcpServers === false ? {} : this.options.mcpServers(session)), ...launch.mcpServers };
+    const host = launch.hostMcpServers === false ? {} : this.options.mcpServers(session);
+    const names = session.mcpServerNames;
+    const kept = names ? Object.fromEntries(Object.entries(host).filter(([name]) => names.includes(name))) : host;
+    return { ...kept, ...launch.mcpServers };
   }
 
   /**
