@@ -20,7 +20,7 @@ for that chat). For such a session the `marshal` server carries:
 | Tool | Runs on |
 | --- | --- |
 | `runtime_search`, `runtime_exec`, `runtime_read_resource` | the remote machine's runtime (model-selected tools and code never run on the host) |
-| `runtime_exec {targetType: "operation", target}` with a target in `REMOTE_HOST_TOOLS`, and `runtime_search {name}` for one | the host, under the session's own scope |
+| `runtime_exec {targetType: "operation", target}` with a target in `REMOTE_HOST_TOOLS`, and `runtime_search {name}` for one | the host; the session tools see the whole host store unless `sessionScopeLabel` is set (below) |
 
 `REMOTE_HOST_TOOLS` is fixed: `marshal.tool.forkSubagents`, `listSubagents`, `messageSubagent`, `messageForks`,
 `searchSessions`, `getSessionTranscript`, `remember`, `recall`, `linkMemory`, `updateMemory`, `forget`, `recordDecision`.
