@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
-import { profileFingerprint, readExtensionAgents, resolveAgent } from "../src/agent-entries.js";
+import { fillTask, profileFingerprint, readExtensionAgents, resolveAgent } from "../src/agent-entries.js";
 import { systemPromptText, type QueryFn } from "../src/agent-port.js";
 import type { FireDecision } from "../src/automations.js";
 import { createMarshalHost, type MarshalHost } from "../src/host.js";
@@ -87,7 +87,7 @@ interface Rig {
   policy: { decide: (tenant: string | undefined) => FireDecision; asked: string[] };
 }
 
-async function rig(options: PackageOptions = {}): Promise<Rig> {
+async function rig(options: PackageOptions & { hang?: boolean } = {}): Promise<Rig> {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-agents-")));
   const workspacePath = path.join(root, "workspace");
   fs.mkdirSync(workspacePath);
@@ -99,6 +99,7 @@ async function rig(options: PackageOptions = {}): Promise<Rig> {
     calls.push({ prompt: String(prompt), options: sdkOptions });
     return (async function* () {
       yield { type: "system", subtype: "init", session_id: `native-${calls.length}` };
+      if (options.hang) await new Promise<void>((resolve) => (sdkOptions.abortController as AbortController | undefined)?.signal.addEventListener("abort", () => resolve()));
       yield { type: "result", subtype: "success", is_error: false, result: "findings written", num_turns: 1, usage: {} };
     })();
   };
@@ -415,4 +416,98 @@ test("routine files: the extension body, after and timezone parse, and a routine
   } finally {
     await r.host.dispose();
   }
+});
+
+const TASKED = (limits: Record<string, unknown> = { maxTurns: 8, maxBudgetUsd: 0.5, timeoutMinutes: 20 }) => ({
+  agents: [
+    {
+      id: "meta-analysis",
+      task: "tasks/meta-analysis.md",
+      profile: { prompt: "profiles/meta-analysis.prompt.md", nativeTools: ["Read"], limits },
+    },
+  ],
+  files: { "tasks/meta-analysis.md": "Analyse {{input.day}} for {{ input.brand }}; look back {{input.lookbackDays}} days." },
+});
+
+test("task template and limits: the template is filled from the run input, limits reach the launch, both are in the fingerprint", async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-agents-")));
+  const packageRoot = agentPackage(root, TASKED());
+  const resolved = resolveAgent(packageRoot, "meta-analysis");
+  assert.deepEqual(resolved.profile.limits, { maxTurns: 8, maxBudgetUsd: 0.5, timeoutMinutes: 20 });
+  assert.match(resolved.profile.task ?? "", /\{\{input\.day\}\}/);
+  assert.equal(
+    fillTask(resolved.profile.task!, { day: "2026-11-15", brand: "OKOA", lookbackDays: 7 }),
+    "Analyse 2026-11-15 for OKOA; look back 7 days.",
+  );
+  assert.throws(() => fillTask(resolved.profile.task!, { day: "2026-11-15" }), /needs the run input fields brand, lookbackDays/);
+  assert.notEqual(profileFingerprint({ ...resolved.profile, task: "Something else." }), resolved.fingerprint);
+  assert.notEqual(profileFingerprint({ ...resolved.profile, limits: { maxTurns: 9 } }), resolved.fingerprint);
+
+  const r = await rig(TASKED());
+  try {
+    const automation = await r.host.automations.create({
+      name: "Meta analysis",
+      extension: { id: "@marley/meta-analysis", agent: "meta-analysis", input: { day: "2026-11-15", brand: "OKOA", lookbackDays: 7 } },
+      triggerType: "event",
+      event: "day-complete",
+      tenant: BRAND,
+    });
+    const sessionId = await r.host.automations.runNow(automation.id);
+    await finish(r, sessionId);
+    const call = r.calls.at(-1)!;
+    assert.match(call.prompt, /^Analyse 2026-11-15 for OKOA; look back 7 days\./);
+    assert.equal(call.options.maxTurns, 8);
+    assert.equal(call.options.maxBudgetUsd, 0.5);
+    const missing = await r.host.automations.create({
+      name: "No input",
+      extension: { id: "@marley/meta-analysis", agent: "meta-analysis", input: { day: "2026-11-15" } },
+      triggerType: "event",
+      event: "day-complete",
+      tenant: BRAND,
+    });
+    await assert.rejects(r.host.automations.runNow(missing.id), /needs the run input fields brand, lookbackDays/);
+  } finally {
+    await r.host.dispose();
+  }
+});
+
+test("limits.timeoutMinutes cancels a run still going at its limit", async () => {
+  const r = await rig({ ...TASKED({ timeoutMinutes: 1 }), hang: true });
+  try {
+    const automation = await r.host.automations.create({
+      name: "Slow",
+      extension: { id: "@marley/meta-analysis", agent: "meta-analysis", input: { day: "d", brand: "b", lookbackDays: 1 } },
+      triggerType: "event",
+      event: "day-complete",
+      tenant: BRAND,
+    });
+    mock.timers.enable({ apis: ["setTimeout"] });
+    let sessionId: string;
+    try {
+      sessionId = await r.host.automations.runNow(automation.id);
+      assert.equal(r.host.sessions.get(sessionId)?.state, "running");
+      mock.timers.tick(59_000);
+      assert.equal(r.host.sessions.get(sessionId)?.state, "running");
+      mock.timers.tick(2_000);
+    } finally {
+      mock.timers.reset();
+    }
+    await settle();
+    assert.notEqual(r.host.sessions.get(sessionId)?.state, "running");
+  } finally {
+    await r.host.dispose();
+  }
+});
+
+test("refusals: bad limits, an unknown limits field, a task outside the package", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-agents-")));
+  const withLimits = (limits: unknown) => [{ id: "a", profile: { prompt: "p.md", limits } }];
+  assert.throws(() => readExtensionAgents(agentPackage(root, { agents: withLimits({ maxTurns: 0 }) })), /limits\.maxTurns must be a whole number/);
+  assert.throws(() => readExtensionAgents(agentPackage(root, { agents: withLimits({ maxBudgetUsd: -1 }) })), /limits\.maxBudgetUsd must be a positive amount/);
+  assert.throws(() => readExtensionAgents(agentPackage(root, { agents: withLimits({ timeoutMinutes: 2.5 }) })), /limits\.timeoutMinutes must be a whole number/);
+  assert.throws(() => readExtensionAgents(agentPackage(root, { agents: withLimits({ maxCost: 1 }) })), /limits field "maxCost" is unknown/);
+  assert.throws(
+    () => readExtensionAgents(agentPackage(root, { agents: [{ id: "a", task: "../task.md", profile: { prompt: "p.md" } }] })),
+    /task "\.\.\/task\.md" must be a portable path inside the package/,
+  );
 });

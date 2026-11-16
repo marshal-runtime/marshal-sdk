@@ -47,6 +47,14 @@ export interface DeclaredProfile {
   mcpServers?: string[];
   /** Named context slots (brand, clock, speaker, people, ...) the host fills on every launch. */
   context?: string[];
+  /** Bounds of one run: model turns, spend, wall time (the host cancels a run past it). */
+  limits?: AgentLimits;
+}
+
+export interface AgentLimits {
+  maxTurns?: number;
+  maxBudgetUsd?: number;
+  timeoutMinutes?: number;
 }
 
 export interface AgentEntry {
@@ -60,6 +68,8 @@ export interface AgentEntry {
   ports: string[];
   /** Package-relative default routine file. */
   routine?: string;
+  /** Package-relative task template of one fire: `{{input.<field>}}` is filled from the run input. */
+  task?: string;
 }
 
 export interface ExtensionAgents {
@@ -83,6 +93,9 @@ export interface ResolvedProfile {
   nativeTools?: string[];
   mcpServers?: string[];
   context: string[];
+  limits?: AgentLimits;
+  /** The task template's text, when the entry declares one. */
+  task?: string;
 }
 
 export interface ResolvedAgent {
@@ -156,6 +169,8 @@ export function resolveAgent(
     ...(declaredProfile.nativeTools ? { nativeTools: [...declaredProfile.nativeTools] } : {}),
     ...(declaredProfile.mcpServers ? { mcpServers: [...declaredProfile.mcpServers] } : {}),
     context: [...(declaredProfile.context ?? [])],
+    ...(declaredProfile.limits ? { limits: { ...declaredProfile.limits } } : {}),
+    ...(entry.task ? { task: readPackageFile(declared.packageRoot, entry.task, `${declared.identity}: agent "${entry.id}" task`) } : {}),
   };
   return { entry, profile, fingerprint: profileFingerprint(profile) };
 }
@@ -176,6 +191,10 @@ export function profileFingerprint(profile: ResolvedProfile): string {
     nativeTools: sorted(profile.nativeTools),
     mcpServers: sorted(profile.mcpServers),
     context: sorted(profile.context),
+    limits: profile.limits
+      ? { maxTurns: profile.limits.maxTurns ?? null, maxBudgetUsd: profile.limits.maxBudgetUsd ?? null, timeoutMinutes: profile.limits.timeoutMinutes ?? null }
+      : null,
+    task: profile.task === undefined ? null : createHash("sha256").update(profile.task).digest("hex"),
   };
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
@@ -192,7 +211,7 @@ const MAX_SLOT_CHARS = 8_000;
 export function agentLaunchFields(
   resolved: ResolvedAgent,
   context: ContextValues = {},
-): Pick<AgentLaunchRequest, "model" | "reasoningEffort" | "systemPrompt" | "systemPromptAppend" | "extensions" | "skills" | "nativeTools" | "mcpServerNames"> & {
+): Pick<AgentLaunchRequest, "model" | "reasoningEffort" | "systemPrompt" | "systemPromptAppend" | "extensions" | "skills" | "nativeTools" | "mcpServerNames" | "options"> & {
   labels: Record<string, string>;
 } {
   const { profile } = resolved;
@@ -216,6 +235,14 @@ export function agentLaunchFields(
     ...(profile.skills ? { skills: profile.skills } : {}),
     ...(profile.nativeTools ? { nativeTools: profile.nativeTools } : {}),
     ...(profile.mcpServers ? { mcpServerNames: profile.mcpServers } : {}),
+    ...(profile.limits?.maxTurns !== undefined || profile.limits?.maxBudgetUsd !== undefined
+      ? {
+          options: {
+            ...(profile.limits.maxTurns !== undefined ? { maxTurns: profile.limits.maxTurns } : {}),
+            ...(profile.limits.maxBudgetUsd !== undefined ? { maxBudgetUsd: profile.limits.maxBudgetUsd } : {}),
+          },
+        }
+      : {}),
     labels: {
       extension: profile.extension,
       extensionVersion: profile.extensionVersion,
@@ -223,6 +250,28 @@ export function agentLaunchFields(
       profile: resolved.fingerprint,
     },
   };
+}
+
+const TASK_FIELD = /\{\{\s*input\.([A-Za-z_][A-Za-z0-9_]{0,63})\s*\}\}/g;
+const MAX_TASK_CHARS = 32_000;
+
+/**
+ * The task of one fire from the entry's template: each `{{input.<field>}}` becomes that run-input value (a string as
+ * written, a number or boolean as its digits or word, anything else as JSON). A field the input lacks is refused, so a
+ * fire never runs a task with a hole in it.
+ */
+export function fillTask(template: string, input: Readonly<Record<string, unknown>>, label = "task"): string {
+  const missing = new Set<string>();
+  const filled = template.replace(TASK_FIELD, (_match, field: string) => {
+    if (!Object.hasOwn(input, field) || input[field] === undefined || input[field] === null) {
+      missing.add(field);
+      return "";
+    }
+    const value = input[field];
+    return typeof value === "string" ? value : typeof value === "number" || typeof value === "boolean" ? String(value) : JSON.stringify(value);
+  });
+  if (missing.size) fail(`${label} needs the run input fields ${[...missing].join(", ")}.`);
+  return filled.slice(0, MAX_TASK_CHARS);
 }
 
 /** A slot value cannot close its element or open another one. */
@@ -240,7 +289,7 @@ function parseEntry(identity: string, root: string, value: unknown): AgentEntry 
   const profileRaw = raw.profile;
   if (!profileRaw || typeof profileRaw !== "object" || Array.isArray(profileRaw)) return fail(`${where} needs a profile.`);
   const p = profileRaw as Record<string, unknown>;
-  const known = new Set(["prompt", "promptMode", "model", "effort", "extensions", "skills", "nativeTools", "mcpServers", "context"]);
+  const known = new Set(["prompt", "promptMode", "model", "effort", "extensions", "skills", "nativeTools", "mcpServers", "context", "limits"]);
   for (const key of Object.keys(p)) if (!known.has(key)) fail(`${where}: profile field "${key}" is unknown${key === "tools" ? ' (capabilities come from "extensions", built-ins from "nativeTools")' : ""}.`);
   const prompt = String(p.prompt ?? "");
   checkPackagePath(root, prompt, `${where} prompt`);
@@ -255,6 +304,9 @@ function parseEntry(identity: string, root: string, value: unknown): AgentEntry 
   }
   const mcpServers = list(p.mcpServers, SERVER_NAME, `${where}: mcpServers`);
   const context = list(p.context, SLOT_NAME, `${where}: context`);
+  const limits = parseLimits(p.limits, where);
+  const task = raw.task === undefined ? undefined : String(raw.task);
+  if (task !== undefined) checkPackagePath(root, task, `${where} task`);
   const outputs = (Array.isArray(raw.outputs) ? raw.outputs : []).map((output) => {
     const kind = (output as { kind?: unknown } | null)?.kind;
     if (!(OUTPUT_KINDS as readonly unknown[]).includes(kind)) fail(`${where}: output kind "${String(kind)}" is not one of ${OUTPUT_KINDS.join(", ")}.`);
@@ -278,11 +330,39 @@ function parseEntry(identity: string, root: string, value: unknown): AgentEntry 
       ...(nativeTools ? { nativeTools } : {}),
       ...(mcpServers ? { mcpServers } : {}),
       ...(context ? { context } : {}),
+      ...(limits ? { limits } : {}),
     },
     ...(raw.input ? { input: raw.input as Record<string, unknown> } : {}),
     outputs,
     ports,
     ...(routine ? { routine } : {}),
+    ...(task ? { task } : {}),
+  };
+}
+
+function parseLimits(value: unknown, where: string): AgentLimits | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fail(`${where}: limits must be an object.`);
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (!["maxTurns", "maxBudgetUsd", "timeoutMinutes"].includes(key)) fail(`${where}: limits field "${key}" is unknown.`);
+  }
+  const whole = (key: string, max: number) => {
+    const n = raw[key];
+    if (n === undefined) return undefined;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > max) return fail(`${where}: limits.${key} must be a whole number from 1 to ${max}.`);
+    return n;
+  };
+  const maxTurns = whole("maxTurns", 1000);
+  const timeoutMinutes = whole("timeoutMinutes", 24 * 60);
+  const budget = raw.maxBudgetUsd;
+  if (budget !== undefined && (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0 || budget > 1000)) {
+    fail(`${where}: limits.maxBudgetUsd must be a positive amount up to 1000.`);
+  }
+  return {
+    ...(maxTurns !== undefined ? { maxTurns } : {}),
+    ...(budget !== undefined ? { maxBudgetUsd: budget as number } : {}),
+    ...(timeoutMinutes !== undefined ? { timeoutMinutes } : {}),
   };
 }
 
