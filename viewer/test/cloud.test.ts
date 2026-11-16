@@ -182,6 +182,16 @@ test("agent-sandbox's runner layout (host/sessions, page-studio/, page-run.json,
 
   const studioDir = path.join(dir, "studio");
   fs.mkdirSync(path.join(studioDir, "library"), { recursive: true });
+  // Still building (no output.json yet): its final upload would overwrite a push, so the push is refused and writes nothing.
+  const early = await pushToCloud({
+    outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work0"),
+    renderedHtml: "<html><body><h1>too early</h1></body></html>",
+    pageDoc: { id: "local", title: "SaffPro", brand: { id: "233", name: "SaffPro" }, product: null, source: "imported", version: 3, updatedAt: new Date().toISOString(), updatedBy: "Omer", notes: [], sections: [] },
+  });
+  assert.deepEqual([early.ok, (early as { reason?: string }).reason], [false, "still-running"]);
+  assert.match(fs.readFileSync(path.join(state, "sandbox-page.html"), "utf8"), /old/);
+  assert.equal(fs.existsSync(path.join(root, "agent", "edits")), false);
+  fs.writeFileSync(path.join(root, "output.json"), JSON.stringify({ pages: [] }));
   await pushToCloud({
     outputRoot: "gs://dev-bucket/runs/sandbox-902", cloudPageId: "saffpro--sandbox", studioDir, by: { name: "Omer" }, workDir: path.join(dir, "work"),
     renderedHtml: '<html><body><section data-key="hero"><h1>new</h1></section></body></html>',

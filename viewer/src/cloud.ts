@@ -363,7 +363,29 @@ export interface PushResult {
  * inlined copy at preview/inline/index.html), keeps
  * the previous preview under agent/edits/, updates the page record in the run's Marshal state, and records the edit.
  */
-export async function pushToCloud(input: PushInput): Promise<PushResult> {
+export interface PushRefused {
+  ok: false;
+  reason: "still-running";
+  message: string;
+}
+
+export async function pushToCloud(input: PushInput): Promise<PushResult | PushRefused> {
+  const root = trim(input.outputRoot);
+  // agent-sandbox's runner keeps PAGE_STUDIO_DIR as page-studio/ and the finished page as sandbox-page.html (the
+  // baseline its next edit turn diffs against); page-run folders keep it as data/.
+  // Decided by where the run keeps its pages, not by page-run.json: the page generator's runs carry a run.json too and
+  // write page-run.json only at the end.
+  const sandboxLayout =
+    Boolean(await readJson(`${root}/${STATE}/page-run.json`)) ||
+    (await gcloud(["storage", "ls", `${root}/${STATE}/page-studio/pages/*.json`], { timeoutMs: 30_000 }).then((out) => out.trim().length > 0).catch(() => false));
+  // A run still building uploads its whole state and publishes its preview at the end, over anything pushed meanwhile.
+  // agent-sandbox writes <outputRoot>/output.json last and never writes under the root after it (lane C2), so that file
+  // is the finish line there; other runs say so in run.json.
+  const runJson = await readJson(`${root}/${STATE}/run.json`);
+  const runDone = sandboxLayout ? Boolean(await readJson(`${root}/output.json`)) : runJson?.status !== "running";
+  if (!runDone) {
+    return { ok: false, reason: "still-running", message: "This run is still building; its final upload would replace your edit. Push once it has finished." };
+  }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const who = (input.by.email ?? input.by.name ?? os.userInfo().username).replace(/[^A-Za-z0-9._@-]+/g, "_").slice(0, 60);
   const out = path.join(input.workDir, `push-${stamp}`);
@@ -372,7 +394,6 @@ export async function pushToCloud(input: PushInput): Promise<PushResult> {
   // Their preview points pictures at ../images/<name> beside it; keep that shape so the UI renders it unchanged.
   const html = finished.html.replace(/(["'(\s])assets\//g, "$1../images/");
   fs.writeFileSync(path.join(out, "index.html"), html);
-  const root = trim(input.outputRoot);
   const previewUri = `${root}/preview/index.html`;
   const backup = `${root}/${EDITS}/${stamp}-${who}/preview.before.html`;
   try {
@@ -393,13 +414,6 @@ export async function pushToCloud(input: PushInput): Promise<PushResult> {
   fs.writeFileSync(inlineFile, inline.html);
   await gcloud(["storage", "cp", "--content-type=text/html; charset=utf-8", "--cache-control=no-cache", inlineFile, inlineUri], { timeoutMs: 120_000 });
 
-  // agent-sandbox's runner keeps PAGE_STUDIO_DIR as page-studio/ and the finished page as sandbox-page.html (the
-  // baseline its next edit turn diffs against); page-run folders keep it as data/.
-  // Decided by where the run keeps its pages, not by page-run.json: the page generator's runs carry a run.json too and
-  // write page-run.json only at the end.
-  const sandboxLayout =
-    Boolean(await readJson(`${root}/${STATE}/page-run.json`)) ||
-    (await gcloud(["storage", "ls", `${root}/${STATE}/page-studio/pages/*.json`], { timeoutMs: 30_000 }).then((out) => out.trim().length > 0).catch(() => false));
   const studio = `${root}/${STATE}/${sandboxLayout ? "page-studio" : "data"}`;
   const doc: Row = { ...input.pageDoc, id: input.cloudPageId };
   const docFile = path.join(out, `${input.cloudPageId}.json`);
