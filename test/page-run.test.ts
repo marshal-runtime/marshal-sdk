@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activityWarnings, extraExtensions, fakeAnswer, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { activityWarnings, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -218,6 +218,29 @@ test("Page Studio's skipped critic rounds and failed steps reach the run's warni
   assert.deepEqual(activityWarnings({ failed: ["copy pass"], warnings: [skipped, skipped] }), ["copy pass", skipped]);
   assert.deepEqual(activityWarnings({}), []);
   assert.deepEqual(activityWarnings({ warnings: "not a list" }), []);
+});
+
+test("single and deep pages refuse to start without a usable browser unless --no-look", () => {
+  const run = { depth: "single", noLook: false, usable: false, fake: false };
+  assert.match(browserGate(run) ?? "", /^No usable browser: depth single looks at the rendered page.*--no-look/);
+  assert.match(browserGate({ ...run, depth: "deep" }) ?? "", /depth deep/);
+  assert.equal(browserGate({ ...run, usable: true }), undefined);
+  assert.equal(browserGate({ ...run, noLook: true }), undefined, "an explicit --no-look builds without critic rounds");
+  assert.equal(browserGate({ ...run, depth: "quick" }), undefined, "quick has no look rounds");
+  assert.equal(browserGate({ ...run, fake: true }), undefined, "the dry path never looks");
+});
+
+test("Chrome gets --disable-dev-shm-usage on Linux and --no-sandbox when asked, also through Page Studio's wrapper", () => {
+  assert.deepEqual(chromeFlags("linux", { MARSHAL_SDK_CHROME_NO_SANDBOX: "1" }), ["--no-sandbox", "--disable-dev-shm-usage"]);
+  assert.deepEqual(chromeFlags("linux", {}), ["--disable-dev-shm-usage"]);
+  assert.deepEqual(chromeFlags("darwin", {}), []);
+  assert.deepEqual(chromeFlags("win32", { MARSHAL_SDK_CHROME_NO_SANDBOX: "1" }), []);
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "chrome-wrapper-"));
+  assert.equal(chromeWrapper("/usr/bin/chromium", state, []), "/usr/bin/chromium", "no flags, no wrapper");
+  if (process.platform !== "win32") {
+    const wrapper = chromeWrapper("/opt/it's/chrome", state, ["--no-sandbox", "--disable-dev-shm-usage"]);
+    assert.equal(fs.readFileSync(wrapper, "utf8"), `#!/bin/sh\nexec '/opt/it'\\''s/chrome' --no-sandbox --disable-dev-shm-usage "$@"\n`);
+  }
 });
 
 test("page-run's dry path writes the whole run contract from an input folder, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 90_000 }, async () => {
