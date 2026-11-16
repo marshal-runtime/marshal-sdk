@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Procedures</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--font-sans, system-ui, -apple-system, sans-serif); font-size: 13px; line-height: 1.45;
+    background: var(--background, Canvas); color: var(--foreground, CanvasText);
+  }
+  button, select { font: inherit; color: inherit; }
+  .app { display: flex; flex-direction: column; height: 100%; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border, #8884); }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  .crumb { color: var(--muted-foreground, GrayText); }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border, #8884); }
+  .seg { display: inline-flex; border: 1px solid var(--border, #8886); border-radius: var(--radius, 8px); overflow: hidden; }
+  .seg button { border: 0; background: none; padding: 5px 10px; cursor: pointer; min-height: 32px; }
+  .seg button[aria-pressed=true] { background: var(--accent, #8882); font-weight: 600; }
+  select { padding: 5px 8px; min-height: 32px; border-radius: var(--radius, 8px); border: 1px solid var(--input, var(--border, #8886)); background: var(--card, transparent); }
+  .label { color: var(--muted-foreground, GrayText); font-size: 12px; }
+  .panes { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.6fr); }
+  .pane { min-height: 0; overflow: auto; border-right: 1px solid var(--border, #8884); }
+  .pane:last-child { border-right: 0; }
+  .pane h2 { position: sticky; top: 0; margin: 0; padding: 8px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground, GrayText); background: var(--background, Canvas); border-bottom: 1px solid var(--border, #8884); }
+  .item { display: block; width: 100%; text-align: left; padding: 9px 12px; border: 0; background: none; cursor: pointer; border-bottom: 1px solid var(--border, #8882); }
+  .item:hover { background: var(--hover, var(--accent, #8881)); }
+  .item[aria-current=true] { background: var(--accent, #8882); }
+  .title { font-weight: 600; overflow-wrap: anywhere; }
+  .meta { color: var(--muted-foreground, GrayText); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+  .chip { display: inline-block; font-size: 11px; padding: 0 6px; margin-right: 4px; border-radius: 999px; border: 1px solid var(--border, #8886); color: var(--muted-foreground, GrayText); }
+  .chip.production { border-color: var(--destructive, #c33); color: var(--destructive, #c33); }
+  .chip.staging { border-color: var(--warning, #b80); color: var(--warning, #b80); }
+  .chip.local { border-color: var(--info, #36c); color: var(--info, #36c); }
+  .msg { padding: 8px 12px; border-bottom: 1px solid var(--border, #8882); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg .who { font-size: 11px; color: var(--muted-foreground, GrayText); text-transform: uppercase; margin-bottom: 2px; }
+  .msg.tool { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: var(--muted-foreground, GrayText); }
+  .note { padding: 10px 12px; color: var(--muted-foreground, GrayText); }
+  .error { padding: 10px 12px; color: var(--destructive, #c33); }
+  .back { display: none; }
+  .mobile .panes { grid-template-columns: 1fr; }
+  .mobile .pane.detail { display: none; }
+  .mobile.open .pane.list { display: none; }
+  .mobile.open .pane.detail { display: block; }
+  .mobile.open .back { display: inline-block; }
+  @media (max-width: 640px) {
+    .panes { grid-template-columns: 1fr; }
+    .pane.detail { display: none; }
+    .open .pane.list { display: none; }
+    .open .pane.detail { display: block; }
+    .open .back { display: inline-block; }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header>
+    <button class="back" id="back" type="button">‹ Runs</button>
+    <h1 id="heading">Procedures</h1>
+    <span class="crumb" id="crumb"></span>
+  </header>
+  <div class="bar">
+    <span class="seg" id="workflows" role="group" aria-label="Procedure"></span>
+    <span class="label">brand</span>
+    <select id="brand" aria-label="Brand"></select>
+    <span class="seg" id="envs" role="group" aria-label="Environment"></span>
+  </div>
+  <div class="panes">
+    <section class="pane list"><h2 id="count">Runs</h2><div id="runs"></div></section>
+    <section class="pane detail"><h2 id="detailTitle">Transcript</h2><div id="detail"><div class="note">Pick a run: its transcript loads when you open it.</div></div></section>
+  </div>
+</div>
+<script>
+(() => {
+  const embedded = window.parent !== window;
+  const pending = new Map();
+  const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+  const app = document.getElementById("app");
+  const state = { procedureId: null, workflow: "", brand: "", env: "", runs: [], open: null };
+
+  const applyContext = (hostContext) => {
+    if (!hostContext) return;
+    app.classList.toggle("mobile", hostContext.formFactor === "mobile");
+    if (hostContext.state && typeof hostContext.state.procedureId === "string") state.procedureId = hostContext.state.procedureId;
+  };
+  if (embedded) {
+    addEventListener("message", (event) => {
+      if (event.source !== parent || !event.data || event.data.jsonrpc !== "2.0") return;
+      const message = event.data;
+      const call = message.id !== undefined ? pending.get(message.id) : undefined;
+      if (call) {
+        pending.delete(message.id);
+        if (message.error) call.reject(new Error(message.error.message || "Request failed."));
+        else call.resolve(message.result);
+        return;
+      }
+      if (message.method === "ui/notifications/host-context-changed") applyContext(message.params);
+    });
+  }
+  const request = (method, params) => {
+    if (!embedded) return Promise.reject(new Error("Not inside Marshal."));
+    const id = newKey();
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+    });
+  };
+  const ready = request("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "Procedures", version: "0.1.0" }, hostChrome: "compact" }).then((result) => {
+    applyContext(result && result.hostContext);
+    parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} }, "*");
+  });
+  async function call(name, args) {
+    if (window.__procedureCall) return window.__procedureCall(name, args || {});
+    await ready;
+    const result = await request("tools/call", { name, arguments: args || {}, _meta: { idempotencyKey: newKey() } });
+    if (result && result.isError) {
+      const text = (result.structuredContent && result.structuredContent.error && result.structuredContent.error.message) || ((result.content || []).find((part) => part.type === "text") || {}).text || "Request failed.";
+      throw new Error(text);
+    }
+    let out = result && result.structuredContent;
+    if (out && "output" in out) out = out.output;
+    if (out && typeof out === "object" && "result" in out) out = out.result;
+    if (out && out.ok === false && out.error) throw new Error(out.message || out.error);
+    return out;
+  }
+
+  const el = (tag, attrs, ...children) => {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (value === undefined || value === null || value === false) continue;
+      if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+      else if (key === "class") node.className = value;
+      else node.setAttribute(key, value === true ? "" : String(value));
+    }
+    for (const child of children.flat()) if (child !== null && child !== undefined && child !== false) node.append(child.nodeType ? child : String(child));
+    return node;
+  };
+  const when = (iso) => { const date = new Date(iso); return isNaN(date) ? "" : date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
+  const short = (workflow) => workflow.replace(/^[a-z]+-/, "");
+
+  function segment(target, values, current, onPick, labelOf) {
+    target.replaceChildren(...["", ...values].map((value) => el("button", { type: "button", "aria-pressed": String(value === current), onclick: () => onPick(value) }, value ? labelOf(value) : "all")));
+  }
+
+  async function load(initial) {
+    const runsBox = document.getElementById("runs");
+    runsBox.replaceChildren(el("div", { class: "note" }, "Loading runs…"));
+    try {
+      if (initial) {
+        const first = await call("sdksessions.procedures", { initial: true });
+        const focus = first.focus || {};
+        for (const key of ["procedureId", "workflow", "brand", "env"]) if (typeof focus[key] === "string") state[key] = focus[key];
+        if (typeof focus.runId === "string") state.wanted = focus.runId;
+      }
+      const out = await call("sdksessions.procedures", { ...(state.procedureId ? { procedureId: state.procedureId } : {}), ...(state.workflow ? { workflow: state.workflow } : {}), ...(state.brand ? { brand: state.brand } : {}), ...(state.env ? { env: state.env } : {}) });
+      state.procedureId = out.group.id;
+      document.getElementById("heading").textContent = "Procedures";
+      document.getElementById("crumb").textContent = "› " + out.group.name + (state.workflow ? " › " + state.workflow : "") + (state.brand ? " › " + state.brand : "") + (state.env ? " › " + state.env : "");
+      segment(document.getElementById("workflows"), out.facets.workflows, state.workflow, (value) => { state.workflow = value; state.brand = ""; load(); }, short);
+      segment(document.getElementById("envs"), out.facets.envs, state.env, (value) => { state.env = value; load(); }, (value) => value);
+      const brand = document.getElementById("brand");
+      brand.replaceChildren(el("option", { value: "" }, "all brands"), ...out.facets.brands.map((value) => el("option", { value, selected: value === state.brand }, value)));
+      brand.onchange = () => { state.brand = brand.value; load(); };
+      state.runs = out.runs;
+      document.getElementById("count").textContent = out.runs.length + " run" + (out.runs.length === 1 ? "" : "s");
+      const rows = out.runs.map((run) => el("button", { type: "button", class: "item", "data-run": run.id, "aria-current": String(state.open && state.open.id === run.id), onclick: () => open(run) },
+        el("div", { class: "title" }, el("span", { class: "chip " + run.env }, run.env), run.brand + " · " + run.conversation),
+        el("div", { class: "meta" }, short(run.workflow) + (run.kind && run.kind !== short(run.workflow) ? " · " + run.kind : "") + (run.channel ? " · " + run.channel : "") + " · " + run.status + " · " + when(run.startedAt) + " · $" + run.costUsd.toFixed(2))));
+      const problems = (out.problems || []).map((problem) => el("div", { class: "error" }, problem.source + ": " + problem.message));
+      runsBox.replaceChildren(...problems, ...(rows.length ? rows : [el("div", { class: "note" }, "No runs match.")]));
+      const wanted = state.wanted && out.runs.find((run) => run.id === state.wanted);
+      state.wanted = null;
+      if (wanted) await open(wanted);
+    } catch (error) {
+      runsBox.replaceChildren(el("div", { class: "error" }, error.message || String(error)));
+    }
+  }
+
+  async function open(run, session) {
+    state.open = run;
+    app.classList.add("open");
+    for (const node of document.querySelectorAll("#runs .item")) node.setAttribute("aria-current", String(node.dataset.run === run.id));
+    const detail = document.getElementById("detail");
+    const pick = session || (run.sessions[0] && run.sessions[0].session);
+    document.getElementById("detailTitle").textContent = run.brand + " · " + run.conversation + " · " + run.env;
+    if (!pick) { detail.replaceChildren(el("div", { class: "note" }, "This run has no session.")); return; }
+    detail.replaceChildren(el("div", { class: "note" }, "Loading transcript…"));
+    try {
+      const out = await call("sdksessions.procedureTranscript", { procedureId: state.procedureId, source: run.source, runId: run.id, session: pick });
+      const tabs = run.sessions.length > 1 ? el("div", { class: "bar" }, el("span", { class: "seg" }, ...run.sessions.map((entry) => el("button", { type: "button", "aria-pressed": String(entry.session === pick), onclick: () => open(run, entry.session) }, entry.role || entry.session)))) : null;
+      detail.replaceChildren(
+        ...(tabs ? [tabs] : []),
+        el("div", { class: "note", id: "served" }, (out.servedFrom === "cache" ? "Served from the local cache" : "Fetched from the run records") + " · " + out.bytes + " bytes"),
+        ...out.messages.map((message) => el("div", { class: "msg " + message.role }, el("div", { class: "who" }, message.role), message.text)),
+      );
+    } catch (error) {
+      detail.replaceChildren(el("div", { class: "error" }, error.message || String(error)));
+    }
+  }
+
+  document.getElementById("back").onclick = () => { app.classList.remove("open"); state.open = null; };
+  window.__procedures = { load, open, state };
+  (embedded ? ready : Promise.resolve()).then(() => load(true), () => load(true));
+})();
+</script>
+</body>
+</html>
