@@ -55,6 +55,15 @@ export function launchFileAttachments(
   return paths?.length ? paths.map((filePath) => ({ type: "file", path: filePath })) : undefined;
 }
 
+/** Adds the section a launch appended after the system message Marshal assembled. */
+export function appendLaunchSystemPrompt<T extends { content: string }>(
+  message: T,
+  systemPromptAppend: string | undefined,
+): T {
+  if (systemPromptAppend === undefined) return message;
+  return { ...message, content: `${message.content}\n\n${systemPromptAppend}` };
+}
+
 /** System message of a session whose launch replaced Marshal's prompt. */
 export function launchOverrideSystemMessage(
   systemPrompt: string,

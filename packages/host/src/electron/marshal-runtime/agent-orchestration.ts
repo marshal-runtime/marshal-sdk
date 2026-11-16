@@ -66,6 +66,8 @@ export interface MarshalRuntimeAgentLaunchRequest {
   readonly skills?: readonly string[];
   /** Replaces Marshal's assembled system prompt and excludes repository context. */
   readonly systemPrompt?: string;
+  /** Appended as the last section of Marshal's assembled system prompt; not with `systemPrompt`. */
+  readonly systemPromptAppend?: string;
   /** Absolute file paths attached to the child's first message. */
   readonly attachments?: readonly string[];
   readonly createWorktree?: boolean;
@@ -196,6 +198,7 @@ export interface MarshalRuntimeAgentSessionPort {
     mcp?: string[];
     allowedTools?: string[];
     systemPrompt?: string;
+    systemPromptAppend?: string;
     attachments?: string[];
     /** Runtime-managed agents must not enter the chat subagent todo/goal
      *  lifecycle; the owning extension manages the assignment explicitly. */
@@ -784,6 +787,9 @@ export class SessionManagerRuntimeAgentAdapter implements MarshalRuntimeAgentPor
       runtimeTaskController: request.runtimeTaskController,
       ...(request.allowedTools ? { allowedTools: [...request.allowedTools] } : {}),
       ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
+      ...(request.systemPromptAppend !== undefined
+        ? { systemPromptAppend: request.systemPromptAppend }
+        : {}),
       ...(request.attachments?.length ? { attachments: [...request.attachments] } : {}),
       skills: skills ? [...skills] : undefined,
       mcp: mcp ? [...mcp] : undefined,

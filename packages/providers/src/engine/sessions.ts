@@ -279,6 +279,7 @@ import { RuntimeSubagentMirrors } from "./runtime-subagent-mirrors";
 import { isProjectFolder, uniqueWorkspaceName } from "./session-import/placement";
 import {
   launchFileAttachments,
+  appendLaunchSystemPrompt,
   launchOverrideSystemMessage,
   subagentLaunchMessageId,
 } from "./session-launch-override";
@@ -635,6 +636,7 @@ interface CreateSessionOptions {
   mcp?: string[];
   allowedTools?: string[];
   systemPromptOverride?: string;
+  systemPromptAppend?: string;
   launchAttachments?: string[];
   cloudSyncEnabled?: boolean;
   reasoningEffort?: ReasoningEffort;
@@ -4935,6 +4937,17 @@ export class SessionManager
         rest.conversationContext ?? "",
       );
     }
+    return appendLaunchSystemPrompt(
+      this.buildAssembledSystemMessage(sessionId, sessionData, rest),
+      sessionData?.systemPromptAppend,
+    );
+  }
+
+  private buildAssembledSystemMessage(
+    sessionId: string,
+    sessionData: PersistedSession | null,
+    rest: Omit<Parameters<SessionManager["buildSystemMessage"]>[0], "sessionId">,
+  ): { content: string; mode?: "append" | "replace" } {
     const replacementActive = this.isPromptReplacementActive(sessionData);
     if (this.usesUpdatedMarshalPrompt(sessionData)) {
       const message = this.buildReplacementSystemMessage({
@@ -5314,6 +5327,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     if (sessionData?.source === "workflow-agent") return false;
     if (sessionData?.source !== "subagent" || sessionData.repositoryAgent) return false;
     if (sessionData.systemPromptOverride !== undefined) return false;
+    if (sessionData.systemPromptAppend !== undefined) return false;
     // Scoped-MCP subagents need the normal Marshal session runtime: the SDK
     // default subagent runtime does not surface the session's `mcpServers`.
     if ((sessionData.scopedMcp?.length ?? 0) > 0) return false;
@@ -7717,6 +7731,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       skills: source.scopedSkills,
       allowedTools: source.allowedTools,
       systemPromptOverride: source.systemPromptOverride,
+      systemPromptAppend: source.systemPromptAppend,
       playwrightHeadless: source.playwrightHeadless,
       sandbox: source.sandbox,
       initialMessages: messages,
@@ -8038,6 +8053,9 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       ...(options?.allowedTools ? { allowedTools: [...options.allowedTools] } : {}),
       ...(options?.systemPromptOverride !== undefined
         ? { systemPromptOverride: options.systemPromptOverride }
+        : {}),
+      ...(options?.systemPromptAppend !== undefined
+        ? { systemPromptAppend: options.systemPromptAppend }
         : {}),
       leanPrompt: resolveLeanPromptForNewSession(
         this.selfToolDeps?.settingsManager.get().experiments?.leanPrompt,
@@ -9707,6 +9725,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     mcp?: string[];
     allowedTools?: string[];
     systemPrompt?: string;
+    systemPromptAppend?: string;
     attachments?: string[];
     suppressInitialTodoInstruction?: boolean;
     returnAfterBackendAcceptance?: boolean;
@@ -9950,6 +9969,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
             allowedTools: parent.allowedTools,
             runtimeAgentRole: parent.runtimeAgentRole,
             systemPromptOverride: parent.systemPromptOverride,
+            systemPromptAppend: parent.systemPromptAppend,
             playwrightHeadless: parent.playwrightHeadless,
             sandbox: parent.sandbox,
             // The parent's history is context here, not something asked of the fork.
@@ -10344,6 +10364,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     mcp?: string[];
     allowedTools?: string[];
     systemPrompt?: string;
+    systemPromptAppend?: string;
     attachments?: string[];
     cloudSyncEnabled?: boolean;
     source?: SessionSource;
@@ -10451,6 +10472,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       mcp: args.mcp,
       allowedTools: args.allowedTools,
       systemPromptOverride: args.systemPrompt,
+      systemPromptAppend: args.systemPromptAppend,
       launchAttachments: args.attachments,
       cloudSyncEnabled: args.cloudSyncEnabled,
       deferBackendStart: args.deferBackendStart,
