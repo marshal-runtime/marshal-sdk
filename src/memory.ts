@@ -63,6 +63,11 @@ export interface MemoryOptions {
   promptLimit?: number;
   /** Always-on memories rendered at most. Default 50. */
   alwaysOnLimit?: number;
+  /**
+   * How often, at most, a scope this host already holds is re-read in the background to pick up other hosts' writes.
+   * Default 60 s. A turn never waits for it: only the first read of a scope this host has not seen is awaited.
+   */
+  refreshMs?: number;
 }
 
 const SCOPE_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/;
@@ -119,11 +124,17 @@ function rankByWords(records: readonly MemoryRecord[], query: string, limit: num
 }
 
 /**
- * The host's memory: tools, the prompt block and its cache. `warm(session)` reads the session's scopes before a turn
- * (the port awaits it), so the prompt, which is assembled synchronously, renders what the backend holds now.
+ * The host's memory: tools, the prompt block and its cache. `warm(session)` runs before each turn (the port awaits it)
+ * but reads the backend only for a scope this host has never seen; every other scope is served from the cache, which
+ * this host's own writes keep current, and is re-read in the background at most every `refreshMs` for other hosts'
+ * writes. So no turn waits on cloud I/O after a scope's first read (R31).
  */
 export class HostMemory {
   private readonly cache = new Map<string, MemoryRecord[]>();
+  private readonly readAt = new Map<string, number>();
+  private readonly refreshing = new Map<string, Promise<void>>();
+  /** Ids this host forgot: a background list that started before the removal must not bring them back. */
+  private readonly forgotten = new Set<string>();
   readonly backend: MemoryBackend;
   private readonly org: string;
 
@@ -142,20 +153,47 @@ export class HostMemory {
   }
 
   private async read(key: string): Promise<MemoryRecord[]> {
+    const startedAt = Date.now();
     const records = await this.backend.list(key);
-    this.cache.set(key, records);
-    return records;
+    // A write by this host while the list ran is newer than the list: keep it.
+    const written = (this.cache.get(key) ?? []).filter((record) => Date.parse(record.createdAt) >= startedAt && !records.some((listed) => listed.id === record.id));
+    const merged = [...records.filter((record) => !this.forgotten.has(record.id)), ...written];
+    this.cache.set(key, merged);
+    this.readAt.set(key, Date.now());
+    return merged;
   }
 
-  /** Reads the session's scopes into the cache; a backend failure keeps the last copy and is reported, never thrown into a turn. */
+  /** Re-reads a held scope off the turn path, at most once per `refreshMs`, one read per scope at a time. */
+  private refresh(key: string, log?: (line: string) => void): void {
+    if (this.refreshing.has(key) || Date.now() - (this.readAt.get(key) ?? 0) < (this.options.refreshMs ?? 60_000)) return;
+    const job = this.read(key)
+      .then(() => undefined)
+      .catch((error) => log?.(`memory: background read of ${key} failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => this.refreshing.delete(key));
+    this.refreshing.set(key, job);
+  }
+
+  /**
+   * Before a turn: awaits the backend only for a scope this host has never read; a held scope is served from the cache
+   * and refreshed in the background. A failed first read leaves the scope empty for this turn and is retried next turn.
+   */
   async warm(session: SessionRecord | undefined, log?: (line: string) => void): Promise<void> {
     for (const { key } of this.scopesOf(session)) {
+      if (this.readAt.has(key)) {
+        this.refresh(key, log);
+        continue;
+      }
       try {
         await this.read(key);
       } catch (error) {
         log?.(`memory: could not read ${key}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+  }
+
+  /** Waits for background reads in flight (shutdown, scripts). */
+  async settle(): Promise<void> {
+    await Promise.all([...this.refreshing.values()]);
   }
 
   /** The memory block of a session's prompt: every always-on memory of its scopes, then the newest others. */
@@ -217,6 +255,7 @@ export class HostMemory {
   async forget(session: SessionRecord | undefined, id: string): Promise<boolean> {
     for (const { key } of this.scopesOf(session)) {
       if (await this.backend.remove(key, id)) {
+        this.forgotten.add(id);
         this.cache.set(key, (this.cache.get(key) ?? []).filter((record) => record.id !== id));
         return true;
       }
