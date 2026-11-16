@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { fakeAnswer, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
-import { writeRunLogs } from "../src/run-contract.js";
+import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
@@ -134,6 +134,30 @@ test("writeRunLogs keeps agent-sandbox's RunSummary fields and counts Skill call
   const rows = fs.readFileSync(path.join(root, "logs", "run.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.equal(rows.length, 4);
   assert.ok(rows.every((row) => typeof row.type === "string" && typeof row.at === "number" && row.session === session.id));
+});
+
+test("an edit turn counts a session it resumed, with only this turn's usage and events", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "page-edit-logs-"));
+  const store = new FileSessionStore(path.join(root, "sessions"), { runId: "earlier-turn", host: { id: "t", kind: "local" } });
+  const hands = store.create({ title: "Page Studio fast hands", runtime: "claude", model: "haiku", native: { kind: "claude", cwd: root }, labels: {} });
+  const critic = store.create({ title: "critic", runtime: "claude", model: "m", native: { kind: "claude", cwd: root }, labels: {} });
+  store.appendEvent(hands.id, { type: "result", subtype: "success", is_error: false, num_turns: 1, duration_ms: 5, duration_api_ms: 4, total_cost_usd: 0.02, result: "first" });
+  store.addUsage(hands.id, { costUsd: 0.02, turns: 1 });
+  store.addUsage(critic.id, { costUsd: 1, turns: 3 });
+  const before = new Map(store.list().map((session) => [session.id, { ...session.usage }]));
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  const started = Date.now();
+  store.appendEvent(hands.id, { type: "result", subtype: "success", is_error: false, num_turns: 1, duration_ms: 5, duration_api_ms: 4, total_cost_usd: 0.01, result: "second" });
+  store.addUsage(hands.id, { costUsd: 0.01, turns: 1 });
+
+  const sessions = turnSessions(store.list(), before, "this-turn", started);
+
+  assert.deepEqual(sessions.map((session) => session.id), [hands.id], "the untouched critic is not this turn's");
+  assert.ok(Math.abs(sessions[0]!.usage.costUsd - 0.01) < 1e-9);
+  assert.equal(sessions[0]!.usage.turns, 1);
+  const summary = writeRunLogs({ logDir: path.join(root, "logs"), storeRoot: path.join(root, "sessions"), sessions, started, since: started });
+  assert.deepEqual(summary.results.map((result) => result.final_text), ["second"]);
+  assert.equal((summary.totals as { total_cost_usd: number }).total_cost_usd, 0.01);
 });
 
 test("page-run's dry path writes the whole run contract from an input folder, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 90_000 }, async () => {
