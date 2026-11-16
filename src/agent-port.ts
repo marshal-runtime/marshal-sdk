@@ -544,7 +544,7 @@ export class ClaudeAgentPort {
       model: session.model,
       ...(session.reasoningEffort ? { effort: session.reasoningEffort } : {}),
       cwd: launch.cwd ?? this.options.cwd,
-      env: launch.env ? mergeEnv(this.options.env, launch.env) : this.options.env,
+      env: withoutBundledSkills(launch.env ? mergeEnv(this.options.env, launch.env) : this.options.env),
       abortController: abort,
       ...(permissionHandler
         ? { permissionMode: "default", canUseTool: claudeCanUseTool(permissionHandler, agent.id) }
@@ -687,6 +687,14 @@ function mergeEnv(base: Record<string, string>, over: Readonly<Record<string, st
     else merged[key] = value;
   }
   return merged;
+}
+
+/**
+ * Claude Code's bundled skills (loop, update-config, claude-api, …) describe the CLI, not a Marshal host, and
+ * otherwise show in every session's skill list. A host that wants them sets the variable itself (say, to "0").
+ */
+function withoutBundledSkills(env: Record<string, string>): Record<string, string> {
+  return "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS" in env ? env : { ...env, CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1" };
 }
 
 /** A plain string, or one user message with the pictures as image blocks ahead of the text. */
