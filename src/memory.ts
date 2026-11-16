@@ -139,10 +139,37 @@ export function brainCapabilityRoute(id: string, call: BrainCall): BrainMemoryRo
       const answer = (await call("memory.delete", input)) as { deleted?: boolean; success?: boolean } | boolean;
       return typeof answer === "boolean" ? answer : answer?.deleted ?? answer?.success ?? false;
     },
-    search: async (input) => many(await call("memory.search", input)),
-    list: async (input) => many(await call("memory.list", input)),
+    search: async (input) => {
+      try {
+        return many(await call("memory.search", input));
+      } catch (error) {
+        if (!missing(error)) throw error;
+        // A Brain extension without memory.search yet: its memory nodes through knowledge.search (read-only).
+        const found = (await call("knowledge.search", { query: input.query, kinds: ["memory"], limit: input.limit })) as { hits?: { node?: Record<string, any>; snippet?: string }[] };
+        return (found.hits ?? []).flatMap((hit) => {
+          const node = hit.node;
+          const content = String(node?.snippet ?? hit.snippet ?? node?.name ?? "").trim();
+          if (!node?.id || !content) return [];
+          return [{ id: String(node.id), content, category: "fact" as MemoryCategory, scope: input.scopes[0] ?? "", alwaysOn: false, createdAt: String(node.props?.createdAt ?? node.updatedAt ?? ""), links: [] }];
+        });
+      }
+    },
+    list: async (input) => {
+      try {
+        return many(await call("memory.list", input));
+      } catch (error) {
+        if (missing(error)) return [];
+        throw error;
+      }
+    },
   };
 }
+
+/** The Brain extension does not have that capability (yet). */
+const missing = (error: unknown): boolean => {
+  const code = String((error as { code?: unknown })?.code ?? "");
+  return code === "not_found" || code === "not-found" || /capability_not_found|not registered|unknown capability/i.test(String((error as Error)?.message ?? ""));
+};
 
 const unavailable = () => Object.assign(new Error("This session has no memory store: the host connects no Brain."), { code: "unavailable" });
 

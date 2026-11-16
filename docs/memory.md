@@ -30,7 +30,7 @@ strings `<id>:<k>=<v>/...` (`scopeString`), e.g. `brand:brand=<uuid>` and `perso
 - A store held in-process: `typedGraphMemoryRoute({id, execute, tenant, storeOf, merge?})` runs the route on a Quillstone
   typed-graph service's memory ops (`memoryCreate`, `memoryUpdate`, `memoryLink`, `memoryDelete`, `memorySearch`,
   `memoryList`, `memoryGet`; `execute` is `service.execute`). Each scope is its own store (`storeOf(scope)`); writes by
-  id look for the id in the session's scopes. Always-on is the `preference` category there. A search runs each store's
+  id look for the id in the session's scopes; `alwaysOn`, `sessionId` and access tags (`accessOf(scope)`) are native fields. A search runs each store's
   own search (its algorithm, unchanged) and merges the stores with `merge` on their raw `lex`/`sim` signals (Marley:
   `fuseAcrossStores`), by default interleaved by rank. Marley uses it for the brand's Spanner graph with scopes brand
   and person (the DM member).

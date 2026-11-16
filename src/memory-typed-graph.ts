@@ -15,6 +15,8 @@ export interface TypedGraphMemoryRouteOptions {
   tenant: string;
   /** The already-authorized store id a scope string lives in (Marley: `zs/<brand>/brand/brand-only`, `zs/<brand>/member/<sha256>`). */
   storeOf(scope: string): string;
+  /** Access tags a memory written to a scope carries (Marley: `["staff"]` for the brand, `["person:<id>"]` for a member). Default: the store's own. */
+  accessOf?(scope: string): readonly string[] | undefined;
   /**
    * Merges one search's hits from several stores into one order of ids. Each hit carries the store's raw keyword (`lex`)
    * and vector (`sim`) signals, so a host can fuse across stores with its own fusion (Marley: `fuseAcrossStores`), never
@@ -43,6 +45,8 @@ interface GraphMemory {
   createdAt?: string | null;
   updatedAt?: string | null;
   supersededBy?: string | null;
+  alwaysOn?: boolean;
+  sessionId?: string | null;
   properties?: Record<string, unknown>;
 }
 
@@ -76,12 +80,11 @@ function record(memory: GraphMemory, scope: string): BrainMemory {
     content: memory.content,
     category: categoryOf(memory.category),
     scope: typeof properties.scope === "string" ? properties.scope : scope,
-    // The typed-graph's always-on memories are its preferences.
-    alwaysOn: memory.category === "preference",
+    alwaysOn: memory.alwaysOn ?? properties.alwaysOn === true,
     createdAt,
     ...(memory.updatedAt ? { updatedAt: memory.updatedAt } : {}),
     links: (memory.links ?? []).map(fromGraph),
-    ...(typeof properties.sessionId === "string" ? { sessionId: properties.sessionId } : {}),
+    ...(memory.sessionId ? { sessionId: memory.sessionId } : typeof properties.sessionId === "string" ? { sessionId: properties.sessionId } : {}),
     ...(memory.author ? { author: memory.author } : {}),
   };
 }
@@ -109,15 +112,18 @@ export function typedGraphMemoryRoute(options: TypedGraphMemoryRouteOptions): Br
   return {
     id: options.id,
     async create(input) {
-      // Always-on is the preference category in the typed-graph (memoryList by category is what the prompt reads).
-      const category = input.alwaysOn ? "preference" : input.category;
+      const category = input.category;
+      const access = options.accessOf?.(input.scope);
       const created = (await run(input.scope, "memoryCreate", {
         content: input.content,
         category,
         links: input.links.map(toGraph),
         ...(input.supersedes ? { supersedes: [input.supersedes] } : {}),
         ...(input.author ? { author: input.author } : {}),
-        properties: { scope: input.scope, ...(input.sessionId ? { sessionId: input.sessionId } : {}) },
+        alwaysOn: input.alwaysOn,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        ...(access?.length ? { access } : {}),
+        properties: { scope: input.scope },
       })) as { id: string };
       const [stored] = await get(input.scope, [created.id]);
       if (stored) return record(stored, input.scope);
@@ -127,13 +133,11 @@ export function typedGraphMemoryRoute(options: TypedGraphMemoryRouteOptions): Br
     async update(input) {
       const found = await holder(input.id, input.scopes);
       if (!found) throw notFound(input.id);
-      // The typed-graph keeps always-on as the preference category: turning it on or off moves the category.
-      const category =
-        input.category ?? (input.alwaysOn === true ? "preference" : input.alwaysOn === false && found.memory.category === "preference" ? "fact" : undefined);
       await run(found.scope, "memoryUpdate", {
         id: input.id,
         ...(input.content ? { content: input.content } : {}),
-        ...(category ? { category } : {}),
+        ...(input.category ? { category: input.category } : {}),
+        ...(typeof input.alwaysOn === "boolean" ? { alwaysOn: input.alwaysOn } : {}),
         ...(input.links ? { links: input.links.map(toGraph) } : {}),
       });
       const [stored] = await get(found.scope, [input.id]);
@@ -179,12 +183,12 @@ export function typedGraphMemoryRoute(options: TypedGraphMemoryRouteOptions): Br
     },
     async list(input) {
       const found = (await run(input.scope, "memoryList", {
-        ...(input.alwaysOn === true ? { category: "preference" } : {}),
+        ...(typeof input.alwaysOn === "boolean" ? { alwaysOn: input.alwaysOn } : {}),
         ...(input.since ? { since: input.since } : {}),
         limit: Math.min(input.limit, 200),
       })) as { memories?: GraphMemory[] };
       const memories = (found.memories ?? []).filter((memory) => !memory.supersededBy).map((memory) => record(memory, input.scope));
-      return input.alwaysOn === false ? memories.filter((memory) => !memory.alwaysOn) : memories;
+      return memories;
     },
   };
 }
