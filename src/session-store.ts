@@ -366,24 +366,12 @@ export class FileSessionStore implements SessionStore {
 
   /** Word search over titles, labels and transcripts. A stand-in for the desktop's recall index. */
   search(query: string, limit = 10): SessionSearchHit[] {
-    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const words = searchWords(query);
     if (words.length === 0) return [];
     const hits: SessionSearchHit[] = [];
     for (const session of this.records.values()) {
-      const head = `${session.title} ${Object.values(session.labels).join(" ")}`.toLowerCase();
-      let score = words.filter((word) => head.includes(word)).length * 3;
-      let snippet = session.title;
-      for (const message of this.messages(session.id)) {
-        const text = message.content.toLowerCase();
-        const matched = words.filter((word) => text.includes(word));
-        if (matched.length === 0) continue;
-        score += matched.length;
-        if (snippet === session.title) {
-          const at = Math.max(0, text.indexOf(matched[0]!) - 60);
-          snippet = message.content.slice(at, at + 200);
-        }
-      }
-      if (score > 0) hits.push({ session, snippet, score });
+      const scored = scoreSession(words, session.title, Object.values(session.labels), this.messages(session.id));
+      if (scored) hits.push({ session, ...scored });
     }
     return hits.sort((left, right) => right.score - left.score).slice(0, limit);
   }
@@ -400,6 +388,39 @@ export class FileSessionStore implements SessionStore {
     fs.writeFileSync(temporary, JSON.stringify([...this.records.values()], null, 1));
     fs.renameSync(temporary, file);
   }
+}
+
+/** The query's words, as session search matches them. */
+export function searchWords(query: string): string[] {
+  return query.toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+/**
+ * The SDK's session search scoring, one session at a time: 3 per query word in the title or labels, 1 per word per
+ * transcript message that contains it, and the first matching message as the snippet. Local and org store search use
+ * this same function, so a session ranks the same wherever it is stored. Undefined when nothing matched.
+ */
+export function scoreSession(
+  words: readonly string[],
+  title: string,
+  labels: readonly string[],
+  messages: Iterable<{ content: string }>,
+): { snippet: string; score: number } | undefined {
+  const head = `${title} ${labels.join(" ")}`.toLowerCase();
+  let score = words.filter((word) => head.includes(word)).length * 3;
+  let snippet = title;
+  for (const message of messages) {
+    const content = typeof message.content === "string" ? message.content : "";
+    const text = content.toLowerCase();
+    const matched = words.filter((word) => text.includes(word));
+    if (matched.length === 0) continue;
+    score += matched.length;
+    if (snippet === title) {
+      const at = Math.max(0, text.indexOf(matched[0]!) - 60);
+      snippet = content.slice(at, at + 200);
+    }
+  }
+  return score > 0 ? { snippet, score } : undefined;
 }
 
 function readIndex(root: string): SessionRecord[] {

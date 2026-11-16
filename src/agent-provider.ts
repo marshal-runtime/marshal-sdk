@@ -9,6 +9,7 @@ import {
 } from "@marshal/runtime/delegation";
 
 import type { AgentSummary, ClaudeAgentPort } from "./agent-port.js";
+import type { OrgSessionSearch } from "./org-store/search.js";
 import type { MessageSender } from "./session-messages.js";
 import type { SessionStore } from "./session-store.js";
 
@@ -214,7 +215,7 @@ const SESSION_TOOLS: Record<string, { title: string; description: string; risk: 
   searchSessions: {
     title: "Search sessions",
     description:
-      "Find sessions in this host's store (every run stored here) by words in their title, labels and transcript, best first. Filters: since/until (ISO), workspace, includeSubagents (default true). With the kit's sessions part, sessions.search also covers the team's shared sessions.",
+      "Find sessions by words in their title, labels and transcript, best first: this host's own store and, when the host has an org store, every session any host of the org published there (scope: local, cloud or all; default all). Filters: since/until (ISO), workspace, includeSubagents (default true). Open a hit with getSessionTranscript.",
     risk: "low",
     input: {
       type: "object",
@@ -259,7 +260,7 @@ const SESSION_TOOLS: Record<string, { title: string; description: string; risk: 
   },
   getSessionTranscript: {
     title: "Read a session's transcript",
-    description: "The latest messages of a session on this host (default 30), each with its sender when someone else sent it.",
+    description: "The latest messages of a session (default 30), each with its sender when someone else sent it: a session of this host, or one the org store holds (a searchSessions hit labelled cloud).",
     risk: "low",
     input: {
       type: "object",
@@ -343,7 +344,7 @@ const SESSION_TOOL_OUTPUTS: Record<string, object> = {
  * Sessions talking to sessions, under the desktop's self-tool names (electron/self-tools.ts: startLane, messageSession,
  * searchSessions, getSessionTranscript), so an agent prompted for the desktop calls the same names here.
  */
-export function createSessionToolsProvider(port: ClaudeAgentPort, store: SessionStore): CapabilityProvider {
+export function createSessionToolsProvider(port: ClaudeAgentPort, store: SessionStore, extra: { orgSearch?: OrgSessionSearch } = {}): CapabilityProvider {
   const descriptors = Object.entries(SESSION_TOOLS).map(([operation, spec]) => ({
     protocolVersion: RUNTIME_PROTOCOL_VERSION,
     name: `${TOOL_PREFIX}${operation}`,
@@ -414,13 +415,14 @@ export function createSessionToolsProvider(port: ClaudeAgentPort, store: Session
           const since = typeof input.since === "string" ? input.since : undefined;
           const until = typeof input.until === "string" ? input.until : undefined;
           const workspace = typeof input.workspace === "string" ? input.workspace.toLowerCase() : undefined;
-          const results = (await store.search(text(input.query, "query"), 500))
+          const query = text(input.query, "query");
+          const scope = input.scope === "local" || input.scope === "cloud" ? input.scope : "all";
+          const local = (scope === "cloud" ? [] : await store.search(query, 500))
             .filter(({ session }) => session.id !== caller)
             .filter(({ session }) => input.includeSubagents !== false || !session.parentId)
             .filter(({ session }) => !since || session.updatedAt >= since)
             .filter(({ session }) => !until || session.createdAt <= until)
             .filter(({ session }) => !workspace || (session.workspace ?? "").toLowerCase().includes(workspace))
-            .slice(0, limit)
             .map(({ session, snippet, score }) => ({
               sessionId: session.id,
               name: session.title,
@@ -436,6 +438,28 @@ export function createSessionToolsProvider(port: ClaudeAgentPort, store: Session
               ...(session.parentId ? { parentId: session.parentId } : {}),
               ...(session.launchedBy ? { launchedBy: session.launchedBy } : {}),
             }));
+          // The org store's copy of a session this host holds is the same session: the local one is shown.
+          const held = new Set(local.map((hit) => hit.sessionId));
+          const cloud =
+            scope === "local" || !extra.orgSearch
+              ? []
+              : (await extra.orgSearch.search({ query, limit: 500, ...(since ? { since } : {}), ...(until ? { until } : {}) }))
+                  .filter(({ row }) => row.id !== caller && !held.has(row.id))
+                  .filter(({ row }) => !workspace || `${row.ws} ${row.impl}`.toLowerCase().includes(workspace))
+                  .map(({ row, snippet, score }) => ({
+                    sessionId: row.id,
+                    name: row.title,
+                    label: "cloud",
+                    snippet,
+                    score,
+                    state: row.state,
+                    createdAt: row.createdAt,
+                    updatedAt: row.updatedAt,
+                    host: row.host.id,
+                    runId: row.labels.runId ?? "",
+                    workspace: `${row.ws}/${row.impl}`,
+                  }));
+          const results = [...local, ...cloud].sort((left, right) => right.score - left.score).slice(0, limit);
           return { output: { success: true, results } };
         }
         case "setSessionTodos": {
@@ -451,9 +475,19 @@ export function createSessionToolsProvider(port: ClaudeAgentPort, store: Session
         case "getSessionTranscript": {
           const sessionId = text(input.sessionId, "sessionId");
           const session = store.get(sessionId);
-          if (!session) return { output: { success: false, error: "Session not found" } };
-          const all = store.messages(sessionId);
           const lastN = typeof input.lastN === "number" && input.lastN > 0 ? input.lastN : 30;
+          if (!session) {
+            const row = extra.orgSearch ? await extra.orgSearch.row(sessionId) : undefined;
+            if (!row) return { output: { success: false, error: "Session not found" } };
+            const all = await extra.orgSearch!.messages(row);
+            const messages = all.slice(-lastN).map((message) => ({
+              role: message.role,
+              content: String(message.content ?? "").slice(0, 2000),
+              ...(message.from ? { from: message.from } : {}),
+            }));
+            return { output: { name: row.title, createdAt: row.createdAt, messageCount: all.length, showing: messages.length, messages } };
+          }
+          const all = store.messages(sessionId);
           const messages = all.slice(-lastN).map((message) => ({
             role: message.role,
             content: message.content.slice(0, 2000),

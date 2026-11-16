@@ -211,6 +211,8 @@ export interface AgentPortOptions {
   workspaceName?: string;
   /** Marshal's system prompt for a session, unless the launch replaces it. */
   systemPrompt: (session: SessionRecord) => string | undefined;
+  /** Awaited before each turn's prompt is assembled: the host reads what the prompt renders (the session's memories). */
+  prepareTurn?: (session: SessionRecord) => Promise<void>;
   /** MCP servers of one session; called per turn because an in-process server serves one connection. */
   mcpServers: (session: SessionRecord) => Record<string, unknown>;
   /** Tool allowlist handed to the backend; undefined leaves its defaults. */
@@ -718,6 +720,13 @@ export class ClaudeAgentPort {
     store.appendMessage(agent.id, { role: "user", content: message, ...(from ? { from } : {}) });
     const abort = new AbortController();
     agent.abort = abort;
+    if (this.options.prepareTurn) {
+      try {
+        await this.options.prepareTurn(session);
+      } catch (error) {
+        this.options.log?.(`prepareTurn for ${session.id} failed: ${errorText(error)}`);
+      }
+    }
     const basePrompt = this.options.systemPrompt(session);
     const hostPrompt = basePrompt !== undefined && session.systemPromptAppend ? `${basePrompt}\n\n${session.systemPromptAppend}` : basePrompt;
     const systemPrompt = agent.systemPrompt ?? hostPrompt;

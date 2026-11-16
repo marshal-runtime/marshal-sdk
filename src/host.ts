@@ -39,6 +39,9 @@ import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { SessionPublisher } from "./kit/publisher.js";
 import { OrgStore, type OrgStoreOptions, type OrgTranscriptOptions } from "./org-store/index.js";
+import { OrgSessionSearch } from "./org-store/search.js";
+import { createMemoryToolsProvider, HostMemory, objectMemoryBackend, type MemoryOptions } from "./memory.js";
+import { fsObjectStore } from "./object-store.js";
 import { RunRecordsPublisher, type RunRecordsOptions } from "./run-records.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
 import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
@@ -143,6 +146,12 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * override; `session` gives one session its own layer (docs/prompt.md).
    */
   prompt?: HostPromptOptions;
+  /**
+   * Memory for every session (docs/memory.md): marshal.tool.remember / recall / forget, and the memory block of each
+   * session's prompt (always-on preferences first). Default backend: one object per memory under sdk-memory/v1/ in the
+   * org store's bucket, else in the state folder. scopes says which scopes a session reads (Marley: brand, person).
+   */
+  memory?: MemoryOptions;
 }
 
 /** The org bridge without what the host supplies; `host` defaults to the host's id. */
@@ -229,6 +238,8 @@ export interface MarshalHost {
   readonly decisions: DecisionDesk;
   /** Non-chat model services on the host's providers: decide, embed, speech (also marshal.models.* capabilities). */
   readonly models: ModelServices;
+  /** Memory: what remember/recall/forget use and what each session's prompt shows. */
+  readonly memory: HostMemory;
   /** An event happened on this host; event automations for its type run. */
   emit(event: string, payload?: Record<string, unknown>): Promise<{ automationId: string; sessionId: string }[]>;
   dispose(): Promise<void>;
@@ -270,6 +281,16 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const sessions: SessionStore = new FileSessionStore(path.join(stateRoot, SESSIONS_DIRECTORY), origin);
   const orgStore = options.orgStore ? new OrgStore({ log, ...options.orgStore }, sessions, options.orgStore.isCurrent) : undefined;
   if (orgStore) sessions.transcripts = orgStore.transcripts;
+  const orgSearch = options.orgStore ? new OrgSessionSearch({ objects: options.orgStore.objects, workspace: options.orgStore.impl.workspace, log: (line, fields) => log(line + " " + JSON.stringify(fields ?? {})) }) : undefined;
+  const memory = new HostMemory(
+    {
+      ...options.memory,
+      backend: options.memory?.backend ?? objectMemoryBackend(options.orgStore?.objects ?? fsObjectStore(path.join(stateRoot, "memory"))),
+      org: options.memory?.org ?? options.orgStore?.impl.workspace ?? "local",
+      workspaceName: path.basename(workspacePath),
+    },
+    sessions,
+  );
   const runRecordsPublisher = options.runRecords ? new RunRecordsPublisher({ log, ...options.runRecords, store: sessions }) : undefined;
   const kitOptions = normalizeKit(options.kit);
   const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath }) : undefined;
@@ -307,6 +328,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     ...(options.settings ? { settings: () => options.settings!.read() } : {}),
     workspaceName: path.basename(workspacePath),
     systemPrompt: (session) => prompts?.forSession(session),
+    prepareTurn: (session) => memory.warm(session, log),
     mcpServers: (session) => serversFor(session),
     log,
     onSessionEvent: (type, payload) => {
@@ -376,7 +398,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     providerSources: [
       ...(options.providerSources ?? []),
       () => createAgentProvider(agents, (id) => id !== undefined && sessions.get(id) !== undefined),
-      () => createSessionToolsProvider(agents, sessions),
+      () => createSessionToolsProvider(agents, sessions, orgSearch ? { orgSearch } : {}),
+      () => createMemoryToolsProvider(memory),
       () => createForkToolsProvider(forks),
       () => createAutomationsProvider(hostAutomations),
       () => createDecisionsProvider(decisions),
@@ -526,6 +549,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       const visible = extensionSkillsPrompt(extensionSkills.filter((skill) => skillVisibleTo(skill, session)));
       return visible ? [visible] : [];
     },
+    (session) => memory.promptContext(session),
   );
 
   serversFor = (session: SessionRecord): Record<string, unknown> => {
@@ -734,6 +758,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     ...(org ? { org } : {}),
     automations: hostAutomations,
     models,
+    memory,
     decisions,
     emit: (event, payload = {}) => hostAutomations.emit(event, payload),
     async dispose(): Promise<void> {
