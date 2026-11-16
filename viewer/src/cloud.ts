@@ -11,15 +11,16 @@
 // (<cache>/<run>/state/sessions, <cache>/<run>/data), so everything the folder host does (runs, sessions,
 // transcripts, telemetry, pages, continue, open in Page Studio) works on it unchanged. Runs from the older pipeline
 // (no marshal-state) are listed too, with their preview, so their pages can be brought into Page Studio to compare.
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "fs";
 import http from "http";
-import https from "https";
 import os from "os";
 import path from "path";
 import { pathToFileURL } from "url";
 
 import { finishPage } from "../../src/page-finish";
+import { commitPageVersion, extendRunJson, type ArtifactRef, type NewPicture } from "./artifacts";
+import { gcloud, gcsCat, gcsGlob, gcsRead, gcsWrite, PreconditionFailed, pool } from "./gcs";
 import { folderHost, type Host } from "./hosts";
 import { notesOf, reviewRunId, syncReviewComments, type ReviewApiConfig, type ReviewSync } from "./review";
 
@@ -71,114 +72,11 @@ const MAX_RUNS = 40;
 const home = (p: string) => (p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p);
 const safe = (value: string) => value.replace(/^gs:\/\//, "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-120);
 const trim = (uri: string) => uri.replace(/\/+$/, "");
+export { gcloud, gcsCat, gcsGlob };
 /** The console URL a signed-in person opens the object with (no public access needed). */
 export const consoleUrl = (uri: string) => `https://storage.cloud.google.com/${uri.replace(/^gs:\/\//, "")}`;
 
-export function gcloud(args: string[], options: { timeoutMs?: number; input?: string } = {}): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = execFile(
-      process.env.MARSHAL_SDK_GCLOUD || "gcloud",
-      args,
-      { timeout: options.timeoutMs ?? 120_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } },
-      (error, stdout, stderr) => {
-        if (error) reject(new Error(`gcloud ${args.slice(0, 3).join(" ")}: ${String(stderr || error.message).trim().split("\n").slice(-2).join(" ")}`));
-        else resolve(String(stdout));
-      },
-    );
-    if (options.input !== undefined) child.stdin?.end(options.input);
-  });
-}
 
-// ---- Reading the bucket ----
-// Listing runs touches a handful of small objects per run. Spawning gcloud for each costs about a second apiece, so
-// when gcloud is the real CLI one access token is fetched once and objects are read over the JSON API in parallel.
-// A MARSHAL_SDK_GCLOUD override (tests, other CLIs) keeps every call on that binary.
-let tokenCache: { token: string; at: number } | undefined;
-const gcsAgent = new https.Agent({ keepAlive: true, maxSockets: 16 });
-const useRest = () => !process.env.MARSHAL_SDK_GCLOUD && process.env.MARSHAL_SDK_GCS_REST !== "0";
-
-async function accessToken(): Promise<string> {
-  if (tokenCache && Date.now() - tokenCache.at < 45 * 60_000) return tokenCache.token;
-  const token = (await gcloud(["auth", "print-access-token"], { timeoutMs: 30_000 })).trim();
-  if (!token) throw new Error("gcloud returned no access token");
-  tokenCache = { token, at: Date.now() };
-  return token;
-}
-
-const splitUri = (uri: string) => {
-  const rest = uri.replace(/^gs:\/\//, "");
-  const slash = rest.indexOf("/");
-  return { bucket: slash < 0 ? rest : rest.slice(0, slash), object: slash < 0 ? "" : rest.slice(slash + 1) };
-};
-
-async function restGet(url: string): Promise<Buffer> {
-  const token = await accessToken();
-  return new Promise((resolve, reject) => {
-    const request = https.get(url, { headers: { authorization: `Bearer ${token}` }, timeout: 30_000, agent: gcsAgent }, (res) => {
-      const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      res.on("end", () => {
-        if ((res.statusCode ?? 0) >= 400) {
-          if (res.statusCode === 401) tokenCache = undefined;
-          reject(new Error(`gcs ${res.statusCode}: ${Buffer.concat(chunks).toString("utf8").slice(0, 200)}`));
-        } else resolve(Buffer.concat(chunks));
-      });
-    });
-    request.on("timeout", () => request.destroy(new Error("gcs request timed out")));
-    request.on("error", reject);
-  });
-}
-
-/** An object's text. Rejects when it does not exist. */
-export async function gcsCat(uri: string): Promise<string> {
-  if (!useRest()) return gcloud(["storage", "cat", uri], { timeoutMs: 30_000 });
-  const { bucket, object } = splitUri(uri);
-  return (await restGet(`https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}?alt=media`)).toString("utf8");
-}
-
-const globRegExp = (pattern: string) => new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(?:.*/)?").replace(/\*/g, "[^/]*") + "$");
-
-/** Object URIs matching a gs:// glob (* within a folder, **\/ across folders); [] when none match. */
-export async function gcsGlob(pattern: string): Promise<string[]> {
-  if (!useRest()) {
-    try {
-      return (await gcloud(["storage", "ls", pattern], { timeoutMs: 60_000 })).split("\n").map((line) => line.trim()).filter(Boolean);
-    } catch (error) {
-      if (/matched no objects|One or more URLs matched no objects|not found/i.test(String((error as Error).message))) return [];
-      throw error;
-    }
-  }
-  const star = pattern.indexOf("*");
-  const { bucket, object } = splitUri(star < 0 ? pattern : pattern.slice(0, star));
-  const re = globRegExp(pattern);
-  const hits: string[] = [];
-  let pageToken = "";
-  do {
-    const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o?prefix=${encodeURIComponent(object)}&fields=items(name),nextPageToken&maxResults=1000${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
-    const body = JSON.parse((await restGet(url)).toString("utf8")) as { items?: { name: string }[]; nextPageToken?: string };
-    for (const item of body.items ?? []) {
-      const uri = `gs://${bucket}/${item.name}`;
-      if (re.test(uri)) hits.push(uri);
-    }
-    pageToken = body.nextPageToken ?? "";
-  } while (pageToken);
-  return hits;
-}
-
-/** Runs fn over items with at most `limit` in flight. */
-async function pool<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
-        const index = next++;
-        out[index] = await fn(items[index]!);
-      }
-    }),
-  );
-  return out;
-}
 
 export function configuredClouds(configuration: Row | undefined): { clouds: CloudHostConfig[]; problems: string[] } {
   const clouds: CloudHostConfig[] = [];
@@ -505,6 +403,10 @@ export interface CloudLink {
   linkedAt: string;
   /** When this Mac last pushed the page back; the cloud copy is ours up to then. */
   pushedAt?: string;
+  /** The artifact version of the run's page this local copy was made from (or last pushed as); 0 before the run kept versions. */
+  baseVersion?: number;
+  /** The artifact id when it differs from cloudPageId (it never does for pages opened from the lazy list). */
+  artifactId?: string;
 }
 
 const linksFile = (pullRoot: string) => path.join(home(pullRoot), "cloud-links.json");
@@ -537,6 +439,11 @@ export interface PushInput {
   studioDir: string;
   by: { name?: string; email?: string };
   summary?: string;
+  /**
+   * The artifact version of the run's page this copy was made from (see CloudLink.baseVersion). The push is refused when
+   * the run's page has moved on since; 0 (or absent) means the copy was made before the run kept versions.
+   */
+  baseVersion?: number;
   workDir: string;
   /** Screenshots htmlFile into pngFile at their thumbnail's phone viewport; defaults to a headless Chrome. */
   capture?: (htmlFile: string, pngFile: string) => Promise<void>;
@@ -558,6 +465,8 @@ export interface PushResult {
   thumbnail: string | null;
   /** What the notes did in their review panel, or null when no review API is configured or the run has no id there. */
   review: ReviewSync | null;
+  /** The artifact version this push wrote (artifacts/page/<id>/versions/<n>) and what it moved. */
+  artifact: { id: string; version: number; dir: string; seeded: boolean; uploaded: number; reused: number };
   warnings: string[];
 }
 
@@ -568,8 +477,11 @@ export interface PushResult {
  */
 export interface PushRefused {
   ok: false;
-  reason: "still-running" | "edit-conversation";
+  reason: "still-running" | "edit-conversation" | "cloud-moved";
   message: string;
+  /** For cloud-moved: the version the run's page is at now and the one this copy was made from. */
+  current?: number;
+  baseVersion?: number;
 }
 
 export async function pushToCloud(input: PushInput): Promise<PushResult | PushRefused> {
@@ -600,6 +512,31 @@ export async function pushToCloud(input: PushInput): Promise<PushResult | PushRe
   // Their preview points pictures at ../images/<name> beside it; keep that shape so the UI renders it unchanged.
   const html = finished.html.replace(/(["'(\s])assets\//g, "$1../images/");
   fs.writeFileSync(path.join(out, "index.html"), html);
+  // The new version is committed first, with a conditional write on the artifact's manifest: a copy made from an older
+  // version is refused here, before anything of the run's preview is touched.
+  const libraryDir = path.join(input.studioDir, "library");
+  const named = new Map<string, string>();
+  for (const match of input.renderedHtml.matchAll(/(?:\/library\/|https:\/\/pagestudio\.library\/)([A-Za-z0-9._-]+)\/(?:pictures\/)?/g)) named.set(match[1]!, match[1]!);
+  const pictures: NewPicture[] = [];
+  for (const name of finished.assets) {
+    const brand = [...named.keys()].find((candidate) => fs.existsSync(path.join(libraryDir, candidate, "pictures", name)));
+    if (brand) pictures.push({ brand, name, file: path.join(libraryDir, brand, "pictures", name) });
+  }
+  const committed = await commitPageVersion({
+    root,
+    state: stateOf(root),
+    app: "page",
+    kind: "landing-page",
+    id: input.cloudPageId,
+    title: String(input.pageDoc.title ?? runJson?.title ?? input.cloudPageId),
+    baseVersion: input.baseVersion ?? 0,
+    doc: { ...input.pageDoc, id: input.cloudPageId },
+    previewHtml: html,
+    pictures,
+    by: input.by,
+    ...(input.summary ? { summary: input.summary } : {}),
+  });
+  if (!committed.ok) return { ok: false, reason: "cloud-moved", message: committed.message, current: committed.current, baseVersion: committed.baseVersion };
   const previewUri = `${root}/preview/index.html`;
   const backup = `${root}/${EDITS}/${stamp}-${who}/preview.before.html`;
   try {
@@ -664,11 +601,14 @@ export async function pushToCloud(input: PushInput): Promise<PushResult | PushRe
     notes: Array.isArray(doc.notes) ? doc.notes.length : 0,
     preview: previewUri,
     previous: backup,
+    artifactVersion: committed.version,
   };
   const edit = `${root}/${EDITS}/${stamp}-${who}.json`;
   const recordFile = path.join(out, "edit.json");
   fs.writeFileSync(recordFile, JSON.stringify(record, null, 2));
   await gcloud(["storage", "cp", recordFile, edit], { timeoutMs: 60_000 });
+  const runWarning = await recordArtifactInRun(root, runJson, { app: "page", kind: "landing-page", id: input.cloudPageId, title: String(doc.title ?? input.cloudPageId), current: committed.version });
+  if (runWarning) warnings.push(runWarning);
 
   let review: ReviewSync | null = null;
   const notes = notesOf(doc);
@@ -701,8 +641,24 @@ export async function pushToCloud(input: PushInput): Promise<PushResult | PushRe
     version: record.version,
     thumbnail,
     review,
+    artifact: { id: input.cloudPageId, version: committed.version, dir: committed.dir, seeded: committed.seeded, uploaded: committed.uploaded, reused: committed.reused },
     warnings,
   };
+}
+
+/** Records the page's current version in the run manifest (run.json), upgrading a run that had none; a lost race is only a warning. */
+async function recordArtifactInRun(root: string, runJson: Row | undefined, artifact: ArtifactRef): Promise<string | null> {
+  const uri = `${stateOf(root)}/run.json`;
+  try {
+    const read = await gcsRead(uri);
+    const existing = read ? (JSON.parse(read.data.toString("utf8")) as Row) : (runJson ?? {});
+    const others = (Array.isArray(existing.artifacts) ? (existing.artifacts as ArtifactRef[]) : []).filter((entry) => !(entry.app === artifact.app && entry.id === artifact.id));
+    const next = extendRunJson(existing, { runId: String(existing.runId ?? root.split("/").pop()), title: String(existing.title ?? artifact.title), artifacts: [...others, artifact] });
+    await gcsWrite(uri, JSON.stringify(next, null, 2), { contentType: "application/json", cacheControl: "no-cache", ifGenerationMatch: read ? read.generation : "0" });
+    return null;
+  } catch (error) {
+    return error instanceof PreconditionFailed ? "run.json changed while the push ran; its artifact list will catch up on the next push." : `run.json was not updated: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 /** Chrome or Chromium: $MARSHAL_SDK_CHROME, $PAGE_STUDIO_CHROME, else the usual install places (as page-run looks). */

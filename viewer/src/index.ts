@@ -8,7 +8,10 @@ import { gunzipSync } from "node:zlib";
 
 import { VIEW_HTML } from "./generated/view";
 import { configuredReview } from "./review";
-import { cloudHost, configuredClouds, rootOfState, consoleUrl, listEdits, previewHtml, pushToCloud, readLinks, readRunJson, writeLink } from "./cloud";
+import { CloudCache, defaultCacheRoot, DEFAULT_CAP_BYTES } from "./cache";
+import { filterRows, openPage, pageRows } from "./cloud-pages";
+import { cloudHost, configuredClouds, rootOfState, consoleUrl, listEdits, previewHtml, pushToCloud, readLinks, readRunJson, stateOf, writeLink } from "./cloud";
+import { gcsRead } from "./gcs";
 import { configuredLinks, folderHost, linkedHost, linkProblem, LOCAL_HOST_ID, type Host } from "./hosts";
 import { expandHome } from "./store";
 
@@ -189,6 +192,10 @@ export function createExtension(context: Context) {
     return { ok: false, reason: error, message: IMPORT_ERRORS[error] ?? "Marshal couldn't continue this session." };
   };
 
+  const cloudCache = () => {
+    const configured = (context.configuration?.cloudCache ?? {}) as Row;
+    return new CloudCache(typeof configured.dir === "string" && configured.dir ? expandHome(configured.dir) : defaultCacheRoot(), typeof configured.capMB === "number" && configured.capMB > 0 ? configured.capMB * 1024 ** 2 : DEFAULT_CAP_BYTES);
+  };
   const pullRoot = () => (typeof context.configuration?.pullRoot === "string" ? context.configuration.pullRoot : PULL_ROOT);
   /** Who answers from this Marshal: configuration.person {name, personId}, else this Mac's user name. */
   const person = (): { name?: string; personId?: string } => {
@@ -586,13 +593,97 @@ export function createExtension(context: Context) {
           studioDir: path.dirname(path.dirname(file)),
           by: { ...(me.name ? { name: me.name } : {}), ...(typeof context.configuration?.person?.email === "string" ? { email: context.configuration.person.email } : {}) },
           ...(typeof input.summary === "string" ? { summary: input.summary } : {}),
+          baseVersion: link?.baseVersion ?? 0,
           workDir: path.join(expandHome(pullRoot()), ".push"),
           review: configuredReview(context.configuration),
         });
         if (!pushed.ok) return { ...pushed, outputRoot, pageId, cloudPageId };
-        if (link) writeLink(pullRoot(), pageId, { ...link, pushedAt: new Date().toISOString() });
+        if (link) writeLink(pullRoot(), pageId, { ...link, pushedAt: new Date().toISOString(), baseVersion: pushed.artifact.version });
         for (const host of cloud().values()) void host.cloudRuns(true).catch(() => undefined);
-        return { ...pushed, outputRoot, pageId, cloudPageId, message: `Pushed version ${pushed.version} of the page to ${outputRoot}; their page generator shows it at preview/index.html${pushed.thumbnail ? " and its run list card is retaken" : ""}${pushed.review ? `; ${pushed.review.kept + pushed.review.added} note(s) in its review panel (${pushed.review.added} added, ${pushed.review.removed} removed)` : ""}.${pushed.warnings.length ? ` ${pushed.warnings.join(" ")}` : ""}` };
+        return { ...pushed, outputRoot, pageId, cloudPageId, message: `Pushed version ${pushed.artifact.version} of the page to ${outputRoot} (artifacts/page/${pushed.artifact.id}/${pushed.artifact.dir}); their page generator shows it at preview/index.html${pushed.thumbnail ? " and its run list card is retaken" : ""}${pushed.review ? `; ${pushed.review.kept + pushed.review.added} note(s) in its review panel (${pushed.review.added} added, ${pushed.review.removed} removed)` : ""}.${pushed.warnings.length ? ` ${pushed.warnings.join(" ")}` : ""}` };
+      },
+    },
+    {
+      name: "sdksessions.cloudPages",
+      title: "List cloud pages",
+      description:
+        "The pages cloud runs made, one row per page artifact, grouped by what the run's manifest says (workspace, workflow, brand, labels, visibility, requester, status) and its current version. Reads nothing but the small run files already listed: no page, picture or session is downloaded. Filter with query (words matched against titles, ids, brand, labels), workspace, workflow, brand, requester, status, kind; page with limit and offset. sdksessions.openCloudPage opens one.",
+      input: obj({ hostId, query: str, workspace: str, workflow: str, brand: str, requester: str, status: str, kind: str, limit: int(1, 200), offset: int(0, 100000), refresh: bool }),
+      read: true,
+      handler: async (input) => {
+        const wanted = typeof input.hostId === "string" && input.hostId ? [input.hostId] : [...cloud().keys()];
+        const runs: Awaited<ReturnType<ReturnType<typeof cloudHost>["cloudRuns"]>> = [];
+        const problems: Row[] = [...clouds.problems.map((message) => ({ message }))];
+        for (const id of wanted) {
+          const host = cloud().get(id);
+          if (!host) {
+            problems.push({ hostId: id, message: `No cloud host "${id}".` });
+            continue;
+          }
+          try {
+            runs.push(...(await host.cloudRuns(input.refresh === true)));
+          } catch (error) {
+            problems.push({ hostId: id, message: String((error as Error).message ?? error).slice(0, 300) });
+          }
+        }
+        const filter = Object.fromEntries(["query", "workspace", "workflow", "brand", "requester", "status", "kind"].filter((key) => typeof input[key] === "string" && input[key]).map((key) => [key, input[key]]));
+        const rows = filterRows(pageRows(runs), filter);
+        const offset = typeof input.offset === "number" ? input.offset : 0;
+        const limit = typeof input.limit === "number" ? input.limit : 50;
+        return { total: rows.length, offset, rows: rows.slice(offset, offset + limit), problems, cache: cloudCache().stats() };
+      },
+    },
+    {
+      name: "sdksessions.openCloudPage",
+      title: "Open a cloud page in Page Studio",
+      description:
+        "Brings one cloud page into this Marshal's Page Studio as an ordinary page: fetches its record and only the pictures it shows (not the run's sessions or other files) into the local cache (2 GB LRU, ~/.marshal/cloud-cache), imports it, and links it to its run and artifact version so sdksessions.pushToCloud can write version n+1. outputRoot and id come from sdksessions.cloudPages. A page already brought in at the cloud's current version just opens. Reports bytes downloaded and bytes served from the cache.",
+      input: obj({ hostId, outputRoot: str, id: str, version: int(1, 100000), open: bool, title: str }, ["outputRoot", "id"]),
+      read: false,
+      handler: async (input, invocation) => {
+        const outputRoot = String(input.outputRoot).replace(/\/+$/, "");
+        const id = String(input.id);
+        const run = await readRunJson(outputRoot);
+        const hostName = typeof input.hostId === "string" && input.hostId ? input.hostId : [...cloud().keys()][0] ?? "cloud";
+        const cache = cloudCache();
+        for (const [localId, link] of Object.entries(readLinks(pullRoot()))) {
+          if (link.outputRoot !== outputRoot || (link.artifactId ?? link.cloudPageId) !== id || input.version !== undefined) continue;
+          const manifestRead = await gcsRead(`${outputRoot}/artifacts/page/${id}/manifest.json`).catch(() => undefined);
+          const current = manifestRead ? Number((JSON.parse(manifestRead.data.toString("utf8")) as Row).current ?? 0) : 0;
+          if (current !== (link.baseVersion ?? 0)) continue;
+          const existing = await pageStudio("pagestudio.page.get", { pageId: localId }, invocation);
+          if (!existing.ok) continue;
+          const opened = input.open !== false ? (await pageStudio("pagestudio.open", { pageId: localId }, invocation)).ok : false;
+          return { ok: true, pageId: localId, title: existing.value.title, reused: true, opened, version: current, transfer: { downloaded: manifestRead?.data.length ?? 0, cached: 0, files: 1 }, cloud: link, message: `Already in Page Studio as ${localId} at the cloud's version ${current}${opened ? "; the Page Studio tab is open on it" : ""}.` };
+        }
+        let opened;
+        try {
+          opened = await openPage({ hostId: hostName, root: outputRoot, state: stateOf(outputRoot), runKey: outputRoot, ...(typeof run?.visibility === "string" ? { visibility: run.visibility } : {}), id, ...(typeof input.version === "number" ? { version: input.version } : {}), cache });
+        } catch (error) {
+          return { ok: false, reason: "not-found", message: error instanceof Error ? error.message : String(error) };
+        }
+        const imported = await pageStudio(IMPORT_PAGE_CAPABILITY, { dataDir: opened.dataDir, pageId: opened.pageId, origin: `cloud ${outputRoot} v${opened.version}`, ...(typeof input.title === "string" && input.title ? { title: input.title } : {}) }, invocation);
+        if (!imported.ok) {
+          return { ...imported, dataDir: opened.dataDir.replace(os.homedir(), "~"), transfer: opened.transfer, ...(imported.reason === "unavailable" ? { message: `${imported.message} Update Page Studio to the build with ${IMPORT_PAGE_CAPABILITY}.` } : {}) };
+        }
+        fs.rmSync(opened.dataDir, { recursive: true, force: true });
+        const pageId = String(imported.value.pageId ?? opened.pageId);
+        const link = { hostId: hostName, outputRoot, cloudPageId: id, ...(typeof run?.runId === "string" ? { runId: run.runId } : {}), linkedAt: new Date().toISOString(), baseVersion: opened.version, artifactId: id };
+        writeLink(pullRoot(), pageId, link);
+        const shown = input.open !== false ? (await pageStudio("pagestudio.open", { pageId }, invocation)).ok : false;
+        return { ok: true, pageId, title: imported.value.title, sections: imported.value.sections, pictures: opened.pictures, version: opened.version, current: opened.current, transfer: opened.transfer, opened: shown, cloud: link, message: `In Page Studio as ${pageId}, from the cloud's version ${opened.version}${shown ? "; the Page Studio tab is open on it" : ""}; sdksessions.pushToCloud writes the next version.` };
+      },
+    },
+    {
+      name: "sdksessions.cloudCache",
+      title: "The local cloud cache",
+      description: "Size and cap of ~/.marshal/cloud-cache (what opened cloud pages left here), and clearing it: restricted:true wipes only restricted runs (what sign-out does), all:true wipes everything. Everything in it is a copy; the bucket keeps the originals.",
+      input: obj({ restricted: bool, all: bool }),
+      read: false,
+      handler: async (input) => {
+        const cache = cloudCache();
+        const cleared = input.all === true ? (cache.clear(), "all") : input.restricted === true ? `${cache.clearRestricted()} restricted run(s)` : undefined;
+        return { dir: cache.dir, ...cache.stats(), ...(cleared ? { cleared } : {}) };
       },
     },
     {
@@ -848,6 +939,9 @@ export const CAPABILITY_NAMES = [
   "sdksessions.cloudLink",
   "sdksessions.pushToCloud",
   "sdksessions.importCloudPage",
+  "sdksessions.cloudPages",
+  "sdksessions.openCloudPage",
+  "sdksessions.cloudCache",
 ];
 
 function unavailable() {
