@@ -61,6 +61,45 @@ function portWith(backend: { query: QueryFn }): { port: ClaudeAgentPort; store: 
   return { port, store, root };
 }
 
+test("a turn ends at its result even when the backend's stream never closes (c2-real-2 hero, 900008 critic)", async () => {
+  let returned = 0;
+  let nextAfterResult = 0;
+  const query: QueryFn = () => {
+    const events: unknown[] = [
+      { type: "system", subtype: "init", session_id: "native-stuck" },
+      { type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "<section>hero</section>" }] } },
+      { type: "result", subtype: "success", is_error: false, result: "<section>hero</section>", total_cost_usd: 1.49, usage: { input_tokens: 56, output_tokens: 37709 } },
+    ];
+    const iterator: AsyncIterator<any> = {
+      next: () => {
+        const value = events.shift();
+        if (value !== undefined) return Promise.resolve({ done: false, value });
+        nextAfterResult++;
+        return new Promise(() => {});
+      },
+      return: () => {
+        returned++;
+        return new Promise(() => {});
+      },
+    };
+    return { [Symbol.asyncIterator]: () => iterator } as AsyncIterable<any>;
+  };
+  const { port } = portWith({ query });
+  const agent = port.launch({ task: "write the hero", idempotencyKey: "stuck" });
+  const waited = await Promise.race([
+    port.wait(agent.id),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the turn never finished")), 2000)),
+  ]);
+  assert.equal(waited.state, "completed");
+  assert.equal(waited.result, "<section>hero</section>");
+  const transcript = port.transcript(agent.id, 1);
+  assert.equal(transcript.agent.state, "idle");
+  assert.equal(transcript.messageCount, 2);
+  assert.equal(transcript.messages.at(-1)?.role, "assistant");
+  assert.equal(nextAfterResult, 0, "nothing is read after the result");
+  assert.equal(returned, 1, "the stream is asked to close");
+});
+
 test("a launch is a Marshal session: one user and one assistant message, idle, with its native session id", async () => {
   const backend = fakeBackend((text) => `echo: ${text}`);
   const { port, store } = portWith(backend);
