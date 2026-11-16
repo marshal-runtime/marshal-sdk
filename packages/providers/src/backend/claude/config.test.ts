@@ -212,6 +212,62 @@ describe("toClaudeQueryOptions", () => {
     expect(new Set(effectiveClaudeTools)).toEqual(new Set(availableTools));
   });
 
+  it("keeps the MCP servers and skills a restricted session names, and allows their tools", async () => {
+    const onPermissionRequest = vi.fn(async () => ({ kind: "approve-once" as const }));
+    const result = options({
+      availableTools: ["runtimeSearch"],
+      availableMcpServers: ["figma", "design system"],
+      availableSkills: ["lp-design"],
+      mcpServers: {
+        figma: { type: "http", url: "https://example.test/figma", tools: ["*"] },
+        "design system": { type: "http", url: "https://example.test/ds", tools: ["*"] },
+      },
+      onPermissionRequest,
+    });
+
+    expect(result.tools).toEqual(["runtimeSearch", "Skill"]);
+    expect(result.skills).toEqual(["lp-design"]);
+    expect(Object.keys(result.mcpServers ?? {})).toEqual(["figma", "design system"]);
+
+    const call = (toolName: string, toolUseID: string) =>
+      result.canUseTool!(
+        toolName,
+        {},
+        testDouble({ signal: new AbortController().signal, toolUseID }),
+      );
+    await expect(call("mcp__figma__get_file", "t1")).resolves.toMatchObject({ behavior: "allow" });
+    await expect(call("mcp__design_system__tokens", "t2")).resolves.toMatchObject({
+      behavior: "allow",
+    });
+    await expect(call("Skill", "t3")).resolves.toMatchObject({ behavior: "allow" });
+    await expect(call("mcp__github__issues", "t4")).resolves.toMatchObject({ behavior: "deny" });
+    await expect(call("mcp__marshal__runtimeInvoke", "t5")).resolves.toMatchObject({
+      behavior: "deny",
+    });
+    expect(onPermissionRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps named MCP servers for an otherwise tool-free allowlist", () => {
+    const result = options({
+      availableTools: [],
+      availableMcpServers: ["figma"],
+      mcpServers: { figma: { type: "http", url: "https://example.test/figma", tools: ["*"] } },
+    });
+    expect(result.tools).toEqual([]);
+    expect(result.skills).toEqual([]);
+    expect(Object.keys(result.mcpServers ?? {})).toEqual(["figma"]);
+  });
+
+  it("drops named skills when the session runs without project context", () => {
+    const result = options({
+      availableTools: ["runtimeSearch"],
+      availableSkills: ["lp-design"],
+      projectContext: false,
+    });
+    expect(result.tools).toEqual(["runtimeSearch"]);
+    expect(result.skills).toEqual([]);
+  });
+
   it("only exposes repository skills when Skill is explicitly allowed", () => {
     const result = options({ availableTools: ["Skill"] });
 

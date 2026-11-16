@@ -198,6 +198,10 @@ export interface RuntimeSessionConfig {
   hooks?: RuntimeSessionHooks;
   tools?: RuntimeTool[];
   availableTools?: string[];
+  /** With availableTools: the mcpServers keys whose tools stay callable; undefined = none. Unrestricted sessions ignore it. */
+  availableMcpServers?: string[];
+  /** With availableTools: the native skills that stay available (and the runtime's skill tool with them); undefined = none. */
+  availableSkills?: string[];
   /** Built-in tools removed from the model's context while the rest stay available; adapters without such tools ignore it. */
   disabledBuiltInTools?: string[];
   /** Host tools registered with the model; the rest stay callable through the runtime catalog (`marshal.tool.<name>`). Undefined = all. */

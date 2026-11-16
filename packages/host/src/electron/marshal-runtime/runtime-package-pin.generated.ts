@@ -51,7 +51,7 @@ export const MARSHAL_RUNTIME_PACKAGE_PIN = Object.freeze({
       version: "0.1.0",
       entrypoint: "dist/index.js",
       entrySha256: "aabbefbaa063641a3fc84dd232760180dbeabb083252cb7522b497eb028ea46b",
-      contentSha256: "c11568b44dbc7fe38cd28378984c1c25aa5e02d6e79da21abf4bb8e00568cec7",
+      contentSha256: "b3520f2356ca7b6bbfe0dfa01faf6a8127161f243d6fba2beedb48650a614ff4",
     },
     {
       name: "@marshal/agent-runtime-effects",
@@ -148,9 +148,9 @@ export const MARSHAL_RUNTIME_PACKAGE_PIN = Object.freeze({
 } as const);
 
 export const MARSHAL_RUNTIME_SOURCE_ATTESTATION = Object.freeze({
-  commit: "66a12c4be145da8be67ba0a43f9a5a230481f856",
+  commit: "63881cb07f711420b82b583a2b905b0bf7a44b7a",
   dirtyDiffSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  sourceTreeSha256: "70b0060cd7107230c00b3e5e5cc4d6b71671548083433bff7b4ee329b9c144a4",
+  sourceTreeSha256: "b33e78b03ee89b448b74734c7af1f162c937c60a552ef118f583f308d6686cdc",
 } as const);
 
 export const MARSHAL_SWARM_SOURCE_ATTESTATION = Object.freeze({

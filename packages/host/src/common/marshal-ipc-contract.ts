@@ -1196,7 +1196,9 @@ export function isToolFreeRuntimeAgentRole(role: SessionRuntimeAgentRole | undef
 /**
  * The exact host tool names a session may call. `undefined` = unrestricted,
  * `[]` = tool-free. Skills, MCP servers, and SDK built-ins are excluded whenever
- * a list (even an empty one) is present.
+ * a list (even an empty one) is present, except the MCP servers and skills the
+ * session itself names (non-empty `scopedMcp` / `scopedSkills`); a tool-free
+ * role keeps none.
  */
 export function resolveSessionToolAllowlist(
   role: SessionRuntimeAgentRole | undefined,

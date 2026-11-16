@@ -109,13 +109,20 @@ export function createClaudePermissionHandler(
   sessionId: string,
   invocations: ClaudeToolInvocationRegistry,
   allowedToolNames?: ReadonlySet<string>,
+  /** Under an allowlist: MCP servers whose every tool is allowed (the host's own server is never one). */
+  allowedMcpServers?: ReadonlySet<string>,
 ): CanUseTool {
   return async (toolName, input, options) => {
     const parsed = parseClaudeToolName(toolName);
+    const fromAllowedServer =
+      parsed.serverName !== undefined &&
+      !parsed.isHostTool &&
+      allowedMcpServers?.has(parsed.serverName) === true;
     if (
       allowedToolNames &&
       !allowedToolNames.has(toolName) &&
-      !allowedToolNames.has(parsed.runtimeName)
+      !allowedToolNames.has(parsed.runtimeName) &&
+      !fromAllowedServer
     ) {
       return {
         behavior: "deny",

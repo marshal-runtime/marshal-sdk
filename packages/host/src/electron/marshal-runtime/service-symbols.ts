@@ -278,6 +278,10 @@ export interface MarshalRuntimeAgentLaunchInput {
   readonly soul?: string;
   readonly runtimeAgentRole?: SessionRuntimeAgentRole;
   readonly allowedTools?: readonly string[];
+  /** Host MCP server keys the agent may use, even with allowedTools; absent keeps the host default. */
+  readonly mcpServers?: readonly string[];
+  /** Skill names the agent may use, even with allowedTools; absent keeps the host default. */
+  readonly skills?: readonly string[];
   readonly systemPrompt?: string;
   readonly attachments?: readonly string[];
   readonly createWorktree?: boolean;
@@ -343,7 +347,7 @@ export const MARSHAL_APP_SERVICE_DECLARATIONS = {
   setModel(input: MarshalRuntimeAgentSetModelInput): Promise<{ agent: MarshalRuntimeAgentSummary }>;
 }
 export interface MarshalRuntimeEmptyInput {}
-export interface MarshalRuntimeAgentLaunchInput { task: string; idempotencyKey: string; sessionId?: string; workspaceName?: string; repoPath?: string; name?: string; agentName?: string; model?: string; runtime?: string; reasoningEffort?: string; soul?: string; runtimeAgentRole?: "planner" | "worker" | "reviewer" | "validator" | "reconciler" | "brain" | "swarm"; allowedTools?: string[]; systemPrompt?: string; attachments?: string[]; createWorktree?: boolean; worktreeName?: string; branchName?: string; baseRef?: string; }
+export interface MarshalRuntimeAgentLaunchInput { task: string; idempotencyKey: string; sessionId?: string; workspaceName?: string; repoPath?: string; name?: string; agentName?: string; model?: string; runtime?: string; reasoningEffort?: string; soul?: string; runtimeAgentRole?: "planner" | "worker" | "reviewer" | "validator" | "reconciler" | "brain" | "swarm"; allowedTools?: string[]; mcpServers?: string[]; skills?: string[]; systemPrompt?: string; attachments?: string[]; createWorktree?: boolean; worktreeName?: string; branchName?: string; baseRef?: string; }
 export interface MarshalRuntimeAgentGetInput { agentId: string }
 export interface MarshalRuntimeAgentSendInput extends MarshalRuntimeAgentGetInput { message: string; deliveryMode?: "queue" | "interrupt"; }
 export interface MarshalRuntimeAgentTranscriptInput extends MarshalRuntimeAgentGetInput { limit?: number }

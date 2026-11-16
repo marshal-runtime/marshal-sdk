@@ -9,9 +9,14 @@ export function delegationLaunchOverride(request: {
   readonly systemPrompt?: string;
   readonly tools?: readonly string[];
   readonly attachments?: readonly string[];
-}): LaunchOverride & Pick<MarshalRuntimeAgentLaunchRequest, "allowedTools"> {
+  readonly mcpServers?: readonly string[];
+  readonly skills?: readonly string[];
+}): LaunchOverride &
+  Pick<MarshalRuntimeAgentLaunchRequest, "allowedTools" | "mcpServers" | "skills"> {
   return {
     ...(request.tools === undefined ? {} : { allowedTools: [...request.tools] }),
+    ...(request.mcpServers === undefined ? {} : { mcpServers: [...request.mcpServers] }),
+    ...(request.skills === undefined ? {} : { skills: [...request.skills] }),
     ...(request.systemPrompt === undefined ? {} : { systemPrompt: request.systemPrompt }),
     ...(request.attachments === undefined ? {} : { attachments: [...request.attachments] }),
   };

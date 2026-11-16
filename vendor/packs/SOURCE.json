@@ -1,12 +1,12 @@
 {
   "desktop": {
-    "commit": "36452cec25536725976879362a4c0bb202a8e628",
-    "branch": "main"
+    "commit": "241949dbe0a35a723b62a787418fe2ed7031bea6",
+    "branch": "chore/runtime-pack-host-89"
   },
   "runtimeSource": {
-    "commit": "66a12c4be145da8be67ba0a43f9a5a230481f856",
+    "commit": "63881cb07f711420b82b583a2b905b0bf7a44b7a",
     "dirtyDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "sourceTreeSha256": "70b0060cd7107230c00b3e5e5cc4d6b71671548083433bff7b4ee329b9c144a4"
+    "sourceTreeSha256": "b33e78b03ee89b448b74734c7af1f162c937c60a552ef118f583f308d6686cdc"
   },
   "archives": [
     {
@@ -36,8 +36,8 @@
     },
     {
       "name": "@marshal/agent-runtime-delegation",
-      "archive": "marshal-agent-runtime-delegation-0.1.0-marshal-host-88.tgz",
-      "sha256": "a541ad6bf2cdb97e9efc362867e7b36071930ccb1eedca98636c537ed1cd67fd"
+      "archive": "marshal-agent-runtime-delegation-0.1.0-marshal-host-89.tgz",
+      "sha256": "a53eea57b1b78220df99bd27805bfcbf159228af7c844ebac96954fbfcd4c941"
     },
     {
       "name": "@marshal/agent-runtime-effects",

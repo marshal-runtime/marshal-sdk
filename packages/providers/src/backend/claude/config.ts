@@ -12,7 +12,7 @@ import { type ClaudeStopSnapshot, toClaudeHooks } from "./hooks";
 import { toClaudeMcpServers } from "./mcp-config";
 import { createClaudePermissionHandler } from "./permissions";
 import type { ClaudeToolInvocationRegistry } from "./tool-invocations";
-import { toClaudeHostToolName } from "./tool-names";
+import { toClaudeHostToolName, toClaudeMcpToolServerName } from "./tool-names";
 
 export interface ClaudeClientConfiguration {
   workspaceDir: string;
@@ -47,15 +47,27 @@ export function toClaudeQueryOptions(args: {
         };
   const projectContext = config.projectContext !== false;
   const hasToolAllowlist = config.availableTools !== undefined;
-  const allowedToolNames = new Set(config.availableTools ?? []);
+  // Under an allowlist, the skills and MCP servers the session names stay available (with the Skill tool).
+  const scopedSkills =
+    hasToolAllowlist && projectContext && config.availableSkills?.length
+      ? [...config.availableSkills]
+      : undefined;
+  const allowedMcpServers = hasToolAllowlist
+    ? new Set((config.availableMcpServers ?? []).map(toClaudeMcpToolServerName))
+    : undefined;
+  const allowedToolNames = new Set([
+    ...(config.availableTools ?? []),
+    ...(scopedSkills ? ["Skill"] : []),
+  ]);
   const runtimeToolNames = new Set(config.tools?.map((tool) => tool.name) ?? []);
   const builtInTools = hasToolAllowlist
     ? [...allowedToolNames].filter((name) => !runtimeToolNames.has(name))
     : undefined;
   const skills: Options["skills"] =
-    projectContext && (!hasToolAllowlist || allowedToolNames.has("Skill")) ? "all" : [];
+    scopedSkills ??
+    (projectContext && (!hasToolAllowlist || allowedToolNames.has("Skill")) ? "all" : []);
   const mcpServers =
-    hasToolAllowlist && allowedToolNames.size === 0
+    hasToolAllowlist && allowedToolNames.size === 0 && !allowedMcpServers?.size
       ? undefined
       : toClaudeMcpServers(config.mcpServers, hostServer);
   const scriptingTool = config.tools?.find(
@@ -123,6 +135,7 @@ export function toClaudeQueryOptions(args: {
       sessionId,
       invocations,
       hasToolAllowlist ? allowedToolNames : undefined,
+      allowedMcpServers,
     ),
   };
 }

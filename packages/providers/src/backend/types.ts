@@ -1,8 +1,51 @@
 // electron/backend/types.ts
 
-import type { ModelInfo, PermissionKind, SessionSandboxConfig, ContextTier, MessageToolCall, ReasoningEffort, RuntimeSubagentUsage } from "../contract/host-types";
-import type { AutomationCreateInput, AutomationData, AutomationRunData, BackendOrigin, ConditionStatusRecord, CustomMcpServer, GatewayAuthIdentity, GatewayAuthState, HeartbeatControllableMap, HeartbeatSettings, HeartbeatSettingsEnvelope, HeartbeatStatus, HeartbeatStatusEnvelope, IpcEventMap, IpcHandler, IpcInvokeMap, MSettings, McpServerInfo, PermissionsConfig, PermissionsEnvelope, SessionHydrationEvent, SessionMessage, SessionMetadata, SessionRepositoryAgent, SessionSource, StoredSession, WorkspaceConfigPort, BackendCapabilities, SessionRuntimeAgentRole, IApprovalBroker, IBackgroundToolInvocationManager, ICommandClassifier, IPermissionPolicy, ISelfToolDeps } from "../../host/engine-host-types";
+import type {
+  AutomationCreateInput,
+  AutomationData,
+  AutomationRunData,
+  BackendOrigin,
+  ConditionStatusRecord,
+  CustomMcpServer,
+  GatewayAuthIdentity,
+  GatewayAuthState,
+  HeartbeatControllableMap,
+  HeartbeatSettings,
+  HeartbeatSettingsEnvelope,
+  HeartbeatStatus,
+  HeartbeatStatusEnvelope,
+  IpcEventMap,
+  IpcHandler,
+  IpcInvokeMap,
+  MSettings,
+  McpServerInfo,
+  PermissionsConfig,
+  PermissionsEnvelope,
+  SessionHydrationEvent,
+  SessionMessage,
+  SessionMetadata,
+  SessionRepositoryAgent,
+  SessionSource,
+  StoredSession,
+  WorkspaceConfigPort,
+  BackendCapabilities,
+  SessionRuntimeAgentRole,
+  IApprovalBroker,
+  IBackgroundToolInvocationManager,
+  ICommandClassifier,
+  IPermissionPolicy,
+  ISelfToolDeps,
+} from "../../host/engine-host-types";
 import { normalizeRuntimeId, resolveSessionRuntimeId } from "../common/runtime-config";
+import type {
+  ModelInfo,
+  PermissionKind,
+  SessionSandboxConfig,
+  ContextTier,
+  MessageToolCall,
+  ReasoningEffort,
+  RuntimeSubagentUsage,
+} from "../contract/host-types";
 import type { RuntimeClientFactory, RuntimeSendOptions } from "./runtime-contract";
 
 export type {
@@ -281,6 +324,10 @@ export interface CreateSessionOpts {
   runtimeAgentRole?: SessionRuntimeAgentRole;
   /** Exact host tool names the session may call; undefined = unrestricted. */
   allowedTools?: readonly string[];
+  /** The session's MCP server scope (PersistedSession.scopedMcp); a non-empty one keeps those servers under `allowedTools`. */
+  scopedMcp?: readonly string[];
+  /** The session's skill scope (PersistedSession.scopedSkills); a non-empty one keeps those skills under `allowedTools`. */
+  scopedSkills?: readonly string[];
   /** False keeps repository rules, skills, memory and agents out of the session; undefined = loaded. */
   projectContext?: boolean;
   /** Native built-in tools to remove from the model's context; adapters without such tools ignore it. */

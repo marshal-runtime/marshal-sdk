@@ -1,21 +1,43 @@
 import { createHash, randomUUID } from "crypto";
 import * as nodePath from "node:path";
 
-import { app, APP_NAME, resolveSessionToolAllowlist, getAppDataDir, getSessionClientViewport, getSelfFsTools, sanitizeForTelemetry, normalizeDiscoveredModels, takeSessionMentionContext, takeSharedSessionContext, normalizePermissionRequest, secureAppendFile, secureMkdir, describeRequestCompaction, describeSessionViews, AskUserToolResultSchema, getSelfTools, buildUserPromptContext, backgroundToolObservation, NEVER_BACKGROUND_TOOL_NAMES, runToolWithBackgrounding } from "../engine-host";
-
-import type { ModelInfo, ReasoningEffort } from "../../contract/host-types";
 import { isSdkHitlRequired } from "../../common/marshal-sdk-builtin-tools";
 import { toMcpServerKey } from "../../common/mcp-server-key-normalization";
 import { runtimeTargetKey } from "../../common/runtime-accounts";
+import type { ModelInfo, ReasoningEffort } from "../../contract/host-types";
 import { coerceErrorText } from "../../support/error-formatting";
 import { getBarePlaywrightToolName } from "../../support/platform/security/browser-tools/names";
 import { extractBrowserWritePath } from "../../support/platform/security/browser-tools/write-path";
 import { handoffUserPrompt } from "../conversation-state";
+import {
+  app,
+  APP_NAME,
+  resolveSessionToolAllowlist,
+  getAppDataDir,
+  getSessionClientViewport,
+  getSelfFsTools,
+  sanitizeForTelemetry,
+  normalizeDiscoveredModels,
+  takeSessionMentionContext,
+  takeSharedSessionContext,
+  normalizePermissionRequest,
+  secureAppendFile,
+  secureMkdir,
+  describeRequestCompaction,
+  describeSessionViews,
+  AskUserToolResultSchema,
+  getSelfTools,
+  buildUserPromptContext,
+  backgroundToolObservation,
+  NEVER_BACKGROUND_TOOL_NAMES,
+  runToolWithBackgrounding,
+} from "../engine-host";
 import { normalizeEvent } from "../normalize-event";
 import type {
   RuntimePermissionHandler,
   RuntimePermissionResult,
   RuntimeAgentDefinition,
+  RuntimeMcpServerConfig,
   RuntimeSendOptions,
   RuntimeSessionConfig,
   RuntimeSessionHooks,
@@ -75,11 +97,43 @@ import {
   modelForSessionSwitch,
   selectSessionClient,
 } from "./session-client";
-import { restrictToolSurface } from "./tool-surface";
+import { restrictToolSurface, scopeToolSurface, type ScopedToolSurface } from "./tool-surface";
 
 const DISCONNECT_TIMEOUT_MS = 5_000;
 const SESSION_START_TIMEOUT_MS = 45_000;
 const MAX_RETAINED_RUNS = 1_000;
+
+/** The session's host tools, MCP servers and skills: its allowlist plus the MCP servers and skills it names. */
+function sessionToolSurface(
+  hostTools: RuntimeTool[],
+  mcpConfig: Record<string, RuntimeMcpServerConfig>,
+  opts: CreateSessionOpts,
+  failOnUnknown: boolean,
+): ScopedToolSurface {
+  const allowlist = resolveSessionToolAllowlist(opts.runtimeAgentRole, opts.allowedTools);
+  // A tool-free role's allowlist is empty whatever the session names.
+  const toolFreeRole = resolveSessionToolAllowlist(opts.runtimeAgentRole, undefined) !== undefined;
+  return scopeToolSurface(
+    hostTools,
+    restrictToolSurface(hostTools, allowlist, { failOnUnknown }),
+    mcpConfig,
+    toolFreeRole ? {} : { scopedMcp: opts.scopedMcp, scopedSkills: opts.scopedSkills },
+  );
+}
+
+function scopedSessionConfig(
+  surface: ScopedToolSurface,
+): Pick<
+  RuntimeSessionConfig,
+  "mcpServers" | "availableTools" | "availableMcpServers" | "availableSkills"
+> {
+  return {
+    ...(surface.mcpServers ? { mcpServers: surface.mcpServers } : {}),
+    ...(surface.availableTools ? { availableTools: surface.availableTools } : {}),
+    ...(surface.availableMcpServers ? { availableMcpServers: surface.availableMcpServers } : {}),
+    ...(surface.availableSkills ? { availableSkills: surface.availableSkills } : {}),
+  };
+}
 
 function runtimeAgentDefinitions(
   repoRoot: string,
@@ -386,11 +440,13 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
       : this.backend.getMcpConfig(opts.workspaceDir, opts.playwrightHeadless, opts.sessionId);
     const hooks = this.buildHooks(opts.sessionId, opts.isAutomatedSession ?? false);
     const permissionHandler = this.buildPermissionHandler(opts.sessionId);
-    const { tools: allTools, availableTools } = restrictToolSurface(
+    const surface = sessionToolSurface(
       this.buildAllTools(opts.sessionId, effectiveWorkspaceDir),
-      resolveSessionToolAllowlist(opts.runtimeAgentRole, opts.allowedTools),
-      { failOnUnknown: true },
+      mcpConfig,
+      opts,
+      true,
     );
+    const { tools: allTools, availableTools } = surface;
     this.hostToolNamesBySession.set(
       opts.sessionId,
       opts.hostToolTurnNote === false ? [] : allTools.map((tool) => tool.name),
@@ -410,7 +466,7 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
         tools: allTools,
         exposedHostTools: opts.exposedHostTools,
         availableTools,
-        mcpServers: availableTools ? {} : mcpConfig,
+        mcpServers: surface.mcpServers ?? {},
         systemMessage: opts.systemMessage,
         systemMessageMode: opts.systemMessageMode,
         sessionSource: opts.sessionSource,
@@ -431,10 +487,9 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
       streaming: true,
       workingDirectory: effectiveWorkspaceDir,
       includeSubAgentStreamingEvents: false,
-      ...(!availableTools && Object.keys(mcpConfig).length > 0 ? { mcpServers: mcpConfig } : {}),
       hooks,
       tools: allTools,
-      ...(availableTools ? { availableTools } : {}),
+      ...scopedSessionConfig(surface),
       ...(opts.disabledBuiltInTools?.length
         ? { disabledBuiltInTools: [...opts.disabledBuiltInTools] }
         : {}),
@@ -487,11 +542,13 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
       : this.backend.getMcpConfig(opts.workspaceDir, opts.playwrightHeadless, sessionId);
     const hooks = this.buildHooks(sessionId, opts.isAutomatedSession ?? false);
     const permissionHandler = this.buildPermissionHandler(sessionId);
-    const { tools: allTools, availableTools } = restrictToolSurface(
+    const surface = sessionToolSurface(
       this.buildAllTools(sessionId, effectiveWorkspaceDir),
-      resolveSessionToolAllowlist(opts.runtimeAgentRole, opts.allowedTools),
-      { failOnUnknown: opts.backendId === undefined },
+      mcpConfig,
+      opts,
+      opts.backendId === undefined,
     );
+    const { tools: allTools, availableTools } = surface;
     this.hostToolNamesBySession.set(
       sessionId,
       opts.hostToolTurnNote === false ? [] : allTools.map((tool) => tool.name),
@@ -509,10 +566,9 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
       streaming: true,
       workingDirectory: effectiveWorkspaceDir,
       includeSubAgentStreamingEvents: false,
-      ...(!availableTools && Object.keys(mcpConfig).length > 0 ? { mcpServers: mcpConfig } : {}),
       hooks,
       tools: allTools,
-      ...(availableTools ? { availableTools } : {}),
+      ...scopedSessionConfig(surface),
       ...(opts.disabledBuiltInTools?.length
         ? { disabledBuiltInTools: [...opts.disabledBuiltInTools] }
         : {}),
@@ -539,7 +595,7 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
         tools: allTools,
         exposedHostTools: opts.exposedHostTools,
         availableTools,
-        mcpServers: availableTools ? {} : mcpConfig,
+        mcpServers: surface.mcpServers ?? {},
         systemMessage: opts.systemMessage,
         systemMessageMode: opts.systemMessageMode,
         sessionSource: opts.sessionSource,
