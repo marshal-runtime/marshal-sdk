@@ -30,7 +30,8 @@ const cron = z.string().refine(
 
 const after = z
   .object({
-    routine: z.string().regex(ROUTINE_ID_PATTERN),
+    routine: z.union([z.string().regex(ROUTINE_ID_PATTERN), z.array(z.string().regex(ROUTINE_ID_PATTERN)).min(2).max(8)]),
+    mode: z.enum(["any", "all"]).optional(),
     notBefore: z
       .string()
       .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "must be a time of day HH:MM")

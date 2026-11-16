@@ -54,7 +54,14 @@ export type AutomationTrigger =
    * automation's id or routineId, in the same tenant. `notBefore` ("HH:MM", in `timezone`) holds the run until then
    * that day; `within` ("90m", "6h") drops it when that wait would be longer.
    */
-  | { type: "after"; routine: string; notBefore?: string; within?: string; timezone?: string };
+  | { type: "after"; routine: string | string[]; mode?: AfterMode; notBefore?: string; within?: string; timezone?: string };
+
+/**
+ * How several upstream routines combine in an `after` trigger. `any` (the default): every upstream's good finish owes
+ * its own run. `all`: one run once every upstream has finished well since the last such run (each arrival is kept until
+ * then, newest per upstream; with `within` an arrival older than that, measured to the latest one, is forgotten).
+ */
+export type AfterMode = "any" | "all";
 
 export type AutomationRunTrigger = "schedule" | "condition" | "event" | "manual" | "after";
 
@@ -150,6 +157,8 @@ export interface Automation {
   labels?: Record<string, string>;
   /** Fires held by the fire policy or waiting for their time. */
   owed?: OwedFire[];
+  /** An `all` trigger's upstreams that have finished well and are waiting for the others (keyed by the name in the trigger). */
+  awaiting?: Record<string, { sessionId: string; finishedAt: string; automationId: string }>;
   /** The fire policy's last answer other than go. */
   lastDecision?: { at: string; decision: FireDecision; trigger: AutomationRunTrigger };
   model?: string;
@@ -184,7 +193,7 @@ export interface AutomationInput {
   routineId?: string;
   labels?: Record<string, string>;
   /** For triggerType "after". */
-  after?: { routine: string; notBefore?: string; within?: string; timezone?: string };
+  after?: { routine: string | string[]; mode?: AfterMode; notBefore?: string; within?: string; timezone?: string };
   model?: string;
   reasoningEffort?: string;
   /** A five-field cron expression, or "every N minutes|hours|days". */
@@ -527,11 +536,31 @@ export class HostAutomations {
     for (const downstream of this.list()) {
       const trigger = downstream.trigger;
       if (trigger.type !== "after" || downstream.tenant !== upstream.tenant) continue;
-      if (trigger.routine !== upstream.id && trigger.routine !== upstream.routineId) continue;
+      const names = Array.isArray(trigger.routine) ? trigger.routine : [trigger.routine];
+      const name = names.find((candidate) => candidate === upstream.id || candidate === upstream.routineId);
+      if (name === undefined) continue;
       if (!downstream.enabled || downstream.state !== "active") continue;
+      let latest = { automationId: upstream.id, sessionId, finishedAt };
+      let fireId = `after:${upstream.id}:${sessionId}`;
+      if (trigger.mode === "all") {
+        // Keep this arrival (newest per upstream), forget arrivals too old for `within`, and run only when every upstream has one.
+        const kept: NonNullable<Automation["awaiting"]> = {};
+        const maxAge = trigger.within ? parseDuration(trigger.within) : undefined;
+        for (const [key, arrival] of Object.entries(downstream.awaiting ?? {})) {
+          if (key !== name && names.includes(key) && (maxAge === undefined || finishedAt.getTime() - Date.parse(arrival.finishedAt) <= maxAge)) kept[key] = arrival;
+        }
+        kept[name] = { automationId: upstream.id, sessionId, finishedAt: finishedAt.toISOString() };
+        if (!names.every((key) => kept[key])) {
+          this.setAwaiting(downstream.id, kept);
+          continue;
+        }
+        this.setAwaiting(downstream.id, undefined);
+        fireId = `after:all:${names.map((key) => kept[key]!.sessionId).join("+")}`;
+        latest = { automationId: upstream.id, sessionId, finishedAt };
+      }
       const zone = isTenantZone(trigger.timezone) ? this.zoneOf(downstream) : trigger.timezone!;
-      const due = trigger.notBefore ? Math.max(finishedAt.getTime(), localTimeOn(finishedAt, trigger.notBefore, zone)) : finishedAt.getTime();
-      if (trigger.within && due - finishedAt.getTime() > parseDuration(trigger.within)) {
+      const due = trigger.notBefore ? Math.max(latest.finishedAt.getTime(), localTimeOn(latest.finishedAt, trigger.notBefore, zone)) : latest.finishedAt.getTime();
+      if (trigger.within && trigger.mode !== "all" && due - latest.finishedAt.getTime() > parseDuration(trigger.within)) {
         this.decide(downstream, "skip", "after");
         this.options.log?.(`automation ${downstream.id}: ${upstream.id} finished outside its window (${trigger.notBefore} within ${trigger.within}); skipped`);
         continue;
@@ -539,11 +568,12 @@ export class HostAutomations {
       const fire: OwedFire = {
         trigger: "after",
         dueAt: new Date(due).toISOString(),
-        fireId: `after:${upstream.id}:${sessionId}`,
-        upstream: { automationId: upstream.id, sessionId },
+        fireId,
+        upstream: { automationId: latest.automationId, sessionId: latest.sessionId },
       };
-      if ((downstream.owed ?? []).some((item) => item.fireId === fire.fireId)) continue;
-      this.setOwed(downstream.id, [...(downstream.owed ?? []), fire]);
+      const current = this.definitions.get(downstream.id)!;
+      if ((current.owed ?? []).some((item) => item.fireId === fire.fireId)) continue;
+      this.setOwed(downstream.id, [...(current.owed ?? []), fire]);
     }
     await this.fireOwed(this.now(), upstream.tenant);
   }
@@ -571,6 +601,16 @@ export class HostAutomations {
     if (!source) throw invalid(`Extension ${id} is not available to this host${tenant ? ` for ${tenant}` : ""}.`);
     resolveAgent(source.packageRoot, agent);
     return { id, agent, ...(body.input ? { input: { ...body.input } } : {}) };
+  }
+
+  private setAwaiting(id: string, awaiting: Automation["awaiting"] | undefined): void {
+    const current = this.definitions.get(id);
+    if (!current) return;
+    const next: Automation = { ...current };
+    if (awaiting && Object.keys(awaiting).length) next.awaiting = awaiting;
+    else delete next.awaiting;
+    this.definitions.set(id, next);
+    this.save();
   }
 
   private setOwed(id: string, owed: OwedFire[]): void {
@@ -787,14 +827,17 @@ export class HostAutomations {
   private triggerOf(input: AutomationInput): AutomationTrigger {
     const type = input.triggerType ?? (input.after ? "after" : input.event ? "event" : input.condition ? "condition" : "schedule");
     if (type === "after") {
-      const routine = requireText(input.after?.routine, "after.routine");
+      const routine = afterRoutines(input.after?.routine);
+      const mode = input.after?.mode;
+      if (mode !== undefined && mode !== "any" && mode !== "all") throw invalid('after.mode must be "any" or "all".');
+      if (mode === "all" && typeof routine === "string") throw invalid('after.mode "all" needs two or more routines.');
       const notBefore = input.after?.notBefore;
       if (notBefore !== undefined && !CLOCK_TIME.test(notBefore)) throw invalid('after.notBefore must be a time of day "HH:MM".');
       const within = input.after?.within;
       if (within !== undefined) parseDuration(within);
       const timezone = input.after?.timezone;
       if (!isTenantZone(timezone)) checkTimezone(timezone!);
-      return { type, routine, ...(notBefore ? { notBefore } : {}), ...(within ? { within } : {}), ...(timezone ? { timezone } : {}) };
+      return { type, routine, ...(mode ? { mode } : {}), ...(notBefore ? { notBefore } : {}), ...(within ? { within } : {}), ...(timezone ? { timezone } : {}) };
     }
     if (type === "condition") {
       const condition = requireText(input.condition, "condition");
@@ -883,6 +926,18 @@ export class HostAutomations {
 
 const ROUTINE_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const CLOCK_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** An `after` trigger's upstream names: one name, or two or more (each an automation id or routineId). */
+function afterRoutines(value: string | string[] | undefined): string | string[] {
+  if (Array.isArray(value)) {
+    const names = value.map((item, index) => requireText(item, `after.routine[${index}]`));
+    if (new Set(names).size !== names.length) throw invalid("after.routine lists a routine twice.");
+    if (names.length > 8) throw invalid("after.routine lists at most 8 routines.");
+    if (names.length === 0) throw invalid("after.routine needs a routine.");
+    return names.length === 1 ? names[0]! : names;
+  }
+  return requireText(value, "after.routine");
+}
 
 /** Two owed entries for the same fire (the same scheduler fire, event or upstream run). */
 function sameFire(left: OwedFire, right: OwedFire): boolean {
@@ -1020,6 +1075,7 @@ const SUMMARY = {
     tenant: { type: "string" },
     routineId: { type: "string" },
     owed: { type: "array", items: looseObject },
+    awaiting: looseObject,
     lastDecision: looseObject,
     condition: { type: "string" },
     conditionCheckInterval: { type: "integer" },
@@ -1064,7 +1120,8 @@ const CREATE_FIELDS = {
     required: ["routine"],
     description: 'triggerType "after": run when that automation (id or routineId) finished well; notBefore "HH:MM" in timezone, within "6h".',
     properties: {
-      routine: { type: "string", minLength: 1, maxLength: 200 },
+      routine: { anyOf: [{ type: "string", minLength: 1, maxLength: 200 }, { type: "array", minItems: 1, maxItems: 8, items: { type: "string", minLength: 1, maxLength: 200 } }] },
+      mode: { enum: ["any", "all"] },
       notBefore: { type: "string", maxLength: 5 },
       within: { type: "string", maxLength: 16 },
       timezone: { type: "string", maxLength: 128 },
@@ -1204,7 +1261,7 @@ export function createAutomationsProvider(automations: HostAutomations): Capabil
       ...(trigger.type === "schedule" ? { schedule: trigger.schedule } : {}),
       ...(trigger.type === "condition" ? { condition: trigger.condition, conditionCheckInterval: trigger.checkIntervalMinutes } : {}),
       ...(trigger.type === "event" ? { event: trigger.event, ...(trigger.match ? { eventMatch: trigger.match } : {}) } : {}),
-      ...(trigger.type === "after" ? { after: { routine: trigger.routine, ...(trigger.notBefore ? { notBefore: trigger.notBefore } : {}), ...(trigger.within ? { within: trigger.within } : {}), ...(trigger.timezone ? { timezone: trigger.timezone } : {}) } } : {}),
+      ...(trigger.type === "after" ? { after: { routine: trigger.routine, ...(trigger.mode ? { mode: trigger.mode } : {}), ...(trigger.notBefore ? { notBefore: trigger.notBefore } : {}), ...(trigger.within ? { within: trigger.within } : {}), ...(trigger.timezone ? { timezone: trigger.timezone } : {}) } } : {}),
       ...(automation.extension ? { extension: automation.extension } : {}),
       ...(automation.tenant ? { tenant: automation.tenant } : {}),
       ...(automation.routineId ? { routineId: automation.routineId } : {}),

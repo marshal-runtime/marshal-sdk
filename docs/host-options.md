@@ -60,6 +60,12 @@ reaches the model as the desktop's policy deny with feedback), `directTools` and
 exclusive tools, and the browser becomes its MCP server. An embedder that already configured the engine's ports
 (`configureEngineHost`, as the desktop does) keeps its own; otherwise the host configures headless ones.
 
+## Routine graph and the external automations API
+
+- `after` triggers take one routine or a list: `after: { routine: ["a", "b"], mode: "all" }` runs once every upstream finished well (newest arrival per upstream is kept until then; `within` forgets an arrival older than that, measured to the latest one; the arrivals are used up by the run). `mode: "any"` (default) runs for each upstream's finish. Upstreams are matched inside the automation's tenant only. Routine files take the same `triggers.after.routine` list and `mode`.
+- A fire the fire policy holds stays owed with the slot it was for; `automations.fireOwed(at, tenant)` asks the policy again for one tenant (every tick does it for all).
+- `createAutomationsApi({ automations, authenticate })` (handler) and `serveAutomationsApi(...)` (HTTP, loopback) are the way code outside the SDK, such as a brand VM's `zs.schedule.*` tools, puts schedules and events into the host. A bearer token maps to one tenant (`authenticate(token) -> { tenant, scopes?, label? }`); the tenant is never a request field. Routes: `GET/POST /v1/schedules`, `DELETE /v1/schedules/:id` (only schedules the caller created, `createdBy: "external:<label>"`; host routines answer 404), `POST /v1/events` (`session.*`, `marshal.*`, `automation.*` and `host.*` are the host's own and are refused; payload `labels` are dropped). Schedules are capped per tenant (default 50); `targetSessionId` needs the host's `canTarget`.
+
 ## Not ported in this pass
 
 - **Extension secrets** (the desktop's `extensionSecrets` module) and **extension admission hooks** (`admitExtension`,

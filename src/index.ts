@@ -52,7 +52,18 @@ export {
   type FireFields,
   isTenantZone,
   parseDuration,
+  type AfterMode,
 } from "./automations.js";
+export {
+  createAutomationsApi,
+  serveAutomationsApi,
+  type AutomationsApiOptions,
+  type AutomationsApiServer,
+  type ApiRequest,
+  type ApiResponse,
+  type ExternalCaller,
+  type ExternalScope,
+} from "./automations-api.js";
 export {
   agentLaunchFields,
   AgentEntryError,
