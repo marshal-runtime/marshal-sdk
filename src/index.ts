@@ -92,6 +92,22 @@ export {
   type OrgPublishResult,
 } from "./org-publish.js";
 export {
+  buildRun,
+  directoryRunSink,
+  gcsRunSink,
+  labelRunGrouping,
+  rootOf,
+  runIdOf,
+  RunRecordsPublisher,
+  type BuiltRun,
+  type RunGroup,
+  type RunGrouping,
+  type RunLink,
+  type RunRecordSink,
+  type RunRecordsOptions,
+  type RunSummary as RunRecordSummary,
+} from "./run-records.js";
+export {
   createOrgBridge,
   isTestOrg,
   type OrgBridge,

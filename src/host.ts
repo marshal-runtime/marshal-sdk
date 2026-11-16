@@ -37,6 +37,7 @@ import { createHostPrompts, sdkBaseLayer, type HostPromptOptions, type HostPromp
 import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { SessionPublisher } from "./kit/publisher.js";
+import { RunRecordsPublisher, type RunRecordsOptions } from "./run-records.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
 import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
 import { createLinkCallProvider } from "./link/call-provider.js";
@@ -119,6 +120,11 @@ export interface MarshalHostOptions extends MarshalHostPorts {
   routes?: readonly PersonRoute[];
   /** Publish this host's sessions to a Marshal organization and run the instructions people post to them (docs/org-bridge.md). */
   org?: MarshalHostOrgOptions;
+  /**
+   * Write each run as run records the organization's run index reads (docs/run-records.md): a service host's way into
+   * the org, no person's token needed. Published when a session goes idle or fails; `allow` decides which runs leave.
+   */
+  runRecords?: Omit<RunRecordsOptions, "store">;
   /** Which provider answers each non-chat model service: decide, embed, speech (docs/models.md). */
   models?: ModelsConfig;
   /** Test hook: the HTTP client model services use. */
@@ -239,6 +245,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     runId,
     host: options.host ?? { id: HARNESS_ID, kind: "local" },
   });
+  const runRecordsPublisher = options.runRecords ? new RunRecordsPublisher({ log, ...options.runRecords, store: sessions }) : undefined;
   const kitOptions = normalizeKit(options.kit);
   const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath }) : undefined;
   const extensions = [...(kit?.extensions ?? []), ...(options.extensions ?? [])];
@@ -254,6 +261,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   let serversFor: (session: SessionRecord) => Record<string, unknown> = () => ({});
   let automations: HostAutomations | undefined;
   let publisher: SessionPublisher | undefined;
+  const runRecords = runRecordsPublisher;
   // A test's own query runs every turn; otherwise Claude is the default provider.
   const selection = options.provider ?? (options.query ? undefined : ({ id: "claude" } as const));
   const hostEnv = options.env ?? definedEnv(process.env);
@@ -280,6 +288,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       telemetry(type, { sessionId: payload.sessionId, state: payload.state, ...(payload.parentId ? { parentId: payload.parentId } : {}) });
       automations?.emit(type, payload).catch((error: unknown) => log(`automations on ${type}: ${String(error)}`));
       if (typeof payload.sessionId === "string") publisher?.schedule(payload.sessionId);
+      if (typeof payload.sessionId === "string") runRecords?.schedule(payload.sessionId);
     },
   });
   automations = new HostAutomations({
@@ -688,6 +697,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       lifecycleSubscription?.dispose();
       settingsSubscription?.();
       await publisher?.flush();
+      await runRecords?.close();
       await hostAutomations.stop();
       await decisions.stop();
       await link?.close();
