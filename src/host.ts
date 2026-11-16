@@ -15,7 +15,7 @@ import { z } from "zod";
 import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
 import { marshalProviderTools, PROVIDER_TOOLS, resolveProvider, type ProviderSelection } from "./provider-selection.js";
 import { callerSessionId, createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
-import { createAutomationsProvider, HostAutomations } from "./automations.js";
+import { createAutomationsProvider, HostAutomations, type AgentExtensionSource, type AutomationStore, type HostAutomationsOptions } from "./automations.js";
 import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decisions.js";
 import { createModelServices, createModelsProvider, type ModelServices, type ModelsConfig } from "./models/index.js";
 import { skillVisibleTo } from "./profile.js";
@@ -153,6 +153,19 @@ export interface MarshalHostAutomationOptions {
   start?: boolean;
   /** Default time zone of cron schedules. Defaults to the host's. */
   timezone?: string;
+  /** Where automation definitions live (a database adapter, per tenant). Default: automations.json in the state folder. */
+  store?: AutomationStore;
+  /** Finds agent extension packages for automations with an extension body (contributes.agents). */
+  extensions?: AgentExtensionSource;
+  /** Asked before every automatic fire: go, hold (owed, asked again each tick) or skip. */
+  firePolicy?: HostAutomationsOptions["firePolicy"];
+  /** Fills the context slots an agent profile names. */
+  contextFor?: HostAutomationsOptions["contextFor"];
+  /** A tenant's time zone, for "after" triggers. */
+  timezoneFor?: HostAutomationsOptions["timezoneFor"];
+  inputFor?: HostAutomationsOptions["inputFor"];
+  /** The session label naming an automation's tenant (default "tenant"; Marley uses "brand"). */
+  tenantLabel?: string;
 }
 
 export interface MarshalHostLinkOptions {
@@ -300,6 +313,13 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     ...(options.automations?.now ? { now: options.automations.now } : {}),
     ...(options.automations?.tickMs ? { tickMs: options.automations.tickMs } : {}),
     ...(options.automations?.timezone ? { timezone: options.automations.timezone } : {}),
+    ...(options.automations?.store ? { store: options.automations.store } : {}),
+    ...(options.automations?.extensions ? { extensions: options.automations.extensions } : {}),
+    ...(options.automations?.firePolicy ? { firePolicy: options.automations.firePolicy } : {}),
+    ...(options.automations?.contextFor ? { contextFor: options.automations.contextFor } : {}),
+    ...(options.automations?.timezoneFor ? { timezoneFor: options.automations.timezoneFor } : {}),
+    ...(options.automations?.inputFor ? { inputFor: options.automations.inputFor } : {}),
+    ...(options.automations?.tenantLabel ? { tenantLabel: options.automations.tenantLabel } : {}),
     log,
   });
   const hostAutomations = automations;

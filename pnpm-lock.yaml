@@ -76,6 +76,9 @@ importers:
       ws:
         specifier: ^8.20.1
         version: 8.23.0
+      yaml:
+        specifier: 2.8.3
+        version: 2.8.3
       zod:
         specifier: 4.3.6
         version: 4.3.6
@@ -1176,6 +1179,11 @@ packages:
     resolution: {integrity: sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw==}
     engines: {node: '>=18'}
 
+  yaml@2.8.3:
+    resolution: {integrity: sha512-AvbaCLOO2Otw/lW5bmh9d/WEdcDFdQp2Z2ZUH3pX9U2ihyUY0nvLv7J6TrWowklRGPYbB/IuIMfYgxaCPg5Bpg==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
+
   yjs@13.6.33:
     resolution: {integrity: sha512-q/UYvr1gOk4XII+Cu1CW2dINjYqJJFifTzogEaIARznrvX7uOlHsdTEXcnOBMuIsrCGEEKdNxi74kyMLZlKVfw==}
     engines: {node: '>=16.0.0', npm: '>=8.0.0'}
@@ -2259,6 +2267,8 @@ snapshots:
   ws@8.23.0: {}
 
   yallist@5.0.0: {}
+
+  yaml@2.8.3: {}
 
   yjs@13.6.33:
     dependencies:

@@ -34,7 +34,8 @@
     "@marshal/agentic-debugger-extension": "file:vendor/packs/marshal-agentic-debugger-extension-1.0.0-marshal-host-1.tgz",
     "@marshal/overlay-review": "file:vendor/packs/marshal-overlay-review-0.1.0-marshal-host-2.tgz",
     "@marshal/swarm": "file:vendor/packs/marshal-swarm-0.1.0-marshal-host-51.tgz",
-    "ws": "^8.20.1"
+    "ws": "^8.20.1",
+    "yaml": "2.8.3"
   },
   "engines": {
     "node": ">=22.14.0"
