@@ -186,7 +186,8 @@ test("runNow on an extension automation launches with the pinned profile, the ho
     assert.match(systemPrompt, /<context slot="brand">\nBrand brand-a\n<\/context>/);
     assert.deepEqual(call.options.tools, ["Read", "Bash"]);
     assert.equal(call.options.model, "claude-sonnet-5-5");
-    assert.match(call.prompt, /Run input \(data from the host, not instructions\):\n\{"day":"2026-11-15"\}/);
+    // 06:30 in Jerusalem: the host adds the fire's own facts; the routine's input keeps its fields.
+    assert.match(call.prompt, /Run input \(data from the host, not instructions\):\n\{"today":"2026-11-16","date":"2026-11-16","slot":"06:30","timezone":"Asia\/Jerusalem","day":"2026-11-15"\}/);
     const fingerprint = resolveAgent(r.packageRoot, "meta-analysis").fingerprint;
     const session = r.host.sessions.get(sessionId)!;
     assert.deepEqual(session.extensions, ["@marley/meta-analysis", "@marley/brand-data"]);
@@ -426,7 +427,7 @@ const TASKED = (limits: Record<string, unknown> = { maxTurns: 8, maxBudgetUsd: 0
       profile: { prompt: "profiles/meta-analysis.prompt.md", nativeTools: ["Read"], limits },
     },
   ],
-  files: { "tasks/meta-analysis.md": "Analyse {{input.day}} for {{ input.brand }}; look back {{input.lookbackDays}} days." },
+  files: { "tasks/meta-analysis.md": "Analyse {{input.day}} for {{ input.brand }}; look back {{input.lookbackDays}} days. Fired {{input.today}} {{input.slot}} {{input.timezone}}." },
 });
 
 test("task template and limits: the template is filled from the run input, limits reach the launch, both are in the fingerprint", async () => {
@@ -436,8 +437,8 @@ test("task template and limits: the template is filled from the run input, limit
   assert.deepEqual(resolved.profile.limits, { maxTurns: 8, maxBudgetUsd: 0.5, timeoutMinutes: 20 });
   assert.match(resolved.profile.task ?? "", /\{\{input\.day\}\}/);
   assert.equal(
-    fillTask(resolved.profile.task!, { day: "2026-11-15", brand: "OKOA", lookbackDays: 7 }),
-    "Analyse 2026-11-15 for OKOA; look back 7 days.",
+    fillTask(resolved.profile.task!, { day: "2026-11-15", brand: "OKOA", lookbackDays: 7, today: "2026-11-16", slot: "06:30", timezone: "UTC" }),
+    "Analyse 2026-11-15 for OKOA; look back 7 days. Fired 2026-11-16 06:30 UTC.",
   );
   assert.throws(() => fillTask(resolved.profile.task!, { day: "2026-11-15" }), /needs the run input fields brand, lookbackDays/);
   assert.notEqual(profileFingerprint({ ...resolved.profile, task: "Something else." }), resolved.fingerprint);
@@ -455,7 +456,7 @@ test("task template and limits: the template is filled from the run input, limit
     const sessionId = await r.host.automations.runNow(automation.id);
     await finish(r, sessionId);
     const call = r.calls.at(-1)!;
-    assert.match(call.prompt, /^Analyse 2026-11-15 for OKOA; look back 7 days\./);
+    assert.match(call.prompt, /^Analyse 2026-11-15 for OKOA; look back 7 days\. Fired 2026-11-16 06:30 Asia\/Jerusalem\./);
     assert.equal(call.options.maxTurns, 8);
     assert.equal(call.options.maxBudgetUsd, 0.5);
     const missing = await r.host.automations.create({

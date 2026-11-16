@@ -692,7 +692,8 @@ export class HostAutomations {
       const slots = resolved.profile.context;
       const context = slots.length ? ((await this.options.contextFor?.({ ...(automation.tenant ? { tenant: automation.tenant } : {}), slots, automation })) ?? {}) : {};
       const fields = agentLaunchFields(resolved, context);
-      const input = automation.extension.input ?? {};
+      // The fire's own facts first; the routine's declared input wins where it names the same field.
+      const input = { ...fireFields(this.now(), this.zoneOf(automation)), ...(automation.extension.input ?? {}) };
       const fromTemplate = resolved.profile.task === undefined
         ? undefined
         : fillTask(resolved.profile.task, input, `${resolved.profile.extension}/${resolved.profile.agent} task`);
@@ -892,6 +893,16 @@ function zoneOffset(at: number, zone: string): number {
 }
 
 /** The instant of time-of-day `clock` ("HH:MM") in `zone`, on the local calendar day of `day`. */
+/**
+ * The facts of one fire an extension run gets in its input: `today` and `date` (YYYY-MM-DD), `slot` (HH:MM) and
+ * `timezone`, all in the zone the automation runs in.
+ */
+export function fireFields(at: Date, zone: string): { today: string; date: string; slot: string; timezone: string } {
+  const local = new Date(at.getTime() + zoneOffset(at.getTime(), zone));
+  const today = local.toISOString().slice(0, 10);
+  return { today, date: today, slot: local.toISOString().slice(11, 16), timezone: zone };
+}
+
 export function localTimeOn(day: Date, clock: string, zone: string): number {
   const [hour, minute] = clock.split(":").map(Number) as [number, number];
   const local = new Date(day.getTime() + zoneOffset(day.getTime(), zone));

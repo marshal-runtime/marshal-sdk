@@ -48,6 +48,8 @@ export {
   type OwedFire,
   FileAutomationStore,
   localTimeOn,
+  fireFields,
+  isTenantZone,
   parseDuration,
 } from "./automations.js";
 export {
