@@ -261,3 +261,19 @@ test("a host with runRecords publishes a labelled session's run when it goes idl
     await host.dispose();
   }
 });
+
+test("a session that failed before its first turn (no native session yet) still publishes", async () => {
+  const { root, store } = tempStore();
+  const early = store.create({ title: "failed early", runtime: "claude", labels: { procedure: "marley-chat", brand: "brand-a", conversation: "c0123456789abcdef", kind: "dm" } } as never);
+  store.update(early.id, { state: "failed" });
+  const out = path.join(root, "out");
+  const lines: string[] = [];
+  const publisher = new RunRecordsPublisher({ store, env: "local", sink: directoryRunSink(out), allow: () => true, log: (line) => lines.push(line) });
+  publisher.schedule(early.id);
+  await publisher.flush();
+  assert.deepEqual(lines.filter((line) => /failed/.test(line) && /publishing/.test(line)), []);
+  const [runId] = fs.readdirSync(path.join(out, "runs"));
+  const summary = JSON.parse(fs.readFileSync(path.join(out, "runs", runId!, "summary.json"), "utf8"));
+  assert.equal(summary.status, "failed");
+  assert.equal(summary.sessions[0].sessionId, undefined);
+});

@@ -228,7 +228,7 @@ export function buildRun(
   const homeDir = os.homedir();
   for (const member of members) {
     const name = sessionNameOf(member, root);
-    const roots = { workspaceRoot: member.native.cwd, homeDir };
+    const roots = { workspaceRoot: member.native?.cwd, homeDir };
     const lines: string[] = [];
     let calls = 0;
     let errors = 0;
@@ -266,7 +266,7 @@ export function buildRun(
       ...(status !== "running" ? { finishedAt: member.updatedAt } : {}),
       costUsd: member.usage.costUsd,
       turns: member.usage.turns,
-      ...(member.native.sessionId ? { sessionId: member.native.sessionId } : {}),
+      ...(member.native?.sessionId ? { sessionId: member.native.sessionId } : {}),
       ...(member.labels?.conversation ? { conversation: member.labels.conversation } : {}),
       ...(member.lastError ? { error: "failed" } : {}),
       toolCalls: calls,

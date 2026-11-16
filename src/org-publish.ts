@@ -197,7 +197,7 @@ async function publishEnvelope(
 /** Claude keeps a session at `<config dir>/projects/<cwd with every non-alphanumeric as '-'>/<session id>.jsonl`. */
 export function claudeNativePath(record: Pick<SessionRecord, "native">): string | undefined {
   const { native } = record;
-  if (native.kind !== "claude" || !native.sessionId) return undefined;
+  if (!native || native.kind !== "claude" || !native.sessionId) return undefined;
   const configDir = native.configDir ?? path.join(os.homedir(), ".claude");
   return path.join(configDir, "projects", native.cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${native.sessionId}.jsonl`);
 }
@@ -239,7 +239,7 @@ function headerMessage(record: SessionRecord): OrgTranscriptMessage {
 function toOrgMessage(message: TranscriptMessage, record: SessionRecord, inboxMessageId?: string): OrgTranscriptMessage {
   return {
     role: message.role,
-    text: clip(scrubText(message.content, { workspaceRoot: record.native.cwd, homeDir: os.homedir() }), MAX_MESSAGE_BYTES),
+    text: clip(scrubText(message.content, { workspaceRoot: record.native?.cwd, homeDir: os.homedir() }), MAX_MESSAGE_BYTES),
     at: message.timestamp,
     ...(inboxMessageId && message.role === "user" ? { messageId: inboxMessageId } : {}),
   };
