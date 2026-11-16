@@ -343,3 +343,19 @@ test("forkPoint: a running parent whose file is elsewhere forks through the back
   backend.release("plan");
   await port.wait(parent.id, 2000);
 });
+
+test("reportToParent false: a fork's outcome is not queued into its parent", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-forks-noreport-"));
+  const { store, port , forks: reporting } = setup(undefined, dir);
+  reporting.dispose();
+  const forks = new SessionForks(port, store, { flushTimeoutMs: 300, reportToParent: false });
+  const parent = port.launch({ task: "plan", idempotencyKey: "p" });
+  await port.wait(parent.id, 2000);
+  const before = store.messages(parent.id).length;
+  const group = await forks.fork(parent.id, [{ task: "write the API" }], false);
+  await port.wait(group.forks[0]!.sessionId, 2000);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(store.messages(parent.id).length, before);
+  assert.equal(store.messages(parent.id).some((message) => message.content.startsWith("[Marshal notice]")), false);
+  forks.dispose();
+});

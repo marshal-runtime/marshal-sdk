@@ -63,6 +63,11 @@ export interface ForksOptions {
   flushTimeoutMs?: number;
   /** See ForkPointOf. */
   forkPoint?: ForkPointOf;
+  /**
+   * Queue each fork's final message (or its error) into its parent as a `[Marshal notice]` when the fork goes idle. Default true. An embedder that
+   * relays fork outcomes to the parent's conversation itself sets false, so the parent's process gets no turn it did not start.
+   */
+  reportToParent?: boolean;
 }
 
 /**
@@ -90,7 +95,7 @@ export class SessionForks {
     private readonly store: SessionStore,
     private readonly options: ForksOptions = {},
   ) {
-    this.stopReporting = port.onSettled((sessionId, outcome) => this.report(sessionId, outcome));
+    this.stopReporting = options.reportToParent === false ? () => undefined : port.onSettled((sessionId, outcome) => this.report(sessionId, outcome));
   }
 
   dispose(): void {
