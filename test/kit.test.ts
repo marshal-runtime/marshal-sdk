@@ -68,7 +68,7 @@ test("brainCapabilityRoute maps the memory operations onto the Brain's capabilit
   });
   assert.equal((await route.create({ content: node.content, category: "fact", scope: node.scope, alwaysOn: false, links: [{ path: "package.json" }] })).id, "memory:1");
   assert.equal((await route.search({ query: "pnpm", scopes: [node.scope], limit: 5 })).length, 1);
-  assert.equal(await route.delete({ id: "memory:1" }), true);
+  assert.equal(await route.delete({ id: "memory:1", scopes: [node.scope] }), true);
   assert.deepEqual(
     calls.map((call) => call.capability),
     ["memory.create", "memory.search", "memory.delete"],
