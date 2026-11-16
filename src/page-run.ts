@@ -670,6 +670,9 @@ async function answersPipe(chrome: string, timeoutMs = 10_000): Promise<boolean>
       const timer = setTimeout(() => resolve(false), timeoutMs);
       child.once("error", () => resolve(false));
       child.once("exit", () => resolve(false));
+      // A killed Chrome can reset its pipe; unhandled, that 'error' ends the whole page-run (Coder build 900023).
+      fromChrome.on("error", () => resolve(false));
+      (toChrome as NodeJS.WritableStream & { on: (event: "error", fn: () => void) => unknown }).on("error", () => resolve(false));
       fromChrome.once("data", () => {
         clearTimeout(timer);
         resolve(true);
