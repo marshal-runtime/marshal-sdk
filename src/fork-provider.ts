@@ -91,7 +91,7 @@ const TOOLS: Record<string, ToolSpec> = {
         type: "array",
         items: output(["sessionId", "name", "task"], { sessionId: { type: "string" }, name: { type: "string" }, task: { type: "string" } }),
       },
-      mode: { enum: ["file-copy", "backend-fork"] },
+      mode: { enum: ["file-copy", "backend-fork", "fresh"] },
       note: { type: "string" },
       error: { type: "string" },
     }),

@@ -51,7 +51,11 @@ import { createOrgBridge, type OrgBridge, type OrgBridgeOptions } from "./org-br
 import { httpLinkRelay, type LinkRelay } from "./org-host-room.js";
 import { ConversationRoomRoute } from "./rooms-route.js";
 import { FileSessionStore, type SessionRecord, type SessionStore } from "./session-store.js";
-import { hostToolOf, refusedHostTool, remoteHostToolSet, RemoteRuntimeClients, type RemoteRuntime } from "./remote-tools.js";
+import { REMOTE_HOST_TOOLS, hostToolOf, refusedHostTool, remoteHostToolSet, RemoteRuntimeClients, type RemoteRuntime } from "./remote-tools.js";
+
+// A remote session's code (inline_module/module) runs in the remote machine's runtime, which has no host tools; only a top-level operation call
+// reaches them. Without this the model calls them from code and gets "Capability ... was not found" (Marley integ, 2026-11-17).
+const REMOTE_EXEC_NOTE = `\n\nHost tools (${REMOTE_HOST_TOOLS.join(", ")}) run on the host: call each as its own runtime_exec {targetType: "operation", target, input}. Code you run (inline_module, module) executes on this machine's runtime, where they do not exist.`;
 
 const HARNESS_ID = "marshal-sdk";
 const SDK_VERSION = "0.0.1";
@@ -694,7 +698,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         ),
         tool(
           "runtime_exec",
-          RUNTIME_MCP_TOOLS[1]!.description ?? "",
+          (RUNTIME_MCP_TOOLS[1]!.description ?? "") + (remote ? REMOTE_EXEC_NOTE : ""),
           {
             targetType: z.enum(["operation", "inline_module", "module"]),
             target: z.string().optional(),
