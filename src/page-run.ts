@@ -57,6 +57,8 @@ export interface PageRunOptions {
   offline?: boolean;
   /** A scripted backend that answers Page Studio's protocols without a model: the dry path. */
   fake?: boolean;
+  /** Build without Page Studio's look (critic) rounds, so no browser is needed. Without it, single and deep need a usable one. */
+  noLook?: boolean;
   env?: Record<string, string>;
   host?: { id: string; kind: string };
   labels?: Record<string, string>;
@@ -105,10 +107,11 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   // A brand-data provider in the sandbox (@zyg/brand-data-pack) serves this run's product pack (facts.md, pictures.json).
   process.env[INPUT_PACK_ENV] = env[INPUT_PACK_ENV] ??= input.productDir;
   const chrome = await resolveChrome();
-  if (!chrome) log(NO_CHROME_WARNING);
+  const browserUsable = Boolean(chrome) && (await answersPipe(chrome!));
+  if (!browserUsable) log(NO_CHROME_WARNING);
   if (chrome) {
     process.env.MARSHAL_SDK_CHROME = env.MARSHAL_SDK_CHROME = chrome;
-    process.env.PAGE_STUDIO_CHROME = env.PAGE_STUDIO_CHROME = noSandboxWrapper(chrome, state);
+    process.env.PAGE_STUDIO_CHROME = env.PAGE_STUDIO_CHROME = chromeWrapper(chrome, state);
   }
 
   const started = Date.now();
@@ -146,6 +149,9 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   const warnings: string[] = [];
   let build: PageStudioBuild = {};
   try {
+    const gate = browserGate({ depth, noLook: Boolean(options.noLook), usable: browserUsable, fake: Boolean(options.fake) });
+    if (gate) throw new Error(gate);
+    if (options.noLook) warnings.push("built without look rounds (--no-look): no critic looked at the rendered page");
     if (options.model || options.effort || options.quickModel) await call("pagestudio.settings", pinnedSettings(options));
     settings = (await call("pagestudio.settings", {})) ?? {};
     build = await pageStudioBuild(call, options.env, log);
@@ -184,6 +190,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
       basedOn: boardId,
       depth,
       ...(options.rounds ? { rounds: options.rounds } : {}),
+      ...(options.noLook ? { review: false } : {}),
     });
     if (created?.ok === false) throw new Error(`Page Studio refused the page (${String(created.code ?? "error")}): ${String(created.error ?? created.message ?? "")}`);
     pageId = created.pageId;
@@ -339,7 +346,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   if (!chrome) log(NO_CHROME_WARNING);
   if (chrome) {
     process.env.MARSHAL_SDK_CHROME = env.MARSHAL_SDK_CHROME = chrome;
-    process.env.PAGE_STUDIO_CHROME = env.PAGE_STUDIO_CHROME = noSandboxWrapper(chrome, state);
+    process.env.PAGE_STUDIO_CHROME = env.PAGE_STUDIO_CHROME = chromeWrapper(chrome, state);
   }
   const started = Date.now();
   const { createMarshalHost } = await import("./host.js");
@@ -594,8 +601,7 @@ async function answersPipe(chrome: string, timeoutMs = 10_000): Promise<boolean>
   const { spawn } = await import("node:child_process");
   const os = await import("node:os");
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-chrome-"));
-  const flags = ["--headless=new", "--remote-debugging-pipe", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "about:blank"];
-  if (process.env.MARSHAL_SDK_CHROME_NO_SANDBOX === "1") flags.unshift("--no-sandbox");
+  const flags = [...chromeFlags(), "--headless=new", "--remote-debugging-pipe", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "about:blank"];
   const child = spawn(chrome, flags, { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"], windowsHide: true });
   const [toChrome, fromChrome] = [child.stdio[3], child.stdio[4]] as [NodeJS.WritableStream, NodeJS.ReadableStream];
   try {
@@ -617,14 +623,32 @@ async function answersPipe(chrome: string, timeoutMs = 10_000): Promise<boolean>
 }
 
 /**
- * Page Studio starts Chrome itself without --no-sandbox, which Chrome refuses as root and which fails in a
- * container without user namespaces; with MARSHAL_SDK_CHROME_NO_SANDBOX=1 it gets a wrapper that adds the flag.
+ * The flags every Chrome this host starts needs. --no-sandbox with MARSHAL_SDK_CHROME_NO_SANDBOX=1: Chrome refuses
+ * to run as root, and a container without user namespaces has no sandbox. --disable-dev-shm-usage on Linux:
+ * containers often have a 64 MB /dev/shm, on which Chrome dies mid-render (Coder builds 900005/900006 lost their
+ * look rounds to "the browser closed").
  */
-function noSandboxWrapper(chrome: string, state: string): string {
-  if (process.env.MARSHAL_SDK_CHROME_NO_SANDBOX !== "1" || process.platform === "win32") return chrome;
+export function chromeFlags(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string[] {
+  if (platform === "win32") return [];
+  return [...(env.MARSHAL_SDK_CHROME_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...(platform === "linux" ? ["--disable-dev-shm-usage"] : [])];
+}
+
+/** Page Studio starts Chrome itself, so it gets a wrapper script that adds chromeFlags() when there are any. */
+export function chromeWrapper(chrome: string, state: string, flags: readonly string[] = chromeFlags()): string {
+  if (!flags.length || process.platform === "win32") return chrome;
   const wrapper = path.join(state, "chrome-no-sandbox.sh");
-  fs.writeFileSync(wrapper, `#!/bin/sh\nexec '${chrome.replaceAll("'", "'\\''")}' --no-sandbox "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(wrapper, `#!/bin/sh\nexec '${chrome.replaceAll("'", "'\\''")}' ${flags.join(" ")} "$@"\n`, { mode: 0o755 });
   return wrapper;
+}
+
+/**
+ * Why this page run must not start, or undefined. Single and deep pages are reviewed by critics that look at the
+ * rendered page; without a usable browser they would finish one-pass and nobody would notice (about $50 of Coder
+ * builds on 2026-11-16). --no-look builds without those rounds on purpose; the dry path never looks.
+ */
+export function browserGate(run: { depth: string; noLook: boolean; usable: boolean; fake: boolean }): string | undefined {
+  if (run.usable || run.noLook || run.fake || run.depth === "quick") return undefined;
+  return `No usable browser: depth ${run.depth} looks at the rendered page in critic rounds, and no Chrome or Chromium on this host answered a launch probe. Install one (npx playwright install chromium, or apt chromium), set MARSHAL_SDK_CHROME, or pass --no-look to build without critic rounds.`;
 }
 
 /**
@@ -653,7 +677,7 @@ async function screenshots(htmlFile: string, shotsDir: string, chrome: string | 
   fs.mkdirSync(shotsDir, { recursive: true });
   const browser = await chromium.launch({
     ...(chrome ? { executablePath: chrome } : {}),
-    args: process.env.MARSHAL_SDK_CHROME_NO_SANDBOX === "1" ? ["--no-sandbox"] : [],
+    args: chromeFlags(),
   });
   const taken: unknown[] = [];
   try {
@@ -765,6 +789,8 @@ const USAGE = `marshal-sdk page-run: one Page Studio page from an agent-sandbox 
   --claude-config-dir <dir>  run the backend on that Claude account and drop ANTHROPIC_API_KEY
   --offline          do not read the product from the public store
   --fake             a scripted backend instead of a model: the dry path, no credentials needed
+  --no-look          build without Page Studio's look (critic) rounds; without it, single and deep fail at start
+                     when no usable Chrome/Chromium is found
   --host-id <id>  --host-kind <local|container|e2b>
 
 Exit code 0 when the page was written, 1 when the run failed (summary.json carries the error).
@@ -825,6 +851,7 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
     requiredSkills: values.get("required-skill") ?? [],
     offline: flags.has("offline"),
     fake: flags.has("fake"),
+    noLook: flags.has("no-look"),
     host: { id: one("host-id") ?? "marshal-sdk", kind: one("host-kind") ?? "local" },
     log: (line) => process.stderr.write(`[marshal-sdk page-run ${new Date().toISOString().slice(11, 19)}] ${line}\n`),
   });
