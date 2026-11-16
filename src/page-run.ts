@@ -227,6 +227,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     started,
     error: failure,
     requiredSkills: options.requiredSkills ?? [],
+    loadedSkills: build.skills ?? [],
     marshal: {
       runId: host.runId,
       engine: "page-studio",
@@ -458,6 +459,14 @@ export interface PageStudioBuild {
   contentHash?: string;
   /** Set when the expected hash differs: a warning, never a failure (R32: desktop and sandbox may differ). */
   drift?: string;
+  /** The skills Page Studio loads into its own prompts (not through the Skill tool). */
+  skills?: string[];
+}
+
+function skillNames(declared: unknown[]): string[] {
+  return declared
+    .map((entry) => (typeof entry === "string" ? entry : typeof (entry as { name?: unknown })?.name === "string" ? (entry as { name: string }).name : ""))
+    .filter(Boolean);
 }
 
 /** The Page Studio build this host runs (pagestudio.skills), compared with $MARSHAL_PAGE_STUDIO_HASH when set. */
@@ -466,7 +475,7 @@ export async function pageStudioBuild(
   env: Readonly<Record<string, string | undefined>> | undefined,
   log: (line: string) => void,
 ): Promise<PageStudioBuild> {
-  let skills: { version?: unknown; contentHash?: unknown } | undefined;
+  let skills: { version?: unknown; contentHash?: unknown; skills?: unknown } | undefined;
   try {
     skills = await call("pagestudio.skills", {});
   } catch (error) {
@@ -476,6 +485,7 @@ export async function pageStudioBuild(
   const build: PageStudioBuild = {
     ...(typeof skills?.version === "string" ? { version: skills.version } : {}),
     ...(typeof skills?.contentHash === "string" ? { contentHash: skills.contentHash } : {}),
+    ...(Array.isArray(skills?.skills) ? { skills: skillNames(skills.skills) } : {}),
   };
   const expected = (env ?? process.env)[PAGE_STUDIO_HASH_ENV]?.trim();
   if (expected && build.contentHash && expected !== build.contentHash) {
@@ -561,6 +571,7 @@ async function resolveChrome(): Promise<string | undefined> {
     // Playwright has no Chromium installed for this platform.
   }
   if (process.platform === "darwin") candidates.unshift("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+  if (process.platform === "linux") candidates.push("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable");
   const present = candidates.filter((candidate) => candidate && fs.existsSync(candidate));
   for (const candidate of present) if (await answersPipe(candidate)) return candidate;
   return present[0];
