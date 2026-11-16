@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import type { QueryFn } from "./agent-port.js";
 import type { KitOptions, SessionsPublishOptions } from "./kit/index.js";
 import { cloudRunLayer } from "./prompt-cloud.js";
+import { desktopSurface } from "./prompt-desktop.js";
 import { turnSessions, writeRunLogs, type RunSummaryJson } from "./run-contract.js";
 import { escapeRegExp, finishPage, markSections, type FinishedPage } from "./page-finish.js";
 
@@ -966,7 +967,8 @@ function runPrompt(
   const parts = new Set(hostKit(options.kit, options.publish).kit?.parts ?? []);
   const startedBy = options.startedBy ?? process.env.MARSHAL_SDK_STARTED_BY;
   const stateLocation = options.stateLocation ?? process.env.MARSHAL_SDK_STATE_LOCATION;
-  return cloudRunLayer({
+  // The desktop's own prompt words (the `marshal` profile renders what a desktop agent gets), with this run's host facts on top.
+  return { ...cloudRunLayer({
     job,
     purpose: run.purpose,
     contract: run.contract,
@@ -974,7 +976,7 @@ function runPrompt(
     ...(options.runLabel ? { runId: options.runLabel } : {}),
     ...(startedBy ? { startedBy } : {}),
     ...(stateLocation ? { stateLocation } : {}),
-  });
+  }), surface: desktopSurface() };
 }
 
 /** The host's kit: the parts asked for, plus the Brain and sessions when the run publishes its sessions. */
