@@ -56,17 +56,47 @@ type ToolResult = { content: unknown[]; isError?: boolean; structuredContent?: u
 interface Connection {
   signature: string;
   client: Promise<Client>;
+  inFlight: number;
+  idle?: ReturnType<typeof setTimeout>;
 }
 
 /**
- * One MCP client per remote session, opened at the session's first runtime call and closed when its turn settles, its
- * process closes or the host closes (the next call opens a fresh one). A changed RemoteRuntime (a relaunch on another
- * address) replaces the connection.
+ * One MCP client (one remote child, e.g. one ssh) per remote session, opened at the session's first runtime call and
+ * kept across its turns. It closes with the session: its live process closes, the host closes, or nothing called it for
+ * `idleMs` while no turn ran (default 10 minutes; the next call opens a fresh one). A changed RemoteRuntime (a relaunch
+ * on another address) replaces the connection.
  */
 export class RemoteRuntimeClients {
   private readonly connections = new Map<string, Connection>();
 
-  constructor(private readonly log: (line: string) => void = () => undefined) {}
+  constructor(
+    private readonly log: (line: string) => void = () => undefined,
+    private readonly idleMs = 10 * 60_000,
+  ) {}
+
+  /** The session's turn ended: its connection closes after idleMs unless it is used again. */
+  idle(sessionId: string): void {
+    const connection = this.connections.get(sessionId);
+    if (!connection || connection.inFlight > 0) return;
+    if (connection.idle) clearTimeout(connection.idle);
+    connection.idle = setTimeout(() => {
+      if (this.connections.get(sessionId) === connection && connection.inFlight === 0) void this.close(sessionId);
+    }, this.idleMs);
+    connection.idle.unref?.();
+  }
+
+  private async use<T>(sessionId: string, remote: RemoteRuntime, run: (client: Client) => Promise<T>): Promise<T> {
+    const client = this.connect(sessionId, remote);
+    const connection = this.connections.get(sessionId)!;
+    if (connection.idle) clearTimeout(connection.idle);
+    connection.idle = undefined;
+    connection.inFlight += 1;
+    try {
+      return await run(await client);
+    } finally {
+      connection.inFlight -= 1;
+    }
+  }
 
   private connect(sessionId: string, remote: RemoteRuntime): Promise<Client> {
     const signature = JSON.stringify([remote.command, remote.args ?? [], remote.env ?? {}, remote.cwd ?? ""]);
@@ -92,24 +122,23 @@ export class RemoteRuntimeClients {
       if (this.connections.get(sessionId)?.client === client) this.connections.delete(sessionId);
       this.log(`remote runtime ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
     });
-    this.connections.set(sessionId, { signature, client });
+    this.connections.set(sessionId, { signature, client, inFlight: 0 });
     return client;
   }
 
   async callTool(sessionId: string, remote: RemoteRuntime, name: string, args: unknown): Promise<ToolResult> {
-    const client = await this.connect(sessionId, remote);
-    return (await client.callTool({ name, arguments: (args ?? {}) as Record<string, unknown> }, undefined, { timeout: 15 * 60_000 })) as ToolResult;
+    return this.use(sessionId, remote, async (client) => (await client.callTool({ name, arguments: (args ?? {}) as Record<string, unknown> }, undefined, { timeout: 15 * 60_000 })) as ToolResult);
   }
 
   async readResource(sessionId: string, remote: RemoteRuntime, uri: string): Promise<{ contents: { uri: string; text?: string }[] }> {
-    const client = await this.connect(sessionId, remote);
-    return (await client.readResource({ uri })) as { contents: { uri: string; text?: string }[] };
+    return this.use(sessionId, remote, async (client) => (await client.readResource({ uri })) as { contents: { uri: string; text?: string }[] });
   }
 
   async close(sessionId: string): Promise<void> {
     const connection = this.connections.get(sessionId);
     if (!connection) return;
     this.connections.delete(sessionId);
+    if (connection.idle) clearTimeout(connection.idle);
     try {
       await (await connection.client).close();
     } catch {

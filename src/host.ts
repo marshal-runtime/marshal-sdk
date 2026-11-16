@@ -386,8 +386,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       if (typeof payload.sessionId === "string") publisher?.schedule(payload.sessionId);
       if (typeof payload.sessionId === "string") runRecords?.schedule(payload.sessionId);
       if (typeof payload.sessionId === "string" && (type === "session.idle" || type === "session.failed")) orgStore?.schedule(payload.sessionId);
-      // A remote session's runtime connection ends with its turn; its next runtime call opens a fresh one.
-      if (typeof payload.sessionId === "string" && (type === "session.idle" || type === "session.failed")) void remoteClients.close(payload.sessionId);
+      // A remote session keeps its runtime connection across turns; between turns it closes after the idle period.
+      if (typeof payload.sessionId === "string" && (type === "session.idle" || type === "session.failed")) remoteClients.idle(payload.sessionId);
       try {
         options.onSessionEvent?.(type, payload);
       } catch (error) {
