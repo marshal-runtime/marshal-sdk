@@ -12,7 +12,7 @@ import { createRuntimeServiceContainer } from "@marshal/runtime/host";
 import { createRuntimeToolAdapter, RUNTIME_MCP_TOOLS } from "@marshal/runtime/mcp";
 import { z } from "zod";
 
-import { ClaudeAgentPort, type QueryFn } from "./agent-port.js";
+import { ClaudeAgentPort, type AgentPortOptions, type QueryFn } from "./agent-port.js";
 import { marshalProviderTools, PROVIDER_TOOLS, resolveProvider, type ProviderSelection } from "./provider-selection.js";
 import { callerSessionId, createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
 import { createAutomationsProvider, HostAutomations, type AgentExtensionSource, type AutomationStore, type HostAutomationsOptions, type JobHandler } from "./automations.js";
@@ -152,6 +152,12 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * org store's bucket, else in the state folder. scopes says which scopes a session reads (Marley: brand, person).
    */
   memory?: MemoryOptions;
+  /**
+   * Launch options for every turn of a session, rebuilt by the embedder for each turn (the port's `launchOptionsFor`): a remote spawner
+   * (`spawnClaudeCodeProcess`, Claude Code on another machine), its cwd and env, tool lists, and `hostMcpServers: false` when the
+   * session's tools are served elsewhere. A session adopted after a restart runs behind them too.
+   */
+  launchOptionsFor?: AgentPortOptions["launchOptionsFor"];
 }
 
 /** The org bridge without what the host supplies; `host` defaults to the host's id. */
@@ -328,6 +334,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     ...(options.settings ? { settings: () => options.settings!.read() } : {}),
     workspaceName: path.basename(workspacePath),
     systemPrompt: (session) => prompts?.forSession(session),
+    ...(options.launchOptionsFor ? { launchOptionsFor: options.launchOptionsFor } : {}),
     prepareTurn: (session) => memory.warm(session, log),
     mcpServers: (session) => serversFor(session),
     log,
