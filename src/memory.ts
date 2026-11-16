@@ -281,6 +281,7 @@ const RECORD_OUTPUT = {
     createdAt: { type: "string" },
     alwaysOn: { type: "boolean" },
   },
+  additionalProperties: false,
 } as const;
 
 const MEMORY_TOOLS = {
@@ -300,19 +301,19 @@ const MEMORY_TOOLS = {
         alwaysOn: { type: "boolean" },
       },
     },
-    output: { type: "object", properties: { success: { type: "boolean" }, memory: RECORD_OUTPUT } },
+    output: { type: "object", properties: { success: { type: "boolean" }, memory: RECORD_OUTPUT }, additionalProperties: false },
   },
   recall: {
     title: "Recall memories",
     description: "Find saved memories of this session's scopes by words, best first.",
     input: { type: "object", required: ["query"], properties: { query: { type: "string", maxLength: 2000 }, limit: { type: "integer", minimum: 1, maximum: 50 } } },
-    output: { type: "object", properties: { success: { type: "boolean" }, scopes: { type: "array", items: { type: "string" } }, memories: { type: "array", items: RECORD_OUTPUT } } },
+    output: { type: "object", properties: { success: { type: "boolean" }, scopes: { type: "array", items: { type: "string" } }, memories: { type: "array", items: RECORD_OUTPUT } }, additionalProperties: false },
   },
   forget: {
     title: "Forget a memory",
     description: "Remove a saved memory by id (from recall or the memory block).",
     input: { type: "object", required: ["id"], properties: { id: { type: "string", minLength: 1, maxLength: 200 } } },
-    output: { type: "object", properties: { success: { type: "boolean" }, error: { type: "string" } } },
+    output: { type: "object", properties: { success: { type: "boolean" }, error: { type: "string" } }, additionalProperties: false },
   },
 } as const;
 
