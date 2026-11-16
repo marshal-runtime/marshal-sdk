@@ -16,6 +16,7 @@ export {
   publishOptions,
   runOrigin,
   shareAccess,
+  splitTitle,
   shareParts,
   sharePayload,
   type FoundSession,

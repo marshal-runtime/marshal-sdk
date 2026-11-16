@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import type { InvocationContext } from "@marshal/runtime";
 
-import { createSessionsProvider, runOrigin, type CapabilityCall } from "../src/kit/index.js";
+import { createSessionsProvider, runOrigin, splitTitle, type CapabilityCall } from "../src/kit/index.js";
 import { FileSessionStore } from "../src/session-store.js";
 
 const context = { principal: { id: "test", kind: "agent" }, scope: { sessionId: "s", workspacePath: "/w" } } as unknown as InvocationContext;
@@ -90,4 +90,17 @@ test("cloud hits from sessions.search carry the run and state a published sessio
   assert.equal(answer.results[1]!.runId, undefined);
   assert.equal(answer.results[1]!.stateLocation, undefined);
   assert.deepEqual(runOrigin("no line here"), {});
+});
+
+test("a cloud hit reads its run from the title when the snippet came from a later message, and shows the plain title", async () => {
+  const own = tempStore("run-1");
+  const call: CapabilityCall = async () => ({
+    hits: [{ sessionId: "c", source: "marshal", title: "Page Studio fast hands · agent-sandbox run page-edit-1 · state gs://bucket/conv/1/marshal-state/", snippet: "replace the hero text" }],
+  });
+  const provider = createSessionsProvider(own.store, call);
+  const answer = (await out(provider.invoke("sessions.search", { query: "hero", scope: "cloud" }, context))) as { results: Record<string, unknown>[] };
+  assert.equal(answer.results[0]!.title, "Page Studio fast hands");
+  assert.equal(answer.results[0]!.runId, "page-edit-1");
+  assert.equal(answer.results[0]!.stateLocation, "gs://bucket/conv/1/marshal-state/");
+  assert.deepEqual(splitTitle("Rerun · notes"), { title: "Rerun · notes" });
 });

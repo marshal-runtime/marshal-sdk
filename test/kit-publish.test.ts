@@ -34,6 +34,11 @@ test("sharePayload carries tool calls (name and input) on the assistant message 
   const payload = sharePayload(store.get(session.id)!, store, { context: "agent-sandbox run 812 · state gs://bucket/run-812/agent/marshal-state/" });
   assert.equal(payload.source, "marshal");
   assert.equal(payload.messages[0]!.text, "agent-sandbox run 812 · state gs://bucket/run-812/agent/marshal-state/\n\nbuild the RAWDOG page");
+  assert.equal(payload.title, "Page build · agent-sandbox run 812 · state gs://bucket/run-812/agent/marshal-state/");
+  assert.equal(sharePayload(store.get(session.id)!, store).title, "Page build");
+  const long = sharePayload({ ...store.get(session.id)!, title: "x".repeat(600) }, store, { context: "agent-sandbox run 812 · state gs://b/" });
+  assert.equal(long.title.length, 500);
+  assert.ok(long.title.endsWith(" · agent-sandbox run 812 · state gs://b/"));
   assert.equal(payload.messages[0]!.tools, undefined);
   const tools = payload.messages[1]!.tools!;
   assert.deepEqual(tools.map((tool) => tool.name), ["mcp__marshal__runtime_exec", "Read"]);

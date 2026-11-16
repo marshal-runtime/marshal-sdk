@@ -314,11 +314,12 @@ export function sharePayload(session: SessionRecord, store: FileSessionStore, op
     if (last) last.tools = [...(last.tools ?? []), ...calls.slice(next).map((call) => call.tool)].slice(-MAX_TOOLS_PER_MESSAGE);
   }
   const first = messages.find((message) => message.role === "user");
-  if (options.context?.trim() && first) first.text = `${options.context.trim()}\n\n${first.text}`.slice(0, MAX_MESSAGE_CHARS);
+  const context = options.context?.trim();
+  if (context && first) first.text = `${context}\n\n${first.text}`.slice(0, MAX_MESSAGE_CHARS);
   return {
     id: session.id,
     source: "marshal",
-    title: session.title.slice(0, 500),
+    title: titleWithContext(session.title, context),
     ...(session.workspace ? { workspace: session.workspace } : {}),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -395,6 +396,27 @@ export function runOrigin(text: string): { runId?: string; stateLocation?: strin
   return { ...(run ? { runId: run } : {}), ...(state ? { stateLocation: state } : {}) };
 }
 
+const MAX_TITLE_CHARS = 500;
+const CONTEXT_SEPARATOR = " · ";
+
+/**
+ * The title is the one field every cloud search hit returns (the Brain's shared session has no metadata), so the run
+ * context rides at its end and search reads it back from there, whichever message the snippet came from.
+ */
+function titleWithContext(title: string, context: string | undefined): string {
+  if (!context || !runOrigin(context).runId) return title.slice(0, MAX_TITLE_CHARS);
+  const room = MAX_TITLE_CHARS - context.length - CONTEXT_SEPARATOR.length;
+  return room > 0 ? `${title.slice(0, room)}${CONTEXT_SEPARATOR}${context}` : title.slice(0, MAX_TITLE_CHARS);
+}
+
+/** A shared title split back into what a person reads and the run context titleWithContext appended. */
+export function splitTitle(title: string): { title: string; runId?: string; stateLocation?: string } {
+  const origin = runOrigin(title);
+  if (!origin.runId) return { title };
+  const at = title.lastIndexOf(CONTEXT_SEPARATOR, title.lastIndexOf(`run ${origin.runId}${CONTEXT_SEPARATOR}`));
+  return { title: at > 0 ? title.slice(0, at) : title, ...origin };
+}
+
 function readResult(from: "this-host" | "local-store" | "cloud-state", location: string, session: SessionRecord | undefined, messages: TranscriptMessage[], tail: number) {
   const shown = messages.slice(-tail).map((message) => ({
     role: message.role,
@@ -455,13 +477,14 @@ function cloudHit(hit: Record<string, any>): FoundSession {
   const owner = text(hit.owner);
   const createdAt = text(hit.created ?? hit.createdAt);
   const updatedAt = text(hit.updated ?? hit.updatedAt);
-  const origin = runOrigin(String(hit.snippet ?? ""));
+  const { title, ...fromTitle } = splitTitle(String(hit.title ?? "Untitled session"));
+  const origin = { ...runOrigin(String(hit.snippet ?? "")), ...fromTitle };
   return {
     ...origin,
     id: String(hit.sessionId ?? hit.id ?? ""),
     origin: "cloud",
     source: String(hit.source ?? "brain"),
-    title: String(hit.title ?? "Untitled session"),
+    title,
     ...(workspace ? { workspace } : {}),
     ...(owner ? { owner } : {}),
     ...(createdAt ? { createdAt } : {}),
