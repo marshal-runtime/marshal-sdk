@@ -4,7 +4,7 @@ import path from "node:path";
 
 import type { AgentLaunchRequest } from "./agent-port.js";
 import { DISABLED_NATIVE_TOOLS } from "./native-tools.js";
-import { composePromptLayers, parseLayerRef, resolvePromptLayers, type PromptLayerSources } from "./prompt-layers.js";
+import { checkLayerVars, composePromptLayers, parseLayerRef, resolvePromptLayers, type PromptLayerSources } from "./prompt-layers.js";
 
 /**
  * Agent entries an extension declares (`contributes.agents`): a whole agent run defined by the package, so a host can
@@ -43,6 +43,8 @@ export interface DeclaredProfile {
    * ahead of `prompt`. A persona's soul and shared rules are layers several profiles list instead of embedding.
    */
   layers?: string[];
+  /** Values filled into the layers' `{{name}}` placeholders (one pass; a name without a value stays as written). */
+  layerVars?: Record<string, string>;
   /** replace: the file is the whole system prompt; append: it is added after the host's. Default replace. */
   promptMode?: PromptMode;
   model?: string;
@@ -101,6 +103,8 @@ export interface ResolvedProfile {
   prompt: string;
   /** The layers composed into `prompt`, in order (absent when the profile lists none). */
   layers?: { ref: string; version: string; sha256: string }[];
+  /** The values filled into the layers (absent when the profile has none). */
+  layerVars?: Record<string, string>;
   promptMode: PromptMode;
   model?: string;
   effort?: string;
@@ -178,7 +182,7 @@ export function resolveAgent(
         extensions,
       )
     : undefined;
-  const prompt = layers ? composePromptLayers(layers, own) : (own as string);
+  const prompt = layers ? composePromptLayers(layers, own, declaredProfile.layerVars) : (own as string);
   const model = overrides.model ?? declaredProfile.model;
   const effort = overrides.effort ?? declaredProfile.effort;
   if (effort !== undefined && !(EFFORTS as readonly string[]).includes(effort)) fail(`effort "${effort}" is not one of ${EFFORTS.join(", ")}.`);
@@ -188,6 +192,7 @@ export function resolveAgent(
     agent: entry.id,
     prompt,
     ...(layers ? { layers: layers.map(({ ref, version, sha256 }) => ({ ref, version, sha256 })) } : {}),
+    ...(layers && declaredProfile.layerVars && Object.keys(declaredProfile.layerVars).length ? { layerVars: { ...declaredProfile.layerVars } } : {}),
     promptMode: declaredProfile.promptMode ?? "replace",
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
@@ -212,6 +217,7 @@ export function profileFingerprint(profile: ResolvedProfile): string {
     prompt: createHash("sha256").update(profile.prompt).digest("hex"),
     // Only a profile with layers carries this key, so the fingerprint of one without is what it always was.
     ...(profile.layers ? { layers: profile.layers.map(({ ref, version, sha256 }) => [ref, version, sha256]) } : {}),
+    ...(profile.layerVars ? { layerVars: Object.entries(profile.layerVars).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)) } : {}),
     promptMode: profile.promptMode,
     model: profile.model ?? null,
     effort: profile.effort ?? null,
@@ -318,10 +324,12 @@ function parseEntry(identity: string, root: string, value: unknown): AgentEntry 
   const profileRaw = raw.profile;
   if (!profileRaw || typeof profileRaw !== "object" || Array.isArray(profileRaw)) return fail(`${where} needs a profile.`);
   const p = profileRaw as Record<string, unknown>;
-  const known = new Set(["prompt", "layers", "promptMode", "model", "effort", "extensions", "skills", "nativeTools", "mcpServers", "context", "limits"]);
+  const known = new Set(["prompt", "layers", "layerVars", "promptMode", "model", "effort", "extensions", "skills", "nativeTools", "mcpServers", "context", "limits"]);
   for (const key of Object.keys(p)) if (!known.has(key)) fail(`${where}: profile field "${key}" is unknown${key === "tools" ? ' (capabilities come from "extensions", built-ins from "nativeTools")' : ""}.`);
   const layers = list(p.layers, LAYER_REF, `${where}: layers`);
   for (const ref of layers ?? []) parseLayerRef(ref);
+  const layerVars = checkLayerVars(p.layerVars, `${where}: layerVars`);
+  if (layerVars && !layers?.length) fail(`${where}: layerVars needs layers.`);
   if (p.prompt === undefined && !layers?.length) fail(`${where}: a profile needs a prompt file or prompt layers.`);
   const prompt = p.prompt === undefined ? undefined : String(p.prompt);
   if (prompt !== undefined) checkPackagePath(root, prompt, `${where} prompt`);
@@ -355,6 +363,7 @@ function parseEntry(identity: string, root: string, value: unknown): AgentEntry 
     profile: {
       ...(prompt !== undefined ? { prompt } : {}),
       ...(layers ? { layers } : {}),
+      ...(layerVars ? { layerVars } : {}),
       ...(p.promptMode ? { promptMode: p.promptMode as PromptMode } : {}),
       ...(typeof p.model === "string" ? { model: p.model.trim() } : {}),
       ...(p.effort ? { effort: p.effort as DeclaredProfile["effort"] } : {}),
