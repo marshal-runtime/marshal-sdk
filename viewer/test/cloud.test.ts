@@ -195,6 +195,24 @@ test("a run found in the org's session index (no pointer) is listed from its sta
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("a location the org index named stays listed when the index no longer answers", async () => {
+  const { gcs, pullRoot, dir } = setup();
+  const conv = path.join(gcs, "dev-bucket", "runs", "page-edit-conversations", "7");
+  const state = path.join(conv, "marshal-state");
+  const store = new FileSessionStore(path.join(state, "state", "sessions"), { runId: "page-edit-7-1-1", host: { id: "agent-sandbox", kind: "sandbox" } });
+  store.create({ title: "Page Studio fast hands", runtime: "claude", native: { kind: "claude", cwd: "/x", configDir: "/y", sessionId: "7c1c8d9e-0000-4000-8000-000000000001" } });
+  fs.writeFileSync(path.join(state, "run.json"), JSON.stringify({ schemaVersion: 1, runId: "page-edit-7-1-1", title: "edits", status: "done" }));
+  const location = "gs://dev-bucket/runs/page-edit-conversations/7/marshal-state";
+  const first = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot, async () => [location]);
+  assert.ok((await first.cloudRuns(true)).some((run) => run.outputRoot.endsWith("page-edit-conversations/7")));
+  // A new host (the extension reinstalled) whose index is down still lists it.
+  const second = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot, async () => {
+    throw new Error("kit host down");
+  });
+  assert.ok((await second.cloudRuns(true)).some((run) => run.outputRoot.endsWith("page-edit-conversations/7")));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("agent-sandbox's runner layout (host/sessions, page-studio/, page-run.json, sandbox-page.html) lists, opens and takes a push", async () => {
   const { gcs, pullRoot, dir } = setup();
   const root = path.join(gcs, "dev-bucket", "runs", "sandbox-902");

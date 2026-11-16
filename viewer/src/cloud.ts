@@ -298,7 +298,27 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: (
     if (listing) return listing;
     listing = (async () => {
       fs.mkdirSync(cacheRoot, { recursive: true });
-      const roots = await listRoots(config, discover().catch(() => []));
+      // Locations the org index named are remembered on this Mac: the kit host that serves the index can be down or restarted.
+      const known = path.join(home(pullRoot), `cloud-discovered-${config.id}.json`);
+      const remembered = (): string[] => {
+        try {
+          const rows = JSON.parse(fs.readFileSync(known, "utf8")) as unknown;
+          return Array.isArray(rows) ? rows.filter((row): row is string => typeof row === "string") : [];
+        } catch {
+          return [];
+        }
+      };
+      const discovered = discover()
+        .catch(() => [] as string[])
+        .then((found) => {
+          const all = [...new Set([...remembered(), ...found.map(trim)])];
+          if (all.length > remembered().length) {
+            fs.mkdirSync(path.dirname(known), { recursive: true });
+            fs.writeFileSync(known, JSON.stringify(all, null, 2));
+          }
+          return all;
+        });
+      const roots = await listRoots(config, discovered);
       const runs = await pool(roots, 12, ({ root, marshal }) => describe(root, marshal));
       listed = runs;
       syncedAt = Date.now();
