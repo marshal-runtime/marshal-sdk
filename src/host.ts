@@ -38,6 +38,7 @@ import { createHostPrompts, sdkBaseLayer, type HostPromptOptions, type HostPromp
 import { SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { SessionPublisher } from "./kit/publisher.js";
+import { OrgStore, type OrgStoreOptions, type OrgTranscriptOptions } from "./org-store/index.js";
 import { RunRecordsPublisher, type RunRecordsOptions } from "./run-records.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
 import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
@@ -127,11 +128,12 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    */
   runRecords?: Omit<RunRecordsOptions, "store">;
   /**
-   * Where this host keeps its sessions. Default: files under `stateRoot` (one machine). A cloud store
-   * (`CloudSessionStore.open`, docs/cloud-sessions.md) keeps them in Postgres and an object store for every host of a
-   * tenant, with the backend's transcripts, so a session resumes on any machine. Called once with this run's origin.
+   * The Zyg org's session store (docs/org-session-storage.md): each root session is published to GCS under
+   * `sdk/v1/<workspace>/<impl>/<partition>/<day>/<root>/` with an index row, and the backend's transcripts go there
+   * through the Agent SDK `sessionStore`, straight to the bucket. Writes happen after a session goes idle, never inside a turn.
+   * `isCurrent` says when this machine already holds a native session's transcript, so a resume reads nothing from the cloud.
    */
-  sessionStore?: (origin: { runId: string; host: { id: string; kind: string } }) => SessionStore;
+  orgStore?: Omit<OrgStoreOptions, "log"> & { isCurrent?: OrgTranscriptOptions["isCurrent"] };
   /** Which provider answers each non-chat model service: decide, embed, speech (docs/models.md). */
   models?: ModelsConfig;
   /** Test hook: the HTTP client model services use. */
@@ -263,7 +265,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const runId = options.runId ?? randomUUID();
   const hostSessionId = `host-${runId}`;
   const origin = { runId, host: options.host ?? { id: HARNESS_ID, kind: "local" } };
-  const sessions: SessionStore = options.sessionStore ? options.sessionStore(origin) : new FileSessionStore(path.join(stateRoot, SESSIONS_DIRECTORY), origin);
+  const sessions: SessionStore = new FileSessionStore(path.join(stateRoot, SESSIONS_DIRECTORY), origin);
+  const orgStore = options.orgStore ? new OrgStore({ log, ...options.orgStore }, sessions, options.orgStore.isCurrent) : undefined;
+  if (orgStore) sessions.transcripts = orgStore.transcripts;
   const runRecordsPublisher = options.runRecords ? new RunRecordsPublisher({ log, ...options.runRecords, store: sessions }) : undefined;
   const kitOptions = normalizeKit(options.kit);
   const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath }) : undefined;
@@ -308,6 +312,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       automations?.emit(type, payload).catch((error: unknown) => log(`automations on ${type}: ${String(error)}`));
       if (typeof payload.sessionId === "string") publisher?.schedule(payload.sessionId);
       if (typeof payload.sessionId === "string") runRecords?.schedule(payload.sessionId);
+      if (typeof payload.sessionId === "string" && (type === "session.idle" || type === "session.failed")) orgStore?.schedule(payload.sessionId);
     },
   });
   automations = new HostAutomations({
@@ -734,6 +739,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       settingsSubscription?.();
       await publisher?.flush();
       await runRecords?.close();
+      await orgStore?.close();
       await hostAutomations.stop();
       await decisions.stop();
       await link?.close();

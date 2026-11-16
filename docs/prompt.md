@@ -107,3 +107,13 @@ overnight tracking folder (`reports/marshal-sdk/lane-b/prompt-*.md`).
 | Your role | worker | worker (Page Studio's own task text sets each agent's job) |
 | — | — | **This run**: job, run id, starter, run contract (out/, logs/), state location, published sessions, no messages to people |
 | — | — | **Page Studio on this host** (only when `pageStudio` is set; `page-run` and `page-edit` leave it off, because Page Studio itself decides the process) |
+
+## Prompt layers from extensions
+
+An extension can contribute named pieces of system prompt (`contributes.promptLayers: [{ id, file }]`, files inside the package, 256 KB each). A layer is named `<extension identity>#<id>`, for example `@marley/persona#soul`.
+
+An agent profile composes its system prompt from layers: `profile.layers` lists them in the order they are joined (a blank line between pieces), and the profile's own `prompt` file, when it has one, comes last. `prompt` is optional when `layers` is given. A layer's extension must be one of the profile's `extensions` (its own package always is); an unknown layer, an extension that is not installed or one out of scope refuses the resolve. `resolveAgent(packageRoot, agentId, overrides, layerSources)` finds the packages through `layerSources` (identity to package root, or a function); `HostAutomations` passes its `extensions` source.
+
+The profile fingerprint carries the ordered `(layer, extension version, sha256)` list when there are layers, so a changed word in a shared layer changes every profile that composes it. A profile without layers keeps the fingerprint it always had.
+
+A host launch that is not an agent entry (a chat whose prompt the host assembles per turn) uses `resolvePromptLayers(refs, sources, scope?)` and `composePromptLayers(layers, ownText?)` directly and adds its host-filled text after the layers.

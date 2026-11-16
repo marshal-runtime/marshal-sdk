@@ -134,9 +134,9 @@ const slug = (value: string, max: number) => value.replace(NAME_PART, "-").repla
 
 /** The labels a run row may carry: ids and keys a reader filters by. Anything else on a session stays on the host. */
 export const RUN_LABEL_KEYS = ["procedure", "brand", "conversation", "channel", "kind", "extension", "extensionVersion", "agent", "profile", "automation", "trigger"] as const;
-const LABEL_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/;
+export const LABEL_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/;
 /** An extension identity ("@scope/name") is the one label value that may start with "@" and hold one "/". */
-const EXTENSION_VALUE = /^@?[a-z0-9][a-z0-9._-]{0,63}(\/[a-z0-9][a-z0-9._-]{0,63})?$/;
+export const EXTENSION_VALUE = /^@?[a-z0-9][a-z0-9._-]{0,63}(\/[a-z0-9][a-z0-9._-]{0,63})?$/;
 
 /**
  * The default grouping: a root session's labels name its run. `procedure` (or `workflow`) is the workflow; `brand` and
