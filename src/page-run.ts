@@ -144,6 +144,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   let reply = "";
   let shots: unknown[] = [];
   let usedSkills: string[] = [];
+  let profiles: unknown[] = [];
   const warnings: string[] = [];
   let build: PageStudioBuild = {};
   try {
@@ -196,6 +197,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     const done = await followActivity(call, created.activity.id, (step) => log(`step: ${step} (${host.agents.list().length} sessions so far)`));
     reply = String(done.reply ?? "");
     usedSkills = activitySkills(done);
+    profiles = activityProfiles(done);
     warnings.push(...activityWarnings(done));
     const rendered = await call("pagestudio.render", { pageId });
     const htmlFile = rendered.path ?? rendered.file;
@@ -234,6 +236,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
       boardId,
       pageId,
       pageStudio: build,
+      profiles,
       reply,
       sections: finished?.sections ?? [],
       assets: finished?.assets.length ?? 0,
@@ -364,6 +367,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   let shots: unknown[] = [];
   let shotsError: string | undefined;
   let usedSkills: string[] = [];
+  let profiles: unknown[] = [];
   const editWarnings: string[] = [];
   let build: PageStudioBuild = {};
   try {
@@ -382,6 +386,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     reply = String(done.reply ?? "");
     route = done.route ?? done.tier ?? done.routedBy;
     usedSkills = activitySkills(done);
+    profiles = activityProfiles(done);
     editWarnings.push(...activityWarnings(done));
     const rendered = await call("pagestudio.render", { pageId });
     finished = finishPage(fs.readFileSync(rendered.path ?? rendered.file, "utf8"), { libraryRoot: path.join(studioDir, "library"), outDir: out });
@@ -407,7 +412,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     error: failure,
     requiredSkills: [],
     usedSkills,
-    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, request: options.request, route, reply, skills: usedSkills, sections: finished?.sections ?? [], shots, ...(editWarnings.length || shotsError ? { warnings: [...editWarnings, ...(shotsError ? [shotsError] : [])] } : {}) },
+    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, profiles, request: options.request, route, reply, skills: usedSkills, sections: finished?.sections ?? [], shots, ...(editWarnings.length || shotsError ? { warnings: [...editWarnings, ...(shotsError ? [shotsError] : [])] } : {}) },
   });
   if (record) {
     writePageRunRecord(state, { ...record, edits: [...(record.edits ?? []), { at: new Date().toISOString(), request: options.request, runId: host.runId, ...(failure ? { error: failure } : {}) }] });
@@ -491,6 +496,14 @@ export async function followActivity(
  */
 export function activitySkills(activity: { skills?: unknown }): string[] {
   return Array.isArray(activity.skills) ? [...new Set(activity.skills.map(String))] : [];
+}
+
+/**
+ * The launch fingerprints Page Studio recorded (activity.profiles): per agent role, one hash over its system prompt, MCP
+ * servers, skills, model and effort. Two hosts running the same build print the same hashes.
+ */
+export function activityProfiles(activity: { profiles?: unknown }): unknown[] {
+  return Array.isArray(activity.profiles) ? [...activity.profiles] : [];
 }
 
 /** What Page Studio's finished activity warns about (skipped critic rounds and the like), each logged once. */
