@@ -244,3 +244,22 @@ export {
   type PermissionPromptResult,
   type PermissionsConfig,
 } from "./permissions.js";
+export {
+  checkRelativePath,
+  ExtensionRegistry,
+  FileExtensionRegistryStore,
+  hashExtensionFiles,
+  RegistryConflict,
+  RegistryRefusal,
+  RELEASE_TENANT,
+  type ExtensionAuthor,
+  type ExtensionFiles,
+  type ExtensionRegistryOptions,
+  type ExtensionRegistryStore,
+  type ExtensionVersion,
+  type ExtensionVersionRef,
+  type ExtensionVersionStatus,
+  type ResolvedExtension,
+  type RoutineBinding,
+  type RunPin,
+} from "./extension-registry.js";
