@@ -26,7 +26,7 @@ const MAX_ENTRIES = 32;
 const MAX_LIST = 64;
 const MAX_PROMPT_BYTES = 262_144;
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-const OUTPUT_KINDS = ["file", "artifact", "reply-intent", "alert-intent", "proposal"] as const;
+const OUTPUT_KINDS = ["file", "artifact", "reply-intent", "alert-intent", "proposal", "memory"] as const;
 
 export type PromptMode = "replace" | "append";
 
