@@ -180,7 +180,7 @@ export interface PageVersionFiles {
 }
 
 /** The page record, preview and pictures a run has for a page without versions; undefined when it has no such page. */
-export async function legacyPage(root: string, state: string, id: string): Promise<PageVersionFiles | undefined> {
+export async function legacyPage(root: string, state: string, id: string, options: { preview?: boolean } = {}): Promise<PageVersionFiles | undefined> {
   if (!isSafeId(id)) return undefined;
   let doc: Row | undefined;
   let studio = "";
@@ -193,7 +193,8 @@ export async function legacyPage(root: string, state: string, id: string): Promi
     }
   }
   if (!doc) return undefined;
-  const preview = await gcsRead(`${trim(root)}/preview/index.html`);
+  // The run's preview is its landing page's; a brand board or any other page of the run has none of its own.
+  const preview = options.preview === false ? undefined : await gcsRead(`${trim(root)}/preview/index.html`);
   const wanted = picturesOfPage(doc);
   const images = new Map((await gcsList(`${trim(root)}/images`)).map((item) => [item.uri.split("/").pop()!, item.size]));
   const pictures: PictureEntry[] = [];
@@ -271,7 +272,7 @@ export async function commitPageVersion(input: CommitInput): Promise<CommitResul
     if (was) previous = JSON.parse(was.data.toString("utf8")) as PictureEntry[];
   } else {
     if (input.baseVersion !== 0) return moved(0, input.baseVersion);
-    const legacy = await legacyPage(root, input.state, input.id);
+    const legacy = await legacyPage(root, input.state, input.id, { preview: input.kind === "landing-page" });
     if (legacy) {
       const entry = await writeVersion(base, 1, legacy, { at: now().toISOString(), by: { name: "build" }, summary: "The page as the run built it", docVersion: Number(legacy.doc.version ?? 0) });
       entries.push(entry);
@@ -324,7 +325,7 @@ export async function seedArtifact(input: { root: string; state: string; app: st
   const root = trim(input.root);
   const existing = await readArtifactManifest(root, input.app, input.id);
   if (existing.manifest) return { manifest: existing.manifest, created: false };
-  const legacy = await legacyPage(root, input.state, input.id);
+  const legacy = await legacyPage(root, input.state, input.id, { preview: input.kind === "landing-page" });
   if (!legacy) return undefined;
   const base = artifactDir(root, input.app, input.id);
   const entry = await writeVersion(base, 1, legacy, { at: (input.now ?? (() => new Date()))().toISOString(), by: { name: "build" }, summary: "The page as the run built it", docVersion: Number(legacy.doc.version ?? 0) });

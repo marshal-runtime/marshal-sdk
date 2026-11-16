@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 
-import { manifestProblems, readArtifactManifest } from "../src/artifacts";
+import { manifestProblems, readArtifactManifest, readVersion } from "../src/artifacts";
 import { backfillRun } from "../src/backfill";
 import { fakeBucket } from "./fake-gcs";
 
@@ -22,6 +22,8 @@ test("backfill gives an old run its manifest v1 and version 1 of its page and bo
   fs.mkdirSync(path.join(state, "host", "sessions", "s1"), { recursive: true });
   fs.writeFileSync(path.join(state, "host", "sessions", "index.json"), JSON.stringify([{ id: "s1", title: "Page Studio · build" }]));
   fs.writeFileSync(path.join(state, "host", "sessions", "s1", "events.jsonl"), "{}\n");
+  fs.mkdirSync(path.join(root, "preview"), { recursive: true });
+  fs.writeFileSync(path.join(root, "preview", "index.html"), "<html>landing</html>");
   const original = { schemaVersion: 1, runId: "900014", title: "Aura", brand: "Hey Mila", startedBy: "omer@zyg.com", status: "done", costUsd: 20.6, depth: "single", pageId: "b--page", boardId: "b--board" };
   fs.writeFileSync(path.join(state, "run.json"), JSON.stringify(original));
   const uri = "gs://dev-bucket/runs/900014";
@@ -39,6 +41,13 @@ test("backfill gives an old run its manifest v1 and version 1 of its page and bo
   assert.deepEqual(written.sessions.map((s: any) => [s.id, s.role, s.hasEnvelope]), [["s1", "Page Studio · build", false]]);
   assert.deepEqual(written.artifacts.map((a: any) => [a.id, a.current]), [["b--page", 1], ["b--board", 1]]);
   assert.equal((await readArtifactManifest(uri, "page", "b--page")).manifest?.versions[0]?.docVersion, 7);
+  // The run's preview belongs to its landing page, not to the brand board.
+  const versionOf = async (id: string) => {
+    const { manifest } = await readArtifactManifest(uri, "page", id);
+    return readVersion(uri, "page", id, manifest!.versions[0]!);
+  };
+  assert.match((await versionOf("b--page")).previewHtml, /landing/);
+  assert.equal((await versionOf("b--board")).previewHtml, "");
 
   const again = await backfillRun({ root: uri });
   assert.deepEqual(again.artifacts.map((a) => a.created), [false, false]);
