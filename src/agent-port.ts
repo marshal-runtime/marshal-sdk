@@ -91,6 +91,8 @@ export interface AgentSummary {
    */
   eventCount?: number;
   lastEventAt?: string;
+  /** The tools, MCP servers and skills the backend reported for the session (observed, from its init event). */
+  environment?: { tools: string[]; mcpServers: string[]; skills: string[] };
   /** modelTurns: the backend's own count of model round trips (the SDK's num_turns), summed over turns. */
   usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number; costUsd: number; modelTurns?: number };
 }
@@ -750,6 +752,7 @@ export class ClaudeAgentPort {
     store.appendEvent(agent.id, slim(event));
     if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
       store.update(agent.id, { native: { ...this.session(agent.id).native, sessionId: event.session_id } });
+      store.setEnvironment(agent.id, environmentOf(event));
     } else if (event.type === "assistant" && !event.parent_tool_use_id) {
       const text = textOf(event.message?.content);
       if (text) acc.lastText = text;
@@ -1142,4 +1145,12 @@ function slim(value: unknown, depth = 0): unknown {
     return { ...record, data: `[${record.data.length} base64 chars]` };
   }
   return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, slim(item, depth + 1)]));
+}
+
+const names = (list: unknown, key?: string): string[] =>
+  (Array.isArray(list) ? list : []).map((entry) => String(key && entry && typeof entry === "object" ? (entry as Record<string, unknown>)[key] : entry)).sort();
+
+/** The tools, MCP servers and skills a backend's init event lists, as sorted names. */
+export function environmentOf(init: { tools?: unknown; mcp_servers?: unknown; skills?: unknown }): { tools: string[]; mcpServers: string[]; skills: string[] } {
+  return { tools: names(init.tools), mcpServers: names(init.mcp_servers, "name"), skills: names(init.skills) };
 }

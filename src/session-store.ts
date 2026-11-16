@@ -129,10 +129,18 @@ const EMPTY_USAGE: SessionUsage = {
  * `transcript.jsonl` (what a person reads) and `events.jsonl` (every backend message, tool calls included).
  * One writer per directory; readers may open it at any time because the index is replaced atomically.
  */
+/** The names the backend's init event lists: observed, not requested. */
+export interface SessionEnvironment {
+  tools: string[];
+  mcpServers: string[];
+  skills: string[];
+}
+
 export class FileSessionStore {
   private readonly records = new Map<string, SessionRecord>();
   private readonly counts = new Map<string, number>();
   private readonly lastEventAt = new Map<string, string>();
+  private readonly environments = new Map<string, SessionEnvironment>();
 
   constructor(
     readonly root: string,
@@ -262,9 +270,15 @@ export class FileSessionStore {
   }
 
   /** How far a session's backend has got in this process: events appended and when the latest one came. */
-  activity(id: string): { eventCount: number; lastEventAt?: string } {
+  activity(id: string): { eventCount: number; lastEventAt?: string; environment?: SessionEnvironment } {
     const lastEventAt = this.lastEventAt.get(id);
-    return { eventCount: this.counts.get(id) ?? 0, ...(lastEventAt ? { lastEventAt } : {}) };
+    const environment = this.environments.get(id);
+    return { eventCount: this.counts.get(id) ?? 0, ...(lastEventAt ? { lastEventAt } : {}), ...(environment ? { environment } : {}) };
+  }
+
+  /** What the backend reported at the start of the session's latest turn: the tools, MCP servers and skills it really has. */
+  setEnvironment(id: string, environment: SessionEnvironment): void {
+    this.environments.set(id, environment);
   }
 
   /** Word search over titles, labels and transcripts. A stand-in for the desktop's recall index. */
