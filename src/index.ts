@@ -259,7 +259,7 @@ export {
   type ExtensionVersion,
   type ExtensionVersionRef,
   type ExtensionVersionStatus,
-  type ResolvedExtension,
+  type ResolvedRoutineExtension,
   type RoutineBinding,
   type RunPin,
 } from "./extension-registry.js";
