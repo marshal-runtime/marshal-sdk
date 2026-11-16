@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { fakeAnswer, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { extraExtensions, fakeAnswer, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -158,6 +158,25 @@ test("an edit turn counts a session it resumed, with only this turn's usage and 
   const summary = writeRunLogs({ logDir: path.join(root, "logs"), storeRoot: path.join(root, "sessions"), sessions, started, since: started });
   assert.deepEqual(summary.results.map((result) => result.final_text), ["second"]);
   assert.equal((summary.totals as { total_cost_usd: number }).total_cost_usd, 0.01);
+});
+
+test("page-run loads a bundled brand-data provider (and no other bundled extension) next to Page Studio, or the caller's or env's list", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "page-run-ext-"));
+  const manifests: Record<string, unknown> = {
+    "page-studio": { contributes: { capabilities: ["pagestudio.brand.learn"] } },
+    brain: { contributes: { capabilities: ["knowledge.search"] } },
+    org: { contributes: { capabilities: ["org.rooms.join"] } },
+    "brand-data-pack": { contributes: { capabilities: ["zygbrand.pack"] } },
+  };
+  for (const [name, manifest] of Object.entries(manifests)) {
+    fs.mkdirSync(path.join(root, name));
+    fs.writeFileSync(path.join(root, name, "runtime-extension.json"), JSON.stringify(manifest));
+  }
+  fs.mkdirSync(path.join(root, "not-an-extension"));
+  assert.deepEqual(extraExtensions(undefined, {}, root), [path.join(root, "brand-data-pack")]);
+  assert.deepEqual(extraExtensions(undefined, { MARSHAL_SDK_EXTENSIONS: `/a${path.delimiter}/b` }, root), ["/a", "/b"]);
+  assert.deepEqual(extraExtensions([], { MARSHAL_SDK_EXTENSIONS: "/a" }, root), [], "an explicit empty list loads none");
+  assert.deepEqual(extraExtensions(undefined, {}, path.join(root, "missing")), []);
 });
 
 test("page-run's dry path writes the whole run contract from an input folder, with no model", { skip: !fs.existsSync(path.join(PAGE_STUDIO, "runtime-extension.json")) && "Page Studio package not found", timeout: 90_000 }, async () => {

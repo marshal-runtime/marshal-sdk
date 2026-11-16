@@ -31,6 +31,8 @@ export interface PageRunOptions {
   workspace?: string;
   /** Page Studio's built package. Default: $MARSHAL_SDK_PAGE_STUDIO, else extensions/page-studio in this package. */
   extension?: string;
+  /** More extensions next to Page Studio (a brand-data provider). Default: $MARSHAL_SDK_EXTENSIONS, else the ones this package bundles. */
+  extensions?: readonly string[];
   depth?: PageDepth;
   model?: string;
   effort?: string;
@@ -98,6 +100,8 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   };
   // Page Studio reads its folder and its Chrome from the process: it runs inside this process.
   process.env.PAGE_STUDIO_DIR = env.PAGE_STUDIO_DIR = studioDir;
+  // A brand-data provider in the sandbox (@zyg/brand-data-pack) serves this run's input pack.
+  process.env[INPUT_PACK_ENV] = env[INPUT_PACK_ENV] ??= inputDir;
   const chrome = await resolveChrome();
   if (chrome) {
     process.env.MARSHAL_SDK_CHROME = env.MARSHAL_SDK_CHROME = chrome;
@@ -109,7 +113,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   const host = await createMarshalHost({
     workspacePath: path.resolve(options.workspace ?? path.dirname(inputDir)),
     stateRoot: path.join(state, "host"),
-    extensions: [{ packageRoot: extension }],
+    extensions: [{ packageRoot: extension }, ...extraExtensions(options.extensions).map((packageRoot) => ({ packageRoot }))],
     host: options.host ?? { id: "marshal-sdk", kind: "local" },
     labels: { job: "page-run", depth, ...options.labels },
     prompt: runPrompt("page-run", options, {
@@ -151,7 +155,16 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     });
     boardId = board.pageId;
     warnings.push(...(board.warnings ?? []));
-    const learned = await call("pagestudio.brand.learn", { pageId: boardId, pack: input.productDir });
+    // With a brand-data provider loaded, Page Studio asks it for the brand (the same path as on the desktop);
+    // without one it imports the input pack folder directly.
+    const provider = host.extensions.some((loaded) => loaded.capabilities.includes(BRAND_PACK_CAPABILITY));
+    const learned = await call(
+      "pagestudio.brand.learn",
+      provider
+        ? { pageId: boardId, brand: input.brandName, ...(input.productHandle ? { product: input.productHandle } : {}) }
+        : { pageId: boardId, pack: input.productDir },
+    );
+    log(`brand data from ${provider ? BRAND_PACK_CAPABILITY : "the input pack folder"}`);
     log(`brand board ${boardId}: ${learned.pictures} pictures, ${learned.facts} chars of facts`);
     fs.writeFileSync(path.join(logs, "query", "system_prompt.md"), host.systemPrompt() ?? "");
     fs.writeFileSync(path.join(logs, "query", "task.md"), idea);
@@ -273,6 +286,8 @@ export interface PageEditOptions {
   pageId?: string;
   workspace?: string;
   extension?: string;
+  /** More extensions next to Page Studio (a brand-data provider). Default: $MARSHAL_SDK_EXTENSIONS, else the ones this package bundles. */
+  extensions?: readonly string[];
   model?: string;
   effort?: string;
   quickModel?: string;
@@ -319,7 +334,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   const host = await createMarshalHost({
     workspacePath: path.resolve(options.workspace ?? path.dirname(out)),
     stateRoot: path.join(state, "host"),
-    extensions: [{ packageRoot: extension }],
+    extensions: [{ packageRoot: extension }, ...extraExtensions(options.extensions).map((packageRoot) => ({ packageRoot }))],
     host: options.host ?? { id: "marshal-sdk", kind: "local" },
     labels: { job: "page-edit" },
     prompt: runPrompt("page-edit", options, {
@@ -395,6 +410,36 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
 
 /** The env var naming the Page Studio content hash the caller expects (the desktop's, for one shared look). */
 export const PAGE_STUDIO_HASH_ENV = "MARSHAL_PAGE_STUDIO_HASH";
+
+/** The env var a sandbox brand-data provider reads for the run's input pack folder. */
+export const INPUT_PACK_ENV = "ZYG_INPUT_PACK_DIR";
+/** The capability a brand-data provider serves; Page Studio's brand.learn {brand} goes through it. */
+export const BRAND_PACK_CAPABILITY = "zygbrand.pack";
+
+/**
+ * The extensions loaded next to Page Studio: the caller's, else $MARSHAL_SDK_EXTENSIONS (path-list), else the
+ * bundled extensions whose manifest contributes the brand-data capability (the tarball's brand provider).
+ */
+function providesBrandData(manifestFile: string): boolean {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8")) as { contributes?: { capabilities?: unknown } };
+    const capabilities = manifest.contributes?.capabilities;
+    return Array.isArray(capabilities) && capabilities.includes(BRAND_PACK_CAPABILITY);
+  } catch {
+    return false;
+  }
+}
+
+export function extraExtensions(given?: readonly string[], env: NodeJS.ProcessEnv = process.env, root = path.join(PACKAGE_ROOT, "extensions")): string[] {
+  if (given) return given.map((dir) => path.resolve(dir));
+  if (env.MARSHAL_SDK_EXTENSIONS) return env.MARSHAL_SDK_EXTENSIONS.split(path.delimiter).filter(Boolean).map((dir) => path.resolve(dir));
+  if (!fs.existsSync(root)) return [];
+  return fs
+    .readdirSync(root)
+    .filter((name) => providesBrandData(path.join(root, name, "runtime-extension.json")))
+    .sort()
+    .map((name) => path.join(root, name));
+}
 
 export interface PageStudioBuild {
   version?: string;
