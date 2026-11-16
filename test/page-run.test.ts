@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activitySkills, activityWarnings, browserEnv, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { activityProfiles, activitySkills, activityWarnings, browserEnv, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
@@ -369,4 +369,10 @@ test("page-edit reopens a finished run's state and edits its page through Page S
   for (const file of ["summary.json", "run.jsonl", "query/task.md"]) assert.ok(fs.existsSync(path.join(editLogs, file)), file);
   assert.equal((edited.marshal as { job: string }).job, "edit");
   assert.equal(readPageRunRecord(state)?.edits?.length, 1, "the edit is recorded on the run");
+});
+
+test("launch fingerprints on the finished activity go into the run record, and an older Page Studio reports none", () => {
+  const fp = { role: "critic", sha: "ab".repeat(32), pinned: true };
+  assert.deepEqual(activityProfiles({ profiles: [fp] }), [fp]);
+  assert.deepEqual(activityProfiles({}), []);
 });

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import type { Editor, MCPServer, ModelProvider, Shell, ShellAction, ShellResult, Tool } from "@openai/agents";
 
-import type { QueryFn } from "./agent-port.js";
+import { systemPromptText, type QueryFn } from "./agent-port.js";
 import { PROVIDER_TOOLS } from "./provider-query.js";
 import type { RuntimeTool } from "./providers.js";
 
@@ -69,7 +69,7 @@ async function* turn(
     tools.push(agents.applyPatchTool({ editor: localEditor(cwd, agents.applyDiff) }));
   }
   const mcpServers = mcpServersOf(agents, servers, cwd);
-  const systemPrompt = turnOptions.systemPrompt;
+  const systemPrompt = systemPromptText(turnOptions.systemPrompt);
   const effort = typeof turnOptions.effort === "string" && OPENAI_EFFORTS.has(turnOptions.effort) ? turnOptions.effort : undefined;
   const outputFormat = turnOptions.outputFormat as { type?: string; schema?: Record<string, unknown> } | undefined;
   const agent = new agents.Agent({

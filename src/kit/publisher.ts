@@ -11,6 +11,8 @@ export class SessionPublisher {
   constructor(
     private readonly share: (sessionId: string) => Promise<unknown>,
     private readonly log: (line: string) => void = () => undefined,
+    /** What the uploads reach, for the log lines. */
+    private readonly target = "the Brain's session index",
   ) {}
 
   private closed = false;
@@ -50,11 +52,11 @@ export class SessionPublisher {
       const answer = (await this.share(sessionId)) as { status?: unknown; details?: { cloud?: { status?: unknown } } } | undefined;
       const status = typeof answer?.status === "string" ? answer.status : typeof answer?.details?.cloud?.status === "string" ? answer.details.cloud.status : undefined;
       this.results.set(sessionId, { at, ok: true, ...(status ? { status } : {}) });
-      this.log(`published session ${sessionId} to the Brain's session index${status ? ` (${status})` : ""}`);
+      this.log(`published session ${sessionId} to ${this.target}${status ? ` (${status})` : ""}`);
     } catch (error) {
       const message = error instanceof Error ? error.message.slice(0, 500) : String(error);
       this.results.set(sessionId, { at, ok: false, error: message });
-      this.log(`publishing session ${sessionId} to the Brain failed: ${message}`);
+      this.log(`publishing session ${sessionId} to ${this.target} failed: ${message}`);
     }
   }
 }

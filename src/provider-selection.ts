@@ -270,7 +270,10 @@ const AGENT_SDK_ONLY_OPTIONS = [
 export function agentSdkOnly(turnOptions: Record<string, unknown>): string[] {
   const needs: string[] = AGENT_SDK_ONLY_OPTIONS.filter((name) => turnOptions[name] !== undefined);
   // The client's environment is fixed when it is made; a launch's own env needs a process of its own.
-  if (((turnOptions as Record<symbol, unknown>)[TURN_EXTRAS] as TurnExtras | undefined)?.launchEnv) needs.push("env");
+  const extras = (turnOptions as Record<symbol, unknown>)[TURN_EXTRAS] as TurnExtras | undefined;
+  if (extras?.launchEnv) needs.push("env");
+  // A live process reads a stream of user messages that stays open across turns; the client takes one prompt per turn.
+  if (extras?.live) needs.push("a live process");
   // The host's own in-process server (marshal) reaches the client as PROVIDER_TOOLS; a launch's would be dropped.
   const servers = (turnOptions.mcpServers ?? {}) as Record<string, { type?: unknown }>;
   const inProcess = Object.entries(servers).filter(([name, server]) => name !== "marshal" && server?.type === "sdk");

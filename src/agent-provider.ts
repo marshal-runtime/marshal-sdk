@@ -137,6 +137,7 @@ function agentSummary(agent: AgentSummary): MarshalRuntimeAgentSummary {
       ...(agent.usage.modelTurns ? { modelTurns: agent.usage.modelTurns } : {}),
       ...(agent.eventCount !== undefined ? { eventCount: agent.eventCount } : {}),
       ...(agent.lastEventAt ? { lastEventAt: agent.lastEventAt } : {}),
+      ...(agent.environment ? { environment: agent.environment } : {}),
     },
   };
 }

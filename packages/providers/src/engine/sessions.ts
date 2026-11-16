@@ -7664,6 +7664,63 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     }
   }
 
+  /**
+   * Starts a new top-level session holding `sessionId`'s conversation up to and including
+   * `messageId`, on the same model, workspace and settings; the source session is not touched. The
+   * runtime receives that history as a transcript on the first turn, so the fork works on every
+   * runtime and account.
+   */
+  async forkSessionAtMessage(request: {
+    sessionId: string;
+    messageId: string;
+  }): Promise<SessionMetadata> {
+    const source = this.store.loadSessionData(request.sessionId);
+    if (!source) throw new Error("Session not found");
+    const index = source.messages.findIndex((message) => message.id === request.messageId);
+    if (index < 0) throw new Error("Message not found in this session");
+    const messages = source.messages
+      .slice(0, index + 1)
+      .map(({ requestOrigin: _requestOrigin, ...message }) => message);
+    const summaryKept =
+      source.contextSummary &&
+      source.summaryUpToMessageId &&
+      messages.some((message) => message.id === source.summaryUpToMessageId);
+    const runtimeConversationState = buildTranscriptConversationState(
+      {
+        messages,
+        ...(summaryKept
+          ? {
+              contextSummary: source.contextSummary,
+              summaryUpToMessageId: source.summaryUpToMessageId,
+            }
+          : {}),
+      },
+      resolveSessionExecutionRuntimeId(source),
+      "message-fork",
+    );
+    const baseName = source.name?.trim() || DEFAULT_SESSION_NAME;
+    const model = this.getSessionModel(request.sessionId) ?? source.model;
+    return this.createInteractiveSession(model, source.soul, {
+      name: `${baseName} (fork)`.slice(0, 200),
+      source: "user",
+      permissionMode: source.permissionMode,
+      workspaceName: source.workspaceName,
+      originWorkspaceName: source.originWorkspaceName,
+      workspaceIdentity: source.workspaceIdentity,
+      repoPath: source.repoPath,
+      repositoryAgent: source.repositoryAgent,
+      reasoningEffort: this.getSessionReasoningEffort(request.sessionId),
+      skills: source.scopedSkills,
+      allowedTools: source.allowedTools,
+      systemPromptOverride: source.systemPromptOverride,
+      playwrightHeadless: source.playwrightHeadless,
+      sandbox: source.sandbox,
+      initialMessages: messages,
+      runtimeConversationState,
+      setActive: true,
+    });
+  }
+
   /** Session ids by `source:externalId` for every session imported from another tool, in any runtime partition. */
   listImportedSessions(): Map<string, string> {
     const sessions = new Map<string, string>();
