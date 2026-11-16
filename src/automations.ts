@@ -87,6 +87,8 @@ export interface OwedFire {
   trigger: AutomationRunTrigger;
   /** Earliest time it may run (an `after` fire's notBefore). */
   dueAt: string;
+  /** The instant the fire was for (a schedule's slot, an after chain's due time); a held fire keeps it. */
+  scheduledFor?: string;
   heldAt?: string;
   fireId?: string;
   event?: { type: string; payload: Record<string, unknown> };
@@ -224,6 +226,17 @@ export interface HostAutomationsOptions {
   contextFor?: (request: { tenant?: string; slots: readonly string[]; automation: Automation }) => ContextValues | Promise<ContextValues>;
   /** The time zone of a tenant, for `after` triggers whose timezone is "tenant". */
   timezoneFor?: (tenant: string) => string | undefined;
+  /**
+   * Per-fire input facts the host knows (a brand's currency, the covered month, a record's revision, ...), merged over
+   * the fire fields and the routine's declared input: the host's facts win. Called for extension runs only.
+   */
+  inputFor?: (request: {
+    automation: Automation;
+    tenant?: string;
+    trigger: AutomationRunTrigger;
+    fields: FireFields;
+    event?: { type: string; payload: Record<string, unknown> };
+  }) => Record<string, unknown> | undefined | Promise<Record<string, unknown> | undefined>;
   /** The session label naming the tenant on every session an automation starts. Default "tenant". */
   tenantLabel?: string;
 }
@@ -538,7 +551,7 @@ export class HostAutomations {
   private async onRunFire(fire: RuntimeScheduleFire): Promise<void> {
     const automation = this.definitions.get(automationIdOf(fire));
     if (!automation || automation.state !== "active" || !automation.enabled) return;
-    await this.run(automation, "schedule", { fireId: fire.fireId });
+    await this.run(automation, "schedule", { fireId: fire.fireId, scheduledFor: fire.scheduledFor });
   }
 
   private get tenantLabel(): string {
@@ -648,7 +661,7 @@ export class HostAutomations {
   private async run(
     automation: Automation,
     trigger: AutomationRunTrigger,
-    extra: { fireId?: string; event?: { type: string; payload: Record<string, unknown> }; owed?: OwedFire } = {},
+    extra: { fireId?: string; event?: { type: string; payload: Record<string, unknown> }; owed?: OwedFire; scheduledFor?: string } = {},
   ): Promise<string | undefined> {
     const port = this.options.port;
     if (trigger !== "manual" && this.options.firePolicy) {
@@ -662,6 +675,7 @@ export class HostAutomations {
                 trigger,
                 dueAt: this.now().toISOString(),
                 heldAt: this.now().toISOString(),
+                ...(extra.scheduledFor ? { scheduledFor: extra.scheduledFor } : {}),
                 ...(extra.fireId ? { fireId: extra.fireId } : {}),
                 ...(extra.event ? { event: extra.event } : {}),
               };
@@ -693,7 +707,17 @@ export class HostAutomations {
       const context = slots.length ? ((await this.options.contextFor?.({ ...(automation.tenant ? { tenant: automation.tenant } : {}), slots, automation })) ?? {}) : {};
       const fields = agentLaunchFields(resolved, context);
       // The fire's own facts first; the routine's declared input wins where it names the same field.
-      const input = { ...fireFields(this.now(), this.zoneOf(automation)), ...(automation.extension.input ?? {}) };
+      const slot = extra.scheduledFor ?? extra.owed?.scheduledFor ?? extra.owed?.dueAt;
+      const fire = fireFields(slot && Number.isFinite(Date.parse(slot)) ? new Date(slot) : this.now(), this.zoneOf(automation));
+      const hostInput = await this.options.inputFor?.({
+        automation,
+        ...(automation.tenant ? { tenant: automation.tenant } : {}),
+        trigger,
+        fields: fire,
+        ...(extra.event ? { event: extra.event } : {}),
+      });
+      // The fire's own facts, then the routine's declared input, then the host's facts (they win).
+      const input = { ...fire, ...(automation.extension.input ?? {}), ...(hostInput ?? {}) };
       const fromTemplate = resolved.profile.task === undefined
         ? undefined
         : fillTask(resolved.profile.task, input, `${resolved.profile.extension}/${resolved.profile.agent} task`);
@@ -893,14 +917,25 @@ function zoneOffset(at: number, zone: string): number {
 }
 
 /** The instant of time-of-day `clock` ("HH:MM") in `zone`, on the local calendar day of `day`. */
-/**
- * The facts of one fire an extension run gets in its input: `today` and `date` (YYYY-MM-DD), `slot` (HH:MM) and
- * `timezone`, all in the zone the automation runs in.
- */
-export function fireFields(at: Date, zone: string): { today: string; date: string; slot: string; timezone: string } {
+/** The facts of one fire an extension run gets in its input. */
+export interface FireFields {
+  /** The fire's day (YYYY-MM-DD) in its zone. */
+  today: string;
+  /** The day before it: the shop day a morning routine covers. */
+  yesterday: string;
+  /** The fire's local time HH:MM. */
+  slot: string;
+  timezone: string;
+  /** ISO instant the fire was for (a schedule's slot; a held fire keeps its slot). */
+  scheduledFor: string;
+}
+
+/** The fire facts of the instant `at` in `zone`. */
+export function fireFields(at: Date, zone: string): FireFields {
   const local = new Date(at.getTime() + zoneOffset(at.getTime(), zone));
   const today = local.toISOString().slice(0, 10);
-  return { today, date: today, slot: local.toISOString().slice(11, 16), timezone: zone };
+  const yesterday = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() - 1)).toISOString().slice(0, 10);
+  return { today, yesterday, slot: local.toISOString().slice(11, 16), timezone: zone, scheduledFor: at.toISOString() };
 }
 
 export function localTimeOn(day: Date, clock: string, zone: string): number {

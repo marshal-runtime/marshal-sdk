@@ -163,6 +163,7 @@ export interface MarshalHostAutomationOptions {
   contextFor?: HostAutomationsOptions["contextFor"];
   /** A tenant's time zone, for "after" triggers. */
   timezoneFor?: HostAutomationsOptions["timezoneFor"];
+  inputFor?: HostAutomationsOptions["inputFor"];
   /** The session label naming an automation's tenant (default "tenant"; Marley uses "brand"). */
   tenantLabel?: string;
 }
@@ -317,6 +318,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     ...(options.automations?.firePolicy ? { firePolicy: options.automations.firePolicy } : {}),
     ...(options.automations?.contextFor ? { contextFor: options.automations.contextFor } : {}),
     ...(options.automations?.timezoneFor ? { timezoneFor: options.automations.timezoneFor } : {}),
+    ...(options.automations?.inputFor ? { inputFor: options.automations.inputFor } : {}),
     ...(options.automations?.tenantLabel ? { tenantLabel: options.automations.tenantLabel } : {}),
     log,
   });

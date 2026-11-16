@@ -49,6 +49,7 @@ export {
   FileAutomationStore,
   localTimeOn,
   fireFields,
+  type FireFields,
   isTenantZone,
   parseDuration,
 } from "./automations.js";
