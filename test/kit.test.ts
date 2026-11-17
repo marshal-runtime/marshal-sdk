@@ -59,7 +59,7 @@ function brainPackage(root: string): string {
 
 test("brainCapabilityRoute maps the memory operations onto the Brain's capabilities, with no proposal", async () => {
   const calls: { capability: string; input: Record<string, unknown> }[] = [];
-  const node = { id: "memory:1", content: "Use pnpm, not npm.", category: "fact", scope: "workspace:workspace=zyg", alwaysOn: false, createdAt: "2026-11-17T00:00:00.000Z", links: [] };
+  const node = { id: "memory:1", content: "Use pnpm, not npm.", category: "fact", scope: "workspace:zyg", alwaysOn: false, createdAt: "2026-11-17T00:00:00.000Z", links: [] };
   const route = brainCapabilityRoute("brain", async (capability, input) => {
     calls.push({ capability, input });
     if (capability === "memory.delete") return { deleted: true };
@@ -218,6 +218,11 @@ test("prepareKit: memory implies the Brain and its graph writes need no approval
   });
   assert.equal(open.denied.size, 0);
   assert.ok((open.extensions[0]!.configuration.brainRoutes as Record<string, unknown>).zyg);
+
+  // A worktree host names the workspace it serves: the route (and so the workspace memory home) is that name, not the folder's.
+  const worktree = prepareKit({ kit: { parts: ["memory"], brain: { packageRoot } }, sessions: store, workspacePath: "/tmp/pwm-x", workspaceName: "zygstinct" });
+  const routes = worktree.extensions[0]!.configuration.brainRoutes as Record<string, unknown>;
+  assert.deepEqual(Object.keys(routes).sort(), ["zyg", "zygstinct"]);
 
   const sessionsOnly = prepareKit({ kit: { parts: ["sessions"] }, sessions: store, workspacePath: "/w/zyg" });
   assert.equal(sessionsOnly.extensions.length, 0);
