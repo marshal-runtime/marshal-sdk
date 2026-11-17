@@ -82,6 +82,16 @@ export function isHostToolSearch(name: string, args: unknown): boolean {
   return name === "runtime_search" && hostToolOf(name, args) !== undefined;
 }
 
+/**
+ * The runtime_exec note of a remote session: a remote session's code (inline_module/module) runs in the remote machine's runtime, which has no host
+ * tools, so only a top-level operation call reaches them (without it the model called them from code and got "Capability ... was not found", Marley
+ * integ, 2026-11-17). It names only the host tools this host lets remote sessions reach (`remoteHostTools` and `remoteEmbedderTools`): naming a
+ * refused one sent runs after a tool that answers "not available" (Marley's routine runs and recordDecision, 2026-11-17).
+ */
+export function remoteExecNote(tools: Iterable<string>): string {
+  return `\n\nHost tools (${[...tools].join(", ")}) run on the host: call each as its own runtime_exec {targetType: "operation", target, input}. Code you run (inline_module, module) executes on this machine's runtime, where they do not exist.`;
+}
+
 /** A host tool the embedder did not allow (`remoteHostTools`): refused on the host, never forwarded to the remote runtime. */
 export function refusedHostTool(tool: string): { content: { type: "text"; text: string }[]; isError: true } {
   return { content: [{ type: "text", text: `${tool} is not available in this session.` }], isError: true };
