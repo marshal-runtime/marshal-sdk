@@ -606,7 +606,7 @@ const MEMORY_TOOLS = {
   remember: {
     title: "Remember a fact",
     description:
-      "Save a memory as a node in the Brain graph, at once (no approval): a preference, decision, fact or context worth knowing next time. `home`: `personal` is yours in every workspace (preferences, private facts such as a birthday); `workspace` is this workspace's own Brain, where links reach its real code (conventions, gotchas, why code is the way it is). Default: a preference is personal, anything else workspace. Link it to what it is about (`links`: a graph node id, a file path and symbol, a session id, a person). Preferences are shown in every later session; recall finds the rest. `appliesTo` names a scope (recall lists them). `replaces` supersedes the memory it corrects.",
+      "Save a memory as a node in the Brain graph, at once (no approval): a preference, decision, fact or context worth knowing next time. `home`: `personal` is yours in every workspace (preferences, private facts such as a birthday); `workspace` is this workspace's own Brain, where links reach its real code (conventions, gotchas, why code is the way it is). Always name it (without it a preference is personal, anything else workspace). Link it to what it is about (`links`: a graph node id, a file path and symbol, a session id, a person). Preferences are shown in every later session; recall finds the rest. `appliesTo` names a scope (recall lists them). `replaces` supersedes the memory it corrects.",
     input: {
       type: "object",
       required: ["fact"],

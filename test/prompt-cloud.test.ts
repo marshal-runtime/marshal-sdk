@@ -34,7 +34,8 @@ test("the cloud run layer names the run, its contract and state, and drops what 
   assert.match(prompt, /published to the team Brain's session index/);
   assert.match(prompt, /## Page Studio on this host/);
   assert.match(prompt, /`marshal\.tool\.recall \{query\}`/);
-  assert.match(prompt, /`marshal\.tool\.remember \{fact, category, home\?, appliesTo\?, replaces\?, links\?\}` writes a memory node into the Brain graph at once/);
+  assert.match(prompt, /`marshal\.tool\.remember \{fact, category, home, appliesTo\?, replaces\?, links\?\}` writes a memory node into the Brain graph at once/);
+  assert.match(prompt, /It has one of two homes; always name it/);
   assert.match(prompt, /`home: "personal"` is the person's own, private and in every workspace/);
   assert.match(prompt, /`home: "workspace"` is this workspace's own Brain, where links reach its real code/);
   assert.match(prompt, /mcp__marshal__runtime_exec \{targetType: 'operation'/);
