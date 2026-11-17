@@ -9,6 +9,7 @@ import {
 } from "@marshal/runtime/delegation";
 
 import type { AgentSummary, ClaudeAgentPort } from "./agent-port.js";
+import type { IndexRow } from "./org-store/org-store.js";
 import type { OrgSessionSearch } from "./org-store/search.js";
 import type { MessageSender } from "./session-messages.js";
 import type { SessionStore } from "./session-store.js";
@@ -379,6 +380,9 @@ export function createSessionToolsProvider(
   };
   const inScope = (scope: { value: string | undefined } | undefined, labels: Readonly<Record<string, string>> | undefined): boolean =>
     scope === undefined || (scope.value !== undefined && labels?.[extra.scopeLabel!] === scope.value);
+  // An org row keeps its partition keys (the tenant, e.g. `brand`) in `part` and only the implementation's fields in `labels`; both bound it.
+  // A row with neither key matches no scoped caller.
+  const rowLabels = (row: IndexRow): Record<string, string> => ({ ...row.part, ...row.labels });
   return {
     id: "marshal.session-tools",
     version: VERSION,
@@ -465,7 +469,7 @@ export function createSessionToolsProvider(
               ? []
               : (await extra.orgSearch.search({ query, limit: 500, ...(since ? { since } : {}), ...(until ? { until } : {}) }))
                   .filter(({ row }) => row.id !== caller && !held.has(row.id))
-                  .filter(({ row }) => inScope(bound, row.labels))
+                  .filter(({ row }) => inScope(bound, rowLabels(row)))
                   .filter(({ row }) => !workspace || `${row.ws} ${row.impl}`.toLowerCase().includes(workspace))
                   .map(({ row, snippet, score }) => ({
                     sessionId: row.id,
@@ -502,7 +506,7 @@ export function createSessionToolsProvider(
           const lastN = typeof input.lastN === "number" && input.lastN > 0 ? input.lastN : 30;
           if (!session) {
             const row = !found && extra.orgSearch ? await extra.orgSearch.row(sessionId) : undefined;
-            if (!row || !inScope(bound, row.labels)) return { output: { success: false, error: "Session not found" } };
+            if (!row || !inScope(bound, rowLabels(row))) return { output: { success: false, error: "Session not found" } };
             const all = await extra.orgSearch!.messages(row);
             const messages = all.slice(-lastN).map((message) => ({
               role: message.role,

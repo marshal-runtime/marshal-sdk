@@ -15,6 +15,10 @@ const host = await startHost({
 });
 ```
 
+A host that only reads the store (it publishes its own sessions elsewhere, or another host of the same process publishes them) passes
+`orgSearch: { objects, workspace }` instead: searchSessions and getSessionTranscript then read the workspace's published sessions too,
+bounded by `sessionScopeLabel` like every other session. `orgStore` takes precedence when both are set.
+
 ## Layout (the contract readers rely on)
 
 ```

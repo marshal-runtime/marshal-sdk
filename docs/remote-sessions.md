@@ -27,7 +27,7 @@ for that chat). For such a session the `marshal` server carries:
 `createMarshalHost({ remoteHostTools })` narrows that set to a subset (default: all of it); a host tool outside it is refused on the
 host and never forwarded. `createMarshalHost({ sessionScopeLabel })` bounds the session tools for a host whose store holds several tenants (Marley:
 `brand`): searchSessions and getSessionTranscript see only sessions whose label equals the caller's (forks copy their
-parent's labels), and the fork tools act only for a calling session on its own children. No other host capability is reachable (no generic forwarding), and a TypeScript block (`inline_module`) runs on the
+parent's labels; an org row matches on its partition keys too, `{...row.part, ...row.labels}`, so a row without the label matches no scoped caller), and the fork tools act only for a calling session on its own children. No other host capability is reachable (no generic forwarding), and a TypeScript block (`inline_module`) runs on the
 remote runtime only. A remote session gets no host browser server and no host runtime for other providers. Embedder
 direct tools route their runtime calls the same way.
 
