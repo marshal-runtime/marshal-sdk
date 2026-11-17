@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { randomUUID } from "node:crypto";
 
+import type { Options as ClaudeOptions } from "@anthropic-ai/claude-agent-sdk";
+
 import {
   isLocalAddress,
   senderLine,
@@ -85,6 +87,23 @@ function claudeCanUseTool(handler: RuntimePermissionHandler, sessionId: string) 
   };
 }
 
+/**
+ * The permission options of a turn: dontAsk when the launch asks for it (the host's handler, if any, still sees what
+ * the backend asks), the host's handler, or bypassPermissions for an unattended host.
+ */
+function permissionOptions(mode: AgentLaunchOptions["permissionMode"], handler: RuntimePermissionHandler | undefined, sessionId: string) {
+  const canUseTool = handler ? { canUseTool: claudeCanUseTool(handler, sessionId) } : {};
+  if (mode === "dontAsk") return { permissionMode: "dontAsk", ...canUseTool };
+  return handler ? { permissionMode: "default", ...canUseTool } : { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true };
+}
+
+/** The SDK's `tools` of a turn: the launch's (or the host's) built-in tools, narrowed to the agent profile's when it pins them. */
+function toolsOption(profile: readonly string[] | undefined, launch: readonly string[] | undefined, host: readonly string[] | undefined): { tools?: string[] } {
+  if (profile) return { tools: launch ? launch.filter((name) => profile.includes(name)) : [...profile] };
+  const tools = launch ?? host;
+  return tools ? { tools: [...tools] } : {};
+}
+
 /** `hooks` with one more PreToolUse callback, after the launch's own. */
 function withPreToolUse(hooks: Readonly<Record<string, unknown>> | undefined, callback: unknown): Record<string, unknown> {
   const existing = Array.isArray(hooks?.PreToolUse) ? (hooks.PreToolUse as unknown[]) : [];
@@ -154,6 +173,37 @@ export interface AgentLaunchOptions {
   mcpServers?: Readonly<Record<string, unknown>>;
   /** Give the session the host's MCP servers (the marshal runtime tools, the browser). Default true. */
   hostMcpServers?: boolean;
+  /**
+   * "dontAsk": a tool call not pre-approved by `allowedTools` is denied, never asked about and never bypassed. Without
+   * it a session runs with bypassPermissions (or the host's permission handler). A host's dontAsk is never lifted by a
+   * launch.
+   */
+  permissionMode?: "dontAsk";
+  /** The backend's built-in tools of this session (the SDK's `tools`) instead of the host's; agent-profile `nativeTools` still narrow them. */
+  tools?: readonly string[];
+  /** Subagent definitions the session may start (the SDK's `agents`). */
+  agents?: ClaudeOptions["agents"];
+  /** Claude Code plugins loaded for the session (the SDK's `plugins`). */
+  plugins?: ClaudeOptions["plugins"];
+  /** The SDK's own `skills` option (skill names the backend loads, or "all"); not the agent profile's `AgentLaunchRequest.skills`. */
+  claudeSkills?: ClaudeOptions["skills"];
+  /** Claude Code settings for the session (the SDK's `settings`), say `{autoMemoryEnabled: false}`. */
+  settings?: ClaudeOptions["settings"];
+  /** Which settings files the backend loads (the SDK's `settingSources`) instead of the host's `projectSettings` choice. */
+  settingSources?: ClaudeOptions["settingSources"];
+  /** Folders besides `cwd` the session may read and write. */
+  additionalDirectories?: readonly string[];
+  /** The SDK's `thinking` setting. */
+  thinking?: ClaudeOptions["thinking"];
+  /** Run on Claude Code's own prompt with `append` after it instead of the host's prompt; a launch's own `systemPrompt` still wins. */
+  systemPromptPreset?: { append?: string };
+  /** Ask the backend for partial messages (stream_event). Default true. */
+  includePartialMessages?: boolean;
+  /**
+   * Every backend event of the session as it arrives, unslimmed, stream_event included, before the port records it.
+   * A host's and a launch's both run (the host's first); a throw is logged and ignored.
+   */
+  onEvent?: (event: Record<string, any>) => void;
 }
 
 export interface AgentLaunchRequest {
@@ -172,8 +222,12 @@ export interface AgentLaunchRequest {
   labels?: Record<string, string>;
   /** The session id to use (a fork's id is written into the conversation it continues). Default: a new id. */
   sessionId?: string;
-  /** Where the conversation starts: a native session to resume, or one the first turn forks (resume + forkSession). */
-  native?: { sessionId?: string; forkOf?: string; forkAt?: string };
+  /**
+   * Where the conversation starts: a native session to resume, or one the first turn forks (resume + forkSession).
+   * `newSessionId` is the id a new native session gets (the SDK's `sessionId`), so the caller knows it before the first
+   * event; ignored with `sessionId` or `forkOf`.
+   */
+  native?: { sessionId?: string; forkOf?: string; forkAt?: string; newSessionId?: string };
   fork?: SessionFork;
   /** Agent profile: extension identities the session sees (capabilities and skills). Absent: every installed extension. */
   extensions?: readonly string[];
@@ -362,6 +416,8 @@ interface LiveAgent {
   launchOptions?: AgentLaunchOptions;
   /** The message uuid the first (forking) turn resumes at: resumeSessionAt. */
   forkAt?: string;
+  /** The native id the first turn of a new session asks for (the SDK's sessionId). */
+  newNativeSessionId?: string;
   /** The last turn's structured output (outputFormat). */
   structuredOutput?: unknown;
 }
@@ -472,6 +528,9 @@ export class ClaudeAgentPort {
       ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
       ...(request.options ? { launchOptions: request.options } : {}),
       ...(request.native?.forkAt ? { forkAt: request.native.forkAt } : {}),
+      ...(request.native?.newSessionId && !request.native.sessionId && !request.native.forkOf
+        ? { newNativeSessionId: request.native.newSessionId }
+        : {}),
     };
     this.live.set(session.id, agent);
     this.launches.set(request.idempotencyKey, session.id);
@@ -740,10 +799,11 @@ export class ClaudeAgentPort {
     agent.structuredOutput = undefined;
     const extraArgs = { ...launch.extraArgs, ...(launch.disableSlashCommands ? { "disable-slash-commands": null } : {}) };
     // A fork carries its parent's prompt, so it counts as the host's prompt when the text is the same.
-    const surface = systemPrompt !== undefined && systemPrompt === hostPrompt ? this.options.nativeTools : undefined;
+    const surface = systemPrompt !== undefined && systemPrompt === hostPrompt && !launch.systemPromptPreset ? this.options.nativeTools : undefined;
     const disallowedTools = [...(surface?.disabled ?? []), ...(launch.disallowedTools ?? [])];
     const hooks = surface ? withPreToolUse(launch.hooks, nativeSubagentHook(surface.subagentAllowlist)) : launch.hooks;
     const permissionHandler = this.options.permissionHandler;
+    const nativeSessionId = !session.native.sessionId && !session.native.forkOf ? agent.newNativeSessionId : undefined;
     const options: Record<string | symbol, unknown> = {
       model: session.model,
       ...(session.reasoningEffort ? { effort: session.reasoningEffort } : {}),
@@ -751,11 +811,16 @@ export class ClaudeAgentPort {
       env: withoutBundledSkills(launch.env ? mergeEnv(this.options.env, launch.env) : this.options.env),
       abortController: abort,
       // Deltas keep the session's activity time moving while one long message (a whole page in one tool call) streams.
-      includePartialMessages: true,
-      ...(permissionHandler
-        ? { permissionMode: "default", canUseTool: claudeCanUseTool(permissionHandler, agent.id) }
-        : { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true }),
-      settingSources: this.options.projectSettings ? ["project"] : [],
+      includePartialMessages: launch.includePartialMessages ?? true,
+      ...permissionOptions(launch.permissionMode, permissionHandler, agent.id),
+      settingSources: launch.settingSources ? [...launch.settingSources] : this.options.projectSettings ? ["project"] : [],
+      ...(launch.agents ? { agents: launch.agents } : {}),
+      ...(launch.plugins ? { plugins: launch.plugins } : {}),
+      ...(launch.claudeSkills !== undefined ? { skills: launch.claudeSkills } : {}),
+      ...(launch.settings !== undefined ? { settings: launch.settings } : {}),
+      ...(launch.additionalDirectories ? { additionalDirectories: [...launch.additionalDirectories] } : {}),
+      ...(launch.thinking ? { thinking: launch.thinking } : {}),
+      ...(nativeSessionId ? { sessionId: nativeSessionId } : {}),
       // The store keeps the backend's transcript: the Agent SDK mirrors each batch to it while the turn runs and, when a
       // session resumes, loads it from there before the backend starts (a store answers null when the machine already has it).
       // A session reads as idle without waiting for any of it to reach the cloud.
@@ -767,8 +832,10 @@ export class ClaudeAgentPort {
       systemPrompt:
         agent.systemPrompt !== undefined
           ? { type: "custom", prompt: agent.systemPrompt, snapshot: false }
-          : (systemPrompt ?? { type: "preset", preset: "claude_code" }),
-      ...(session.nativeTools ? { tools: [...session.nativeTools] } : this.options.tools ? { tools: [...this.options.tools] } : {}),
+          : launch.systemPromptPreset
+            ? { type: "preset", preset: "claude_code", ...(launch.systemPromptPreset.append ? { append: launch.systemPromptPreset.append } : {}) }
+            : (systemPrompt ?? { type: "preset", preset: "claude_code" }),
+      ...toolsOption(session.nativeTools, launch.tools, this.options.tools),
       ...(session.native.sessionId
         ? { resume: session.native.sessionId }
         : session.native.forkOf
@@ -807,7 +874,7 @@ export class ClaudeAgentPort {
       for (;;) {
         const next = await events.next();
         if (next.done) break;
-        if (this.takeEvent(agent, next.value, acc, num(next.value.total_cost_usd))) {
+        if (this.takeEvent(agent, next.value, acc, num(next.value.total_cost_usd), launch.onEvent)) {
           ended = true;
           break;
         }
@@ -831,8 +898,21 @@ export class ClaudeAgentPort {
   }
 
   /** Records one backend event; true at the turn's result. `costUsd` is what this turn cost. */
-  private takeEvent(agent: LiveAgent, event: Record<string, any>, acc: TurnAccumulator, costUsd: number): boolean {
+  private takeEvent(
+    agent: LiveAgent,
+    event: Record<string, any>,
+    acc: TurnAccumulator,
+    costUsd: number,
+    onEvent?: (event: Record<string, any>) => void,
+  ): boolean {
     const store = this.options.store;
+    if (onEvent) {
+      try {
+        onEvent(event);
+      } catch (error) {
+        this.options.log?.(`agent ${agent.id}: onEvent failed: ${errorText(error)}`);
+      }
+    }
     // A streamed delta of a message still being written: proof the backend is working, not a record of the turn.
     if (event.type === "stream_event") {
       store.touch(agent.id);
@@ -930,7 +1010,7 @@ export class ClaudeAgentPort {
           costUsd = proc.lastTotalCost === undefined || total < proc.lastTotalCost ? total : total - proc.lastTotalCost;
           proc.lastTotalCost = total;
         }
-        if (this.takeEvent(agent, event, acc, costUsd)) {
+        if (this.takeEvent(agent, event, acc, costUsd, launch.onEvent)) {
           proc.turns += 1;
           break;
         }
@@ -1114,6 +1194,25 @@ function mergeHooks(host: HookMatchers | undefined, own: HookMatchers | undefine
   return merged;
 }
 
+/** Both event listeners, the host's first; a throw in one does not keep the other from running. */
+function chainOnEvent(
+  host: AgentLaunchOptions["onEvent"],
+  own: AgentLaunchOptions["onEvent"],
+): AgentLaunchOptions["onEvent"] {
+  if (!host || !own) return host ?? own;
+  return (event) => {
+    let failure: unknown;
+    for (const listener of [host, own]) {
+      try {
+        listener(event);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    if (failure !== undefined) throw failure;
+  };
+}
+
 /** A host's launch options (launchOptionsFor) with a launch's own over them; see AgentPortOptions.launchOptionsFor. */
 export function mergeLaunchOptions(host: AgentLaunchOptions | undefined, own: AgentLaunchOptions | undefined): AgentLaunchOptions {
   if (!host) return own ?? {};
@@ -1123,9 +1222,13 @@ export function mergeLaunchOptions(host: AgentLaunchOptions | undefined, own: Ag
   const env = host.env || own.env ? { ...host.env, ...own.env } : undefined;
   const mcpServers = host.mcpServers || own.mcpServers ? { ...host.mcpServers, ...own.mcpServers } : undefined;
   const extraArgs = host.extraArgs || own.extraArgs ? { ...host.extraArgs, ...own.extraArgs } : undefined;
+  const permissionMode = host.permissionMode ?? own.permissionMode;
+  const onEvent = chainOnEvent(host.onEvent, own.onEvent);
   return {
     ...host,
     ...own,
+    ...(permissionMode ? { permissionMode } : {}),
+    ...(onEvent ? { onEvent } : {}),
     ...(hooks ? { hooks } : {}),
     ...(disallowedTools.length ? { disallowedTools } : {}),
     ...(env ? { env } : {}),
@@ -1159,6 +1262,13 @@ function processSignature(options: Record<string | symbol, unknown>, launch: Age
     pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
     extraArgs: options.extraArgs,
     outputFormat: options.outputFormat,
+    includePartialMessages: options.includePartialMessages,
+    agents: options.agents,
+    plugins: options.plugins,
+    skills: options.skills,
+    settings: options.settings,
+    additionalDirectories: options.additionalDirectories,
+    thinking: options.thinking,
     spawner: typeof options.spawnClaudeCodeProcess === "function",
     hooks: Object.keys(hooks)
       .sort()
