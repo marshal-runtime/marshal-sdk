@@ -118,6 +118,10 @@ const UI_OBSERVE_POLICY_ROUTES = new Map<string, string>([
   ["ui.observe.open", "ui.observe.open"],
   ["ui.observe.capture", "ui.observe.capture"],
   ["ui.observe.close", "ui.observe.close"],
+  ["ui.observe.act", "ui.observe.act"],
+  ["ui.observe.snapshot", "ui.observe.snapshot"],
+  ["ui.observe.logs", "ui.observe.logs"],
+  ["ui.observe.viewport", "ui.observe.viewport"],
 ]);
 export const UI_OBSERVE_PERMISSION_POLICY_PREFIX = "runtime-ui-observe:";
 

@@ -6,9 +6,9 @@ export const MARSHAL_RUNTIME_PACKAGE_PIN = Object.freeze({
   entrySha256: "be1791e2d92854cbb327b62df16fb77e0cb4cf79d7509b6f8d048dda43cd3032",
   archiveSha256: "9bae16c9b042a67d29fec948e9017c89d0890f8a5ed6e334bb054d4f02a920d8",
   swarmCompatibility: {
-    sourceArchive: "marshal-runtime-0.1.0-marshal-host-72.tgz",
-    sourceArchiveSha256: "2db189f96a462489369a3d0e3c0b1bd28ede4d85ab96ae07a80cb2aa7d2bd348",
-    sourceContentSha256: "718c1ef488f282ba3bcaaa7627f5d5d9f68b2e119580c6b609c73ad0bf96c5a0",
+    sourceArchive: "marshal-runtime-0.1.0-marshal-host-92.tgz",
+    sourceArchiveSha256: "9bae16c9b042a67d29fec948e9017c89d0890f8a5ed6e334bb054d4f02a920d8",
+    sourceContentSha256: "b69c930f6ef362fac65bf6fee5a87e296fb88b1bc495d9b830f85b1d29bb470d",
   },
   packages: [
     {
@@ -65,7 +65,7 @@ export const MARSHAL_RUNTIME_PACKAGE_PIN = Object.freeze({
       version: "0.1.0",
       entrypoint: "dist/index.js",
       entrySha256: "1b6d0ed8109e96293649662523d323db7245d116d7e8efbccf11de323ac22b9f",
-      contentSha256: "40c37cc04de2d3cedaa4d30c619f304896c2f504649afc0994a4038766bb474a",
+      contentSha256: "c8e01f699cfe3204efc2cc443241d26a41d2d01ed82c1126c8f796c5f7361913",
     },
     {
       name: "@marshal/agent-runtime-host",
@@ -86,7 +86,7 @@ export const MARSHAL_RUNTIME_PACKAGE_PIN = Object.freeze({
       version: "0.1.0",
       entrypoint: "dist/index.js",
       entrySha256: "509f03f2c45b7fceccb8b601b705e4ec2e2f578b2402e3cdf1d5cc41241114f0",
-      contentSha256: "d71bbef198b9ef5754af28a1c2a7331fdbff29d2c417aa34a936a12973d74884",
+      contentSha256: "2bfdc59be26c740197c5e9ca516b752d9fc02356a86e69dbaae64d7b61a040d1",
     },
     {
       name: "@marshal/agent-runtime-permissions",
@@ -100,7 +100,7 @@ export const MARSHAL_RUNTIME_PACKAGE_PIN = Object.freeze({
       version: "0.1.0",
       entrypoint: "dist/index.js",
       entrySha256: "1003047d3ad11933aceb9e911360600b8abeae4e80ada574938c12f7caa19af7",
-      contentSha256: "cc376de0b438c620f05838bd7263ba0f7ee794a95d3fddab3f2dd2ca991830f5",
+      contentSha256: "71942e6862b0adbc8bcfaf5729df69164c887308a00a3f4a321a9d1323d03745",
     },
     {
       name: "@marshal/agent-runtime-provider-artifacts",
@@ -148,9 +148,9 @@ export const MARSHAL_RUNTIME_PACKAGE_PIN = Object.freeze({
 } as const);
 
 export const MARSHAL_RUNTIME_SOURCE_ATTESTATION = Object.freeze({
-  commit: "cfb5756cbbb945dc3b14b7be9322ed872bced19f",
+  commit: "a53512ec1af19a7e45304317712ea77c6416603b",
   dirtyDiffSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  sourceTreeSha256: "6599547c2c6a4d037255e1d80c55206a75f2223626fa00af2a3c6a008b8985cd",
+  sourceTreeSha256: "9387e3ff10b3f489ef0be0e0cc029f285ddf046fe7cda3baef9d9e4b3ce62ee6",
 } as const);
 
 export const MARSHAL_SWARM_SOURCE_ATTESTATION = Object.freeze({

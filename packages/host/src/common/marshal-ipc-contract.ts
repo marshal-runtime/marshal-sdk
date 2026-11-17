@@ -485,7 +485,14 @@ export interface MemoryEntry {
   entities?: string[];
   /** Key of the copy stored in the workspace's Brain, when one was written. */
   brainKey?: string;
+  /** Where the Brain keeps it: the person's own memories (default) or the memories of the workspace it was stated in. */
+  home?: MemoryHome;
+  /** The workspace whose Brain keeps it, for a workspace memory. */
+  workspace?: string;
 }
+
+/** A memory's home: `personal` (the person's own, in the default Brain, private) or `workspace` (that workspace's Brain, linked to its code). */
+export type MemoryHome = "personal" | "workspace";
 
 export interface MemoryLink {
   path: string;
@@ -2090,6 +2097,13 @@ export interface MSettings extends MiniModeSettings, WorkServiceProviderSettings
   runtimeId?: string;
   /** Memory persistence provider selected at the next app startup. */
   memoryProviderId?: string;
+  /** The workspace whose Brain route keeps the user's memories (its memory.* capabilities); unset: the most recent workspace that offers them. */
+  memoryBrainWorkspace?: string;
+  /**
+   * The one-time move of project-scoped personal memories into their workspace's home: "off" (default), "dryRun" (log what
+   * would move) or "move" (copy each as a private workspace memory, then delete the personal one).
+   */
+  memoryMoveProjectMemories?: "off" | "dryRun" | "move";
   /** Session persistence provider selected at the next app startup. */
   sessionStorageProviderId?: string;
   /** Ordered skill-provider IDs enabled for catalog composition. */
@@ -2098,6 +2112,8 @@ export interface MSettings extends MiniModeSettings, WorkServiceProviderSettings
   sessionRetentionDays?: number;
   /** Rerank searchSessions results with OpenAI when a key is configured. Default: true. */
   sessionRecallRerank?: boolean;
+  /** Bucket of the Zyg org SDK session store the Recall page reads. Default: zyg-agents-records. */
+  orgSessionStoreBucket?: string;
   /** User interface customization (edits to placement parts, disabled contributions, replacement winners, theme). */
   interfaceCustomization?: InterfaceCustomization;
   /** Re-run the transactional update when a locally installed extension's source directory changes. Default: true. */
@@ -3391,6 +3407,42 @@ export interface IpcInvokeMap extends RuntimeAcceptanceIpcInvokeMap {
   }>;
   /** The user left the session: what changes after this moment is news when they return. */
   "requests:markSeen": (sessionId: string) => Promise<{ success: boolean; error?: string }>;
+
+  // orgStoreAPI — browse, pull and search the Zyg org SDK session store (common/org-store-contract.ts)
+  "orgStore:getBucket": () => Promise<{ bucket: string; isDefault: boolean }>;
+  "orgStore:setBucket": (bucket: string) => Promise<{ bucket: string; isDefault: boolean }>;
+  "orgStore:browse": (
+    scope?: import("./org-store-contract").OrgStoreScope,
+  ) => Promise<import("./org-store-contract").OrgStoreBrowseResult>;
+  "orgStore:rows": (request: {
+    scope: import("./org-store-contract").OrgStoreScope;
+    filter?: import("./org-store-contract").OrgStoreRowFilter;
+  }) => Promise<
+    import("./org-store-contract").OrgStoreResult<{
+      rows: import("./org-store-contract").OrgStoreRow[];
+    }>
+  >;
+  "orgStore:pullScope": (request: {
+    scope: import("./org-store-contract").OrgStoreScope;
+    filter?: import("./org-store-contract").OrgStoreRowFilter;
+    limit?: number;
+  }) => Promise<import("./org-store-contract").OrgStoreResult<{ pulled: number; failed: number }>>;
+  "orgStore:open": (row: import("./org-store-contract").OrgStoreRow) => Promise<
+    import("./org-store-contract").OrgStoreResult<{
+      messages: import("./org-store-contract").OrgStoreTranscriptMessage[];
+    }>
+  >;
+  "orgStore:search": (request: {
+    scope: import("./org-store-contract").OrgStoreScope;
+    query: string;
+    filter?: import("./org-store-contract").OrgStoreRowFilter;
+  }) => Promise<
+    import("./org-store-contract").OrgStoreResult<{
+      hits: import("./org-store-contract").OrgStoreSearchHit[];
+      pulled: number;
+      failed: number;
+    }>
+  >;
 
   // sdkHostsAPI — linked Marshal SDK hosts and their sessions (common/sdk-hosts-contract.ts)
   "sdkHosts:list": () => Promise<
@@ -4691,6 +4743,9 @@ export interface GoalAPI extends InvokeMethodsFor<"goal"> {
 export interface RequestsAPI extends InvokeMethodsFor<"requests"> {
   onChanged: (callback: (data: IpcEventMap["requests:changed"]) => void) => () => void;
 }
+
+/** Renderer bridge for the Zyg org SDK session store: browse, pull, open read-only, search in a scope. */
+export type OrgStoreAPI = InvokeMethodsFor<"orgStore">;
 
 /** Renderer bridge for linked Marshal SDK hosts and their sessions. */
 export type SdkHostsAPI = InvokeMethodsFor<"sdkHosts">;

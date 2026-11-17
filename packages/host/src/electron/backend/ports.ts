@@ -35,6 +35,7 @@ import type {
   GoalState,
   MemoryCategory,
   MemoryEntry,
+  MemoryHome,
   MemoryLink,
   MSettings,
   ModelInfo,
@@ -289,6 +290,8 @@ export interface MemoryAddOptions {
   entities?: string[];
   /** Key of the Brain copy written for this memory. */
   brainKey?: string;
+  /** `personal` (default) or `workspace`: the memories of the workspace of the session in `source`. */
+  home?: MemoryHome;
 }
 
 /**

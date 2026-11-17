@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import type { MemoryEntry, MemoryLink } from "@common/marshal-ipc-contract";
+import type { MemoryEntry, MemoryHome, MemoryLink } from "@common/marshal-ipc-contract";
 
 import type { MemoryAddOptions } from "../../backend/ports";
 import { GLOBAL_MEMORY_APPLIES_TO, memoryAppliesTo } from "./memory-scoping";
@@ -22,6 +22,8 @@ export function toMemoryToolEntry(entry: MemoryEntry) {
     ...(entry.links?.length ? { links: entry.links } : {}),
     ...(entry.entities?.length ? { entities: entry.entities } : {}),
     ...(entry.brainKey ? { inBrain: true } : {}),
+    ...(entry.home ? { home: entry.home } : {}),
+    ...(entry.workspace ? { workspace: entry.workspace } : {}),
   };
 }
 
@@ -29,6 +31,7 @@ export interface RememberReferences {
   links?: MemoryLink[];
   entities?: string[];
   brainKey?: string;
+  home?: MemoryHome;
 }
 
 /**
@@ -51,6 +54,7 @@ export function buildRememberOptions(
     ...(references.links?.length ? { links: references.links } : {}),
     ...(references.entities?.length ? { entities: references.entities } : {}),
     ...(references.brainKey ? { brainKey: references.brainKey } : {}),
+    ...(references.home ? { home: references.home } : {}),
   };
   if (!replaces && !project && Object.keys(refs).length === 0) return undefined;
   return { ...(replaces ? { replaces } : {}), ...scope, ...refs };
