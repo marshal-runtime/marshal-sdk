@@ -9932,10 +9932,13 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     const parentTarget = resolveSessionExecutionTarget({ ...parent, model: parentModel });
     const planned = await Promise.all(
       tasks.map(async (item, position) => {
-        const model = await this.resolveForkModel(item, parentTarget);
+        const model = await this.resolveForkModel(item, parentTarget, parentModel);
         if (item.reasoningEffort) {
           this.modelManager.assertReasoningEffortSupported(model, item.reasoningEffort);
         }
+        // On the parent's own model the fork also keeps its effort and context tier, so it runs
+        // exactly as the parent does; any other model takes the subagent tier defaults.
+        const asParent = model === parentModel;
         return {
           task: item.task.trim(),
           index: position + 1,
@@ -9949,8 +9952,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
           // and account; any other target starts from a transcript of the parent instead.
           native: resolveSessionExecutionTargetKey({ ...parent, model }) === parentTargetKey,
           // Unset effort and context tier fall to the subagent tier defaults at backend start.
-          reasoningEffort: item.reasoningEffort,
-          contextTier: undefined,
+          reasoningEffort: item.reasoningEffort ?? (asParent ? launch.reasoningEffort : undefined),
+          contextTier: asParent ? launch.contextTier : undefined,
         };
       }),
     );
@@ -10089,13 +10092,16 @@ This accountable main/user session was explicitly launched in workspace ${worksp
   }
 
   /**
-   * A fork's model: its requested model or runtime, else the subagent default model. An account the
-   * agent named must have usage left; otherwise the fork runs on the runtime's account with the
-   * most usage left (ties keep the parent's account, then the default one).
+   * A fork's model: its requested model or runtime, else the parent's own model. An account the
+   * agent named must have usage left. The parent's model stays on the parent's account while that
+   * account has usage left, since only there does the fork reuse the parent's prompt cache;
+   * otherwise the fork runs on the runtime's account with the most usage left (ties keep the
+   * parent's account, then the default one).
    */
   private async resolveForkModel(
     item: { model?: string; runtime?: string },
     parentTarget: { runtimeId: string; accountId?: string },
+    parentModel: string | undefined,
   ): Promise<string> {
     const requested = item.model?.trim() || undefined;
     const runtime = item.runtime?.trim() || undefined;
@@ -10103,7 +10109,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       ? await this.resolveAgentRuntimeModel(runtime, requested)
       : requested
         ? this.routeRequestedModel(requested)
-        : this.applyDefaultAccount(this.modelManager.getTierDefaultModel("subagent"));
+        : (parentModel ??
+          this.applyDefaultAccount(this.modelManager.getTierDefaultModel("subagent")));
     const namedAccount =
       (runtime ? parseRuntimeTargetKey(runtime)?.accountId : undefined) ??
       parseRuntimeQualifiedModel(requested)?.accountId;
@@ -10127,6 +10134,20 @@ This accountable main/user session was explicitly launched in workspace ${worksp
         model: nativeModel,
       });
       return model;
+    }
+    const parentNativeModel = parseRuntimeQualifiedModel(parentModel)?.model ?? parentModel;
+    if (parentModel && parentTarget.runtimeId === runtimeId && nativeModel === parentNativeModel) {
+      const parentAccount = parentTarget.accountId ?? DEFAULT_RUNTIME_ACCOUNT_ID;
+      const parentAccountUsable = await assertRuntimeAccountUsable({
+        read,
+        runtimeId,
+        accountId: parentAccount,
+        model: nativeModel,
+      }).then(
+        () => true,
+        () => false,
+      );
+      if (parentAccountUsable) return parentModel;
     }
     const current = qualified?.accountId ?? DEFAULT_RUNTIME_ACCOUNT_ID;
     const accounts = normalizeRuntimeAccounts(
