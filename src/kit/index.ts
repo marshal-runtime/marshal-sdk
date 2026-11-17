@@ -189,7 +189,7 @@ function kitPrompt(parts: ReadonlySet<KitPart>, on: { memoryWrites: boolean; ing
   }
   if (parts.has("memory")) {
     lines.push(
-      "- **Memory** (the Brain graph): `marshal.tool.recall {query}` before you start on something already learned; `marshal.tool.remember {fact, category, home, links}` adds a memory node at once, linked to the files, sessions, people or graph nodes it is about. `home: \"personal\"` is the person's own (preferences, private facts), in every workspace; `home: \"workspace\"` is this workspace's own Brain, where links reach its real code (the default for anything but a preference). `marshal.tool.linkMemory`, `marshal.tool.updateMemory` and `marshal.tool.forget` keep them right. Nobody approves memories: write only what is true and useful.",
+      "- **Memory** (the Brain graph): `marshal.tool.recall {query}` before you start on something already learned; `marshal.tool.remember {fact, category, home, links}` adds a memory node at once, linked to the files, sessions, people or graph nodes it is about. `home: \"personal\"` is the person's own (preferences, private facts), in every workspace; `home: \"workspace\"` is this workspace's own Brain, where links reach its real code (the default for anything but a preference). `marshal.tool.linkMemory`, `marshal.tool.updateMemory` and `marshal.tool.forget` keep them right. Nobody approves memories: write only what is true and useful. A save that fails comes back as a failed call starting `MEMORY NOT SAVED:`: nothing was stored, so tell the user it was not saved and why, and never report it as remembered.",
     );
   }
   if (parts.has("sessions")) {

@@ -676,6 +676,36 @@ const shown = (record: BrainMemory) => ({
   ...(record.home ? { home: record.home } : {}),
 });
 
+const FAILED_WRITE = {
+  save: { prefix: "MEMORY NOT SAVED", tail: "Tell the user it was not saved." },
+  forget: { prefix: "MEMORY NOT FORGOTTEN", tail: "Tell the user it was not forgotten." },
+} as const;
+const RUNTIME_ERROR_CODES = new Set(["invalid-request", "not-found", "permission-denied", "operation-failed"]);
+
+/**
+ * A memory write that did not happen, as a thrown error so the tool call fails (ok: false) instead of answering a
+ * success-shaped payload an agent can skim past. The message leads with MEMORY NOT SAVED / MEMORY NOT FORGOTTEN and tells
+ * the agent to report it; the reason is cut so the message fits the runtime's 512-character error limit.
+ */
+export function memoryWriteFailure(kind: keyof typeof FAILED_WRITE, error: unknown, code?: string): Error & { code: string } {
+  const { prefix, tail } = FAILED_WRITE[kind];
+  const budget = 512 - prefix.length - tail.length - 4;
+  const reason = (error instanceof Error ? error.message : String(error)).trim().replace(/[.\s]+$/, "") || "unknown error";
+  const why = reason.length > budget ? `${reason.slice(0, budget - 1)}…` : reason;
+  const upstream = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+  const resolved = code ?? (typeof upstream === "string" && RUNTIME_ERROR_CODES.has(upstream) ? upstream : "operation-failed");
+  return Object.assign(new Error(`${prefix}: ${why}. ${tail}`), { code: resolved });
+}
+
+/** Runs one memory write; any failure is rethrown as memoryWriteFailure. */
+async function writing<T>(kind: keyof typeof FAILED_WRITE, write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (error) {
+    throw memoryWriteFailure(kind, error);
+  }
+}
+
 /** marshal.tool.remember / recall / linkMemory / updateMemory / forget on the host's Brain memory. */
 export function createMemoryToolsProvider(memory: HostMemory): CapabilityProvider {
   const descriptors = Object.entries(MEMORY_TOOLS).map(([operation, spec]) => ({
@@ -701,7 +731,7 @@ export function createMemoryToolsProvider(memory: HostMemory): CapabilityProvide
       const links = Array.isArray(input.links) ? (input.links as BrainMemoryLink[]) : undefined;
       switch (name.slice(TOOL_PREFIX.length)) {
         case "remember": {
-          const record = await memory.remember(session, {
+          const record = await writing("save", () => memory.remember(session, {
             fact: String(input.fact ?? ""),
             ...(typeof input.category === "string" ? { category: input.category } : {}),
             ...(typeof input.appliesTo === "string" ? { appliesTo: input.appliesTo } : {}),
@@ -709,7 +739,7 @@ export function createMemoryToolsProvider(memory: HostMemory): CapabilityProvide
             ...(links ? { links } : {}),
             ...(typeof input.alwaysOn === "boolean" ? { alwaysOn: input.alwaysOn } : {}),
             ...(typeof input.home === "string" ? { home: input.home } : {}),
-          });
+          }));
           return { output: { success: true, memory: shown(record) } };
         }
         case "recall": {
@@ -723,21 +753,22 @@ export function createMemoryToolsProvider(memory: HostMemory): CapabilityProvide
           return { output: { success: true, scopes, memories: memories.map(shown), ...(degraded.length ? { degraded } : {}) } };
         }
         case "linkMemory": {
-          const record = await memory.link(session, { id: String(input.id ?? ""), links: links ?? [], replace: input.replace === true });
+          const record = await writing("save", () => memory.link(session, { id: String(input.id ?? ""), links: links ?? [], replace: input.replace === true }));
           return { output: { success: true, memory: shown(record) } };
         }
         case "updateMemory": {
-          const record = await memory.update(session, {
+          const record = await writing("save", () => memory.update(session, {
             id: String(input.id ?? ""),
             ...(typeof input.fact === "string" ? { fact: input.fact } : {}),
             ...(typeof input.category === "string" ? { category: input.category } : {}),
             ...(typeof input.alwaysOn === "boolean" ? { alwaysOn: input.alwaysOn } : {}),
-          });
+          }));
           return { output: { success: true, memory: shown(record) } };
         }
         case "forget": {
-          const removed = await memory.forget(session, String(input.id ?? ""));
-          return { output: removed ? { success: true } : { success: false, error: "No memory with that id in this session's store." } };
+          const removed = await writing("forget", () => memory.forget(session, String(input.id ?? "")));
+          if (!removed) throw memoryWriteFailure("forget", "No memory with that id in this session's store", "not-found");
+          return { output: { success: true } };
         }
         default:
           throw Object.assign(new Error(`Unknown capability ${name}.`), { code: "not-found" });
