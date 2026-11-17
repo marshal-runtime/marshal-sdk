@@ -14,6 +14,7 @@ Environment:
     MARSHAL_SDK_OFF=1     run on plain claude_agent_sdk (no Marshal host), for an A/B or a rollback
     MARSHAL_SDK_KIT       host kit parts: brain, memory, sessions (comma separated)
     MARSHAL_SDK_STATE     where the host keeps its sessions (default: a temp folder per run)
+    MARSHAL_SDK_ENGINE=page-studio   page-agent builds and edits run on the Page Studio extension (see page_studio.py)
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ from claude_agent_sdk import *  # noqa: F403  (the drop-in re-exports the SDK's 
 from claude_agent_sdk import ClaudeAgentOptions, Message
 from claude_agent_sdk import ClaudeSDKClient as _ClaudeSDKClient
 from claude_agent_sdk._internal.transport import Transport
+
+from marshal_sdk import page_studio
 
 __all__ = list(_sdk.__all__)
 
@@ -82,8 +85,17 @@ async def query(
     options: ClaudeAgentOptions | None = None,
     transport: Transport | None = None,
 ) -> AsyncIterator[Message]:
-    """claude_agent_sdk.query on a Marshal host."""
-    async for message in _sdk.query(prompt=prompt, options=on_marshal(options), transport=transport):
+    """claude_agent_sdk.query on a Marshal host; a page-agent build goes to Page Studio under MARSHAL_SDK_ENGINE=page-studio."""
+
+    def own_agent() -> AsyncIterator[Message]:
+        return _sdk.query(prompt=prompt, options=on_marshal(options), transport=transport)
+
+    if transport is None and os.environ.get(OFF_ENV_VAR) != "1" and page_studio.routes(options):
+        assert options is not None
+        async for message in page_studio.query(options, os.environ.get(BRIDGE_ENV_VAR) or shutil.which(BRIDGE_NAME), own_agent):
+            yield message
+        return
+    async for message in own_agent():
         yield message
 
 
