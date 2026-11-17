@@ -38,6 +38,33 @@ The host opens one remote connection (one child, e.g. one ssh) per session at it
 turns. It closes with the session: the live process closes, the host is disposed, or no call came for 10 minutes while
 no turn ran (the next call opens a new one). A changed `remoteRuntime` value replaces it.
 
+### A runtime the embedder owns
+
+`remoteRuntime(session)` may also return a connection the embedder already started, `{callTool(name, args),
+readResource(uri)}` (`RemoteRuntimeConnection`; zyg-agents: the session's runtime child behind its bridge, with its own
+environment allowlist, sandbox user and grants). The host calls it and nothing else: it never spawns, idle-closes or
+disposes it, and the embedder closes it when the session ends. Its timeouts are the embedder's too.
+
+### Host tools per session
+
+`createMarshalHost({ remoteHostToolsFor })` narrows the host tools of one remote session below the host-wide
+`remoteHostTools` and `remoteEmbedderTools`: `[]` refuses every host tool (and drops the runtime_exec note that names them),
+a list allows only those, undefined keeps the host-wide sets. A name outside the host-wide sets is a configuration error
+that fails the turn.
+
+### `toolCall`: one wrapper around every call
+
+`createMarshalHost({ toolCall })` wraps each call on a session's `marshal` server (and on the same tools handed to other
+providers): `toolCall(session, {kind, tool, args, alias?}, next)`. `kind: "runtime"` is a call that reaches the
+session's runtime (`runtime_search`, `runtime_exec`, `runtime_read_resource`); made from inside a direct tool, `alias`
+names that tool (`runtimeInvoke`). `kind: "direct"` is a direct tool the model called. `next()` runs the call; the wrapper
+records it and may return a changed result (zyg-agents: the `evidence_call` record and the `[evidence ev-N]` prefix). A
+read's result carries what was read as `structuredContent` (`{contents}`), which a direct tool gets back unchanged.
+
+`runtime_exec` takes `requestId` (an idempotency key, the approval retry) and `executionMode` (`brokered` or
+`trusted_node`; the runtime still refuses `trusted_node` on a host without `trustedTypeScript`). It takes no `approval`:
+a session never approves its own call.
+
 ## What the embedder does
 
 - Return `remoteRuntime(session)` for remote sessions (undefined for local ones; local sessions are unchanged).

@@ -11,12 +11,32 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-/** How the host reaches the remote machine's Marshal runtime MCP server: a stdio command (Marley: ssh to the brand VM running its runtime). */
-export interface RemoteRuntime {
+/** A stdio command that starts the remote machine's Marshal runtime MCP server (Marley: ssh to the brand VM running its runtime); the host opens and closes it. */
+export interface RemoteRuntimeCommand {
   command: string;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+}
+
+/**
+ * A session runtime the embedder already started and owns (zyg-agents: the session's runtime child behind its bridge): the host only calls it.
+ * It never spawns, idle-closes or disposes it; the embedder closes it when the session ends.
+ */
+export interface RemoteRuntimeConnection {
+  callTool(name: string, args: Record<string, unknown>): Promise<RemoteToolResult>;
+  readResource(uri: string): Promise<{ contents: { uri: string; text?: string; mimeType?: string }[] }>;
+}
+
+/** How the host reaches a session's own Marshal runtime: a command it starts, or a connection the embedder owns. */
+export type RemoteRuntime = RemoteRuntimeCommand | RemoteRuntimeConnection;
+
+/** One runtime tool's MCP result. */
+export type RemoteToolResult = { content: unknown[]; isError?: boolean; structuredContent?: unknown };
+
+/** True when the embedder owns the session's runtime (a connection), false when the host starts it from a command. */
+export function isRuntimeConnection(remote: RemoteRuntime): remote is RemoteRuntimeConnection {
+  return typeof (remote as Partial<RemoteRuntimeConnection>).callTool === "function";
 }
 
 /** The host capabilities a remote session reaches, executed on the host. Every other capability runs on the remote runtime. */
@@ -97,7 +117,7 @@ export function refusedHostTool(tool: string): { content: { type: "text"; text: 
   return { content: [{ type: "text", text: `${tool} is not available in this session.` }], isError: true };
 }
 
-type ToolResult = { content: unknown[]; isError?: boolean; structuredContent?: unknown };
+type ToolResult = RemoteToolResult;
 
 interface Connection {
   signature: string;
@@ -110,7 +130,8 @@ interface Connection {
  * One MCP client (one remote child, e.g. one ssh) per remote session, opened at the session's first runtime call and
  * kept across its turns. It closes with the session: its live process closes, the host closes, or nothing called it for
  * `idleMs` while no turn ran (default 10 minutes; the next call opens a fresh one). A changed RemoteRuntime (a relaunch
- * on another address) replaces the connection.
+ * on another address) replaces the connection. An embedder-owned runtime (RemoteRuntimeConnection) is never kept here:
+ * its calls pass straight through, and idle, close and closeAll never touch it.
  */
 export class RemoteRuntimeClients {
   private readonly connections = new Map<string, Connection>();
@@ -131,7 +152,7 @@ export class RemoteRuntimeClients {
     connection.idle.unref?.();
   }
 
-  private async use<T>(sessionId: string, remote: RemoteRuntime, run: (client: Client) => Promise<T>): Promise<T> {
+  private async use<T>(sessionId: string, remote: RemoteRuntimeCommand, run: (client: Client) => Promise<T>): Promise<T> {
     const client = this.connect(sessionId, remote);
     const connection = this.connections.get(sessionId)!;
     if (connection.idle) clearTimeout(connection.idle);
@@ -144,7 +165,7 @@ export class RemoteRuntimeClients {
     }
   }
 
-  private connect(sessionId: string, remote: RemoteRuntime): Promise<Client> {
+  private connect(sessionId: string, remote: RemoteRuntimeCommand): Promise<Client> {
     const signature = JSON.stringify([remote.command, remote.args ?? [], remote.env ?? {}, remote.cwd ?? ""]);
     const existing = this.connections.get(sessionId);
     if (existing?.signature === signature) return existing.client;
@@ -172,12 +193,23 @@ export class RemoteRuntimeClients {
     return client;
   }
 
-  async callTool(sessionId: string, remote: RemoteRuntime, name: string, args: unknown): Promise<ToolResult> {
-    return this.use(sessionId, remote, async (client) => (await client.callTool({ name, arguments: (args ?? {}) as Record<string, unknown> }, undefined, { timeout: 15 * 60_000 })) as ToolResult);
+  /** An embedder-owned runtime is called as it is; a host connection the session had before is closed, since the embedder's replaces it. */
+  private owned(sessionId: string, remote: RemoteRuntime): RemoteRuntimeConnection | undefined {
+    if (!isRuntimeConnection(remote)) return undefined;
+    if (this.connections.has(sessionId)) void this.close(sessionId);
+    return remote;
   }
 
-  async readResource(sessionId: string, remote: RemoteRuntime, uri: string): Promise<{ contents: { uri: string; text?: string }[] }> {
-    return this.use(sessionId, remote, async (client) => (await client.readResource({ uri })) as { contents: { uri: string; text?: string }[] });
+  async callTool(sessionId: string, remote: RemoteRuntime, name: string, args: unknown): Promise<ToolResult> {
+    const owned = this.owned(sessionId, remote);
+    if (owned) return owned.callTool(name, (args ?? {}) as Record<string, unknown>);
+    return this.use(sessionId, remote as RemoteRuntimeCommand, async (client) => (await client.callTool({ name, arguments: (args ?? {}) as Record<string, unknown> }, undefined, { timeout: 15 * 60_000 })) as ToolResult);
+  }
+
+  async readResource(sessionId: string, remote: RemoteRuntime, uri: string): Promise<{ contents: { uri: string; text?: string; mimeType?: string }[] }> {
+    const owned = this.owned(sessionId, remote);
+    if (owned) return owned.readResource(uri);
+    return this.use(sessionId, remote as RemoteRuntimeCommand, async (client) => (await client.readResource({ uri })) as { contents: { uri: string; text?: string }[] });
   }
 
   async close(sessionId: string): Promise<void> {
