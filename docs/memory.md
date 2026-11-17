@@ -70,6 +70,9 @@ newest others of every home (`promptLimit`, default 20). The homes are read side
   `[{id: "person", key: {email}}]`; otherwise the session has no memory and the tools answer `unavailable`. A single
   store without `home` (Marley's brand graph) behaves as before.
 - `personEmail`: the person this host works for; default `kit.brain.callerEmail`. Never taken from model input.
+- The workspace home's `<name>` is `MarshalHostOptions.workspaceName`: the Marshal workspace this host serves (e.g.
+  `zygstinct` for a worktree of it), default the folder name. The kit's Brain route has the same name, and the desktop
+  lists `workspace:<name>` exactly, so a host in a worktree or scratch path should pass the workspace's own name.
 - `promptLimit`, `alwaysOnLimit`, `refreshMs`.
 
 Access is the Brain's: a `person` scope is private to that person (the Brain checks the signed-in caller), a workspace

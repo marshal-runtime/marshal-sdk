@@ -87,6 +87,12 @@ export interface MarshalHostExtensionState {
 export interface MarshalHostOptions extends MarshalHostPorts {
   /** Where sessions work: the checkout or scratch folder of this run. */
   workspacePath: string;
+  /**
+   * The Marshal workspace this host serves (e.g. "zygstinct" for a worktree of it), default the folder name. It names
+   * the kit's Brain route and the workspace memory scope (`workspace:<name>`, the desktop's form), so give the
+   * workspace's own name when the folder is a worktree or a scratch path.
+   */
+  workspaceName?: string;
   /** Host-private folder outside the workspace: runtime state and the session store. */
   stateRoot: string;
   extensions?: readonly MarshalHostExtension[];
@@ -357,6 +363,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       : undefined;
   // The kit's company Brain answers memory.* once the runtime exists (`invoke` below); until then a call fails as unavailable.
   let brainInvoke: ((capability: string, input: Record<string, unknown>) => Promise<unknown>) | undefined;
+  const workspaceName = options.workspaceName?.trim() || path.basename(workspacePath);
   const brainCall = (capability: string, input: Record<string, unknown>) => {
     if (!brainInvoke) throw Object.assign(new Error("The Brain is not ready yet."), { code: "unavailable" });
     return brainInvoke(capability, input);
@@ -364,7 +371,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const kitSelection = normalizeKit(options.kit);
   const kitMemory = kitSelection?.parts.includes("memory") === true;
   const kitStores = companyBrainStores(brainCall, {
-    workspace: path.basename(workspacePath),
+    workspace: workspaceName,
     personEmail: options.memory?.personEmail ?? kitSelection?.brain?.callerEmail,
   });
   const memory = new HostMemory(
@@ -376,7 +383,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   );
   const runRecordsPublisher = options.runRecords ? new RunRecordsPublisher({ log, ...options.runRecords, store: sessions }) : undefined;
   const kitOptions = normalizeKit(options.kit);
-  const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath }) : undefined;
+  const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath, workspaceName }) : undefined;
   const extensions = [...(kit?.extensions ?? []), ...(options.extensions ?? [])];
   // Fails before anything starts when a listed package is missing or is not an extension, naming it.
   const packages = extensions.map((extension) => readPackageManifest(extension.packageRoot));
@@ -410,7 +417,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     ...(options.reasoningEffort ? { defaultReasoningEffort: options.reasoningEffort } : {}),
     ...(options.permissions?.canUseTool ? { permissionHandler: options.permissions.canUseTool } : {}),
     ...(options.settings ? { settings: () => options.settings!.read() } : {}),
-    workspaceName: path.basename(workspacePath),
+    workspaceName,
     systemPrompt: (session) => prompts?.forSession(session),
     ...(options.launchOptionsFor ? { launchOptionsFor: options.launchOptionsFor } : {}),
     ...(options.live ? { live: options.live } : {}),
@@ -470,7 +477,6 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const hostScope = workspaceScope(workspacePath);
   const runtimeHostRoot =
     runtimeRoot ?? path.join(workspacePath, ".marshal", "runtime", createHash("sha256").update(HARNESS_ID).digest("hex").slice(0, 16));
-  const workspaceName = path.basename(workspacePath);
   const callContext = (sessionId: string) => sharedCallContext(sessionId, workspaceName, workspacePath);
   if (options.permissions?.approval || options.permissions?.resolveGrants || options.permissions?.patterns) {
     log("permissions.approval, resolveGrants and patterns are not taken by the shared runtime host yet; brokers and canUseTool decide");

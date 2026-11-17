@@ -89,6 +89,8 @@ export function prepareKit(input: {
   kit: KitOptions;
   sessions: SessionStore;
   workspacePath: string;
+  /** The Marshal workspace's name (its Brain route); default the folder name. */
+  workspaceName?: string;
   env?: NodeJS.ProcessEnv;
 }): PreparedKit {
   const { kit } = input;
@@ -114,7 +116,7 @@ export function prepareKit(input: {
           packageRoot: brainPackageRoot(brain, input.env),
           configuration: brainConfiguration({
             brain,
-            workspaceName: path.basename(input.workspacePath),
+            workspaceName: input.workspaceName ?? path.basename(input.workspacePath),
             memoryWrites,
           }),
         },

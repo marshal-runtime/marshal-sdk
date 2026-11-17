@@ -14,6 +14,9 @@ const host = await createMarshalHost({
 });
 ```
 
+The workspace's Brain route and its memory home are named `workspaceName` (default the folder name of `workspacePath`);
+pass the Marshal workspace's own name when the host runs in a worktree.
+
 With the kit on, each session's prompt gets a "Knowledge, memory and past sessions" section that names the
 capabilities and their call shapes, and the capabilities are in the runtime catalog for `runtime_exec`,
 `context.runtime.invoke` and `host.invoke`. The kit is **read-only by default**: every capability that writes to
