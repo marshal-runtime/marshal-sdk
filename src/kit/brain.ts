@@ -76,10 +76,14 @@ export function brainPackageRoot(
   return resolved;
 }
 
+/** The Brain that keeps every person's personal memories (the extension's `memoryRoute`): the company Brain. */
+export const PERSONAL_MEMORY_ROUTE = "zyg";
+
 /**
  * The Brain extension's cloud-only surface: the knowledge tools, the shared-session tools, and the memory graph
- * writes when the kit carries memory (a route with `memory: true` for this workspace). No local index,
- * no brand tools, no answer card.
+ * writes when the kit carries memory: this workspace's route (`memory: true`) is the `workspace` home, and the company
+ * Brain's route, pinned as `memoryRoute`, is the `personal` home (docs/memory.md). No local index, no brand tools, no
+ * answer card.
  */
 export function brainConfiguration(input: BrainConfigurationInput): Record<string, unknown> {
   const { brain } = input;
@@ -100,7 +104,10 @@ export function brainConfiguration(input: BrainConfigurationInput): Record<strin
     ...(brain.credentialsFile ? { cloudCredentialsFile: brain.credentialsFile } : {}),
     ...(input.memoryWrites
       ? {
+          memoryRoute: PERSONAL_MEMORY_ROUTE,
           brainRoutes: {
+            [PERSONAL_MEMORY_ROUTE]: { cloudUrl: BRAIN_CLOUD_URL, cloudAudience: BRAIN_CLOUD_URL, memory: true },
+            // The workspace's own Brain (kit.brain.cloudUrl); the company Brain when it has none.
             [input.workspaceName]: {
               cloudUrl,
               cloudAudience,

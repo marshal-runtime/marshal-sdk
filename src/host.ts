@@ -40,7 +40,7 @@ import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { SessionPublisher } from "./kit/publisher.js";
 import { OrgStore, type OrgStoreOptions, type OrgTranscriptOptions } from "./org-store/index.js";
 import { OrgSessionSearch, type OrgSessionSearchOptions } from "./org-store/search.js";
-import { brainCapabilityRoute, createMemoryToolsProvider, HostMemory, type MemoryOptions } from "./memory.js";
+import { companyBrainStores, createMemoryToolsProvider, HostMemory, type MemoryOptions } from "./memory.js";
 import { RunRecordsPublisher, type RunRecordsOptions } from "./run-records.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
 import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
@@ -357,15 +357,20 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       : undefined;
   // The kit's company Brain answers memory.* once the runtime exists (`invoke` below); until then a call fails as unavailable.
   let brainInvoke: ((capability: string, input: Record<string, unknown>) => Promise<unknown>) | undefined;
-  const companyBrain = brainCapabilityRoute("brain", (capability, input) => {
+  const brainCall = (capability: string, input: Record<string, unknown>) => {
     if (!brainInvoke) throw Object.assign(new Error("The Brain is not ready yet."), { code: "unavailable" });
     return brainInvoke(capability, input);
+  };
+  const kitSelection = normalizeKit(options.kit);
+  const kitMemory = kitSelection?.parts.includes("memory") === true;
+  const kitStores = companyBrainStores(brainCall, {
+    workspace: path.basename(workspacePath),
+    personEmail: options.memory?.personEmail ?? kitSelection?.brain?.callerEmail,
   });
-  const kitMemory = normalizeKit(options.kit)?.parts.includes("memory") === true;
   const memory = new HostMemory(
     {
       ...options.memory,
-      ...(kitMemory ? { fallback: () => ({ route: companyBrain, scopes: [{ id: "workspace", key: { workspace: path.basename(workspacePath) } }] }) } : {}),
+      ...(kitMemory ? { fallback: () => kitStores } : {}),
     },
     sessions,
   );

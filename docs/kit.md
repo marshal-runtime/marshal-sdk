@@ -27,7 +27,7 @@ broker) and the `kit` option in `src/host.ts`. Tests: `test/kit.test.ts`.
 | Part       | Capabilities on the host                                                                         | Backed by                                                                                                       |
 | ---------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | `brain`    | `knowledge.search`, `context`, `impact`, `path`, `refine`, `schema`, `health`                    | The `@marshal/brain` extension (v0.2.0), loaded on the host's runtime with its cloud-only surface               |
-| `memory`   | `marshal.tool.remember`, `recall`, `linkMemory`, `updateMemory`, `forget` (docs/memory.md)        | Memory nodes in the Brain graph through `memory.create/update/link/delete/search/list`; written at once, no approval |
+| `memory`   | `marshal.tool.remember`, `recall`, `linkMemory`, `updateMemory`, `forget` (docs/memory.md)        | Memory nodes in the Brain graph through `memory.create/update/link/delete/search/list`; written at once, no approval; two homes, personal and workspace |
 | `sessions` | `sessions.search {query, scope?, limit?, workspace?, since?, until?}`                            | This host's own session store + the Brain's shared session index (`sessions.cloud_search`), merged by rank       |
 
 `memory` implies `brain`. `sessions` works without the Brain (local store only; the result says the shared index
@@ -48,7 +48,10 @@ the kit turns it on). The configuration is the cloud-only surface (`brainConfigu
     person.
   - `delegated`: a service on Google Cloud signs with its metadata-server ID token, and the person comes from the
     host principal's `callerEmail` claim (`kit.brain.callerEmail`, with access labels from `kit.brain.access`).
-- A `brainRoutes` entry with `memory: true` is written when the kit carries `memory`.
+- When the kit carries `memory`: a `brainRoutes` entry with `memory: true` for the workspace (its own Brain,
+  `kit.brain.cloudUrl`), a `zyg` entry for the company Brain, and `memoryRoute: "zyg"`, so personal memories (the
+  `personal` home, scope `person:email=<kit.brain.callerEmail>`) live in the company Brain and workspace memories in the
+  workspace's Brain (docs/memory.md, "Two homes").
 - `cloudTimeoutMs`: 60000 by default (`kit.brain.timeoutMs`, 1000 to 120000).
 
 **The warm-up line.** The Brain extension's warm-up calls the front's `schema` tool and gives up after 20 s. When
