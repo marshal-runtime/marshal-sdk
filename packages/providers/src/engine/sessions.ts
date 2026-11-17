@@ -10101,7 +10101,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
   private async resolveForkModel(
     item: { model?: string; runtime?: string },
     parentTarget: { runtimeId: string; accountId?: string },
-    parentModel: string,
+    parentModel: string | undefined,
   ): Promise<string> {
     const requested = item.model?.trim() || undefined;
     const runtime = item.runtime?.trim() || undefined;
@@ -10109,7 +10109,8 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       ? await this.resolveAgentRuntimeModel(runtime, requested)
       : requested
         ? this.routeRequestedModel(requested)
-        : parentModel;
+        : (parentModel ??
+          this.applyDefaultAccount(this.modelManager.getTierDefaultModel("subagent")));
     const namedAccount =
       (runtime ? parseRuntimeTargetKey(runtime)?.accountId : undefined) ??
       parseRuntimeQualifiedModel(requested)?.accountId;
@@ -10135,7 +10136,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       return model;
     }
     const parentNativeModel = parseRuntimeQualifiedModel(parentModel)?.model ?? parentModel;
-    if (parentTarget.runtimeId === runtimeId && nativeModel === parentNativeModel) {
+    if (parentModel && parentTarget.runtimeId === runtimeId && nativeModel === parentNativeModel) {
       const parentAccount = parentTarget.accountId ?? DEFAULT_RUNTIME_ACCOUNT_ID;
       const parentAccountUsable = await assertRuntimeAccountUsable({
         read,
