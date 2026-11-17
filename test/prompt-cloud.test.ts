@@ -49,7 +49,9 @@ test("without Page Studio the layer adds no Page Studio section; memory is alway
   const prompt = assembleHostPrompt(mergePromptLayers(base, cloudRunLayer({ job: "page-edit" }))).content;
   assert.doesNotMatch(prompt, /## Page Studio on this host/);
   assert.doesNotMatch(prompt, /published to the team Brain/);
-  assert.match(prompt, /Memories are nodes in the Brain graph/);
+  assert.match(prompt, /You have a long-term memory that lasts across sessions/);
+  assert.match(prompt, /Each memory is a node in the Brain's knowledge graph/);
+  assert.doesNotMatch(prompt, /already in your context below/);
 });
 
 test("marshal.tool.setSessionTodos keeps the calling session's plan in its state", async () => {

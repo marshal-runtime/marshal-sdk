@@ -25,7 +25,7 @@ export interface CloudRunPromptInput {
 export function cloudRunLayer(input: CloudRunPromptInput): PromptLayer {
   const kit = input.kit ?? {};
   const starter = input.startedBy ? ` (${input.startedBy})` : "";
-  const memoryRung = "3. **Your memory.** Memories are nodes in the Brain graph. The ones of your scopes are already in your context below (preferences always); `marshal.tool.recall {query}` finds the rest by meaning, `marshal.tool.recall {since}` lists what was saved since a time.";
+  const memoryRung = "3. **Your long-term memory.** You have a long-term memory that lasts across sessions: what you and other agents learned before (preferences, decisions, conventions, lessons, how things are done here). Each memory is a node in the Brain's knowledge graph, linked to the code, tickets, sessions and people it is about. Search it with `marshal.tool.recall {query}` whenever earlier knowledge could shape the answer or the work, such as how something is done here; `marshal.tool.recall {since}` lists what was saved since a time. When you learn something meaningful, save it with `marshal.tool.remember` and link it to the graph nodes it is about (files and symbols, tickets, sessions, people), so the next agent finds it from those nodes.";
   return {
     slots: {
       "v2.identity.host": `You are Marshal, an AI agent running in a cloud sandbox for the person who started this run${starter}. Nobody is at a screen next to you: you work from this run's files, the tools listed under "Tools on this host" and the credentials the run was given, and you can search what the organization already knows.`,
