@@ -28,7 +28,7 @@ interface DesktopCase {
   expected: string;
 }
 
-// Rendered by the desktop's own assembleMarshalSystemPromptV2 (OmerMachluf/marshal 36452cec2); see docs/prompt.md
+// Rendered by the desktop's own assembleMarshalSystemPromptV2 (OmerMachluf/marshal 78cb29dd8, runtime pack marshal-host-94); see docs/prompt.md
 // for how to regenerate it.
 const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, "test", "fixtures", "desktop-v2-prompt.json"), "utf8")) as {
   slots: Record<string, string>;
@@ -206,6 +206,37 @@ test("host: prompt option, per-session layers, forks get the fork role", async (
     await host.agents.wait(fork.id);
     assert.match(host.systemPrompt(fork.id) ?? "", /## Your role: fork/);
     assert.ok(!(host.systemPrompt(fork.id) ?? "").includes(ROLE_DELTAS.main.trim()));
+  } finally {
+    await host.dispose();
+  }
+});
+
+// What marshal_sdk and page runs send: a host with no prompt option. Its cloud surface drops the desktop-only
+// sections, so this keeps v2's completion push (and the forks it delegates with) from being dropped with them.
+test("host with no prompt option: every turn gets v2 with Autonomy and persistence and Finish the job; forks get the fork role", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-prompt-ws-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-prompt-state-"));
+  const prompts: string[] = [];
+  const query: QueryFn = ({ options }) =>
+    (async function* () {
+      prompts.push(String(options.systemPrompt));
+      yield { type: "system", subtype: "init", session_id: `native-${prompts.length}` };
+      yield { type: "result", subtype: "success", is_error: false, result: "ok", usage: {} };
+    })();
+  const host = await createMarshalHost({ workspacePath: workspace, stateRoot, query, browser: false, env: {}, automations: { start: false } });
+  try {
+    const top = host.agents.launch({ task: "t", idempotencyKey: "top" });
+    await host.agents.wait(top.id);
+    const fork = host.agents.launch({ task: "part", idempotencyKey: "fork", parentId: top.id });
+    await host.agents.wait(fork.id);
+    assert.equal(prompts.length, 2);
+    for (const sent of prompts) {
+      assert.match(sent, /This is the Marshal agent prompt v2/);
+      assert.match(sent, /\n## Autonomy and persistence\n[\s\S]*\n## Finish the job\n/);
+      assert.match(sent, /marshal\.tool\.forkSubagents/);
+    }
+    assert.equal(prompts[0], host.systemPrompt(top.id));
+    assert.match(prompts[1]!, /## Your role: fork/);
   } finally {
     await host.dispose();
   }

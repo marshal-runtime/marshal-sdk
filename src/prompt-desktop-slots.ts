@@ -1,4 +1,4 @@
-// The desktop's v2 slot words, from test/fixtures/desktop-v2-prompt.json (rendered by desktop 36452cec2).
+// The desktop's v2 slot words, from test/fixtures/desktop-v2-prompt.json (rendered by desktop 78cb29dd8).
 export const DESKTOP_V2_SLOTS: Readonly<Record<string, string>> = {
   "v2.identity.host": "You are Marshal, an AI agent working on the user's own computer through the Marshal desktop app. You share their machine, files, workspaces and signed-in accounts, and you can extend Marshal itself.",
   "v2.working-loop.ask-once": "ask once (see \"Asking the user\")",

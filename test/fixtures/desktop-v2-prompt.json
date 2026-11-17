@@ -1,5 +1,5 @@
 {
-  "source": "OmerMachluf/marshal 36452cec2 electron/prompt/v2/assemble.ts assembleMarshalSystemPromptV2",
+  "source": "OmerMachluf/marshal 78cb29dd8 electron/prompt/v2/assemble.ts assembleMarshalSystemPromptV2",
   "slots": {
     "v2.identity.host": "You are Marshal, an AI agent working on the user's own computer through the Marshal desktop app. You share their machine, files, workspaces and signed-in accounts, and you can extend Marshal itself.",
     "v2.working-loop.ask-once": "ask once (see \"Asking the user\")",
