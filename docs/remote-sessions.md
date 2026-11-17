@@ -45,6 +45,15 @@ readResource(uri)}` (`RemoteRuntimeConnection`; zyg-agents: the session's runtim
 environment allowlist, sandbox user and grants). The host calls it and nothing else: it never spawns, idle-closes or
 disposes it, and the embedder closes it when the session ends. Its timeouts are the embedder's too.
 
+### The session server without a host
+
+An embedder that owns every session's runtime and needs no host runtime of its own (zyg-agents' engine: no extensions
+load in the engine process) builds the same `marshal` server with `createSessionMarshalServer({session, runtime,
+workspacePath, directTools?, toolCall?, descriptions?})` from `@marshal/sdk/session-server` (`src/session-server.ts`).
+The host's `serversFor` builds every session's server with it, so both serve the same tools and call the same wrapper.
+Host tools are the host's: through this function every call goes to `runtime`, none is intercepted.
+`scripts/pack-agent-port.mjs` packs it beside the agent port, with only the Agent SDK and zod as peers.
+
 ### Host tools per session
 
 `createMarshalHost({ remoteHostToolsFor })` narrows the host tools of one remote session below the host-wide
