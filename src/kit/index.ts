@@ -80,7 +80,7 @@ export function normalizeKit(selection: KitSelection | undefined): KitOptions | 
   if (!selection) return undefined;
   const options: KitOptions = Array.isArray(selection) ? { parts: selection as readonly KitPart[] } : (selection as KitOptions);
   for (const part of options.parts) {
-    if (part !== "brain" && part !== "memory" && part !== "sessions") throw new Error(`Unknown kit part ${String(part)}.`);
+    if (part !== "brain" && part !== "memory" && part !== "sessions" && part !== "knowledge") throw new Error(`Unknown kit part ${String(part)}.`);
   }
   return options.parts.length ? options : undefined;
 }

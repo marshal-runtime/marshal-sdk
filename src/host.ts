@@ -29,6 +29,7 @@ import {
   withSecrets,
   workspaceScope,
   type DirectTool,
+  type DirectToolContext,
   type MarshalHostPorts,
   type MarshalHostTelemetryEvent,
 } from "./host-options.js";
@@ -51,7 +52,7 @@ import { createOrgBridge, type OrgBridge, type OrgBridgeOptions } from "./org-br
 import { httpLinkRelay, type LinkRelay } from "./org-host-room.js";
 import { ConversationRoomRoute } from "./rooms-route.js";
 import { FileSessionStore, type SessionRecord, type SessionStore } from "./session-store.js";
-import { hostToolOf, refusedHostTool, remoteEmbedderToolSet, remoteExecNote, remoteHostToolSet, RemoteRuntimeClients, type RemoteRuntime } from "./remote-tools.js";
+import { hostToolOf, refusedHostTool, remoteEmbedderToolSet, remoteExecNote, remoteHostToolSet, RemoteRuntimeClients, type RemoteRuntime, type RemoteToolResult } from "./remote-tools.js";
 
 
 const HARNESS_ID = "marshal-sdk";
@@ -197,6 +198,20 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    */
   remoteEmbedderTools?: readonly string[];
   /**
+   * The host tools one remote session may reach, narrower than the host-wide `remoteHostTools` and `remoteEmbedderTools` (every name must be in
+   * one of them; another is a configuration error that fails the turn). `[]`: the session reaches no host tool, every one is refused. Undefined
+   * (or no function): the host-wide sets. Only remote sessions (`remoteRuntime`) use it.
+   */
+  remoteHostToolsFor?: (session: SessionRecord) => readonly string[] | undefined;
+  /**
+   * Wraps every call on a session's `marshal` server (and the same tools given straight to other providers): each call that reaches the
+   * session's runtime (runtime_search, runtime_exec, runtime_read_resource, from the runtime tools or from inside a direct tool, which then
+   * names itself as `alias`) and each direct tool the model calls. `next()` runs the call; the wrapper may record it and may return a changed
+   * result (a prefix, a truncation). A runtime_read_resource result carries what was read as `structuredContent` ({contents}); a direct tool
+   * reading through its context gets that back whatever the wrapper did to `content`, or the wrapper's error text when it returns `isError`.
+   */
+  toolCall?: MarshalToolCallWrapper;
+  /**
    * The session label that bounds the session tools, for a host whose store holds several tenants' sessions (Marley: `brand`, set by the server on
    * every session it launches; forks copy their parent's labels). searchSessions and getSessionTranscript return only sessions (local and org)
    * whose label equals the caller's, and a caller without it sees none; forkSubagents, listSubagents, messageSubagent and messageForks act only for a calling
@@ -227,6 +242,20 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    */
   nativeSubagentGuard?: boolean;
 }
+
+/** One call on a session's `marshal` server, as the `toolCall` wrapper sees it. */
+export interface MarshalToolCall {
+  /** "runtime": a call that reaches the session's runtime; "direct": an embedder direct tool the model called. */
+  kind: "runtime" | "direct";
+  /** runtime_search, runtime_exec or runtime_read_resource for a runtime call; the direct tool's name for a direct one. */
+  tool: string;
+  args: Record<string, unknown>;
+  /** The direct tool a runtime call was made from (a desktop name such as runtimeInvoke); absent when the model called the runtime tool itself. */
+  alias?: string;
+}
+
+/** The `toolCall` wrapper: runs `next()` (the call itself) and returns its result, or a changed one. */
+export type MarshalToolCallWrapper = (session: SessionRecord, call: MarshalToolCall, next: () => Promise<RemoteToolResult>) => Promise<RemoteToolResult>;
 
 /** The org bridge without what the host supplies; `host` defaults to the host's id. */
 export type MarshalHostOrgOptions = Omit<OrgBridgeOptions, "store" | "agents" | "host"> & {
@@ -662,54 +691,92 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
 
   const remoteHostTools = remoteHostToolSet(options.remoteHostTools);
   const remoteEmbedderTools = remoteEmbedderToolSet(options.remoteEmbedderTools);
-  const REMOTE_EXEC_NOTE = remoteExecNote([...remoteHostTools, ...remoteEmbedderTools]);
+  const hostWideTools: ReadonlySet<string> = new Set([...remoteHostTools, ...remoteEmbedderTools]);
+  const sessionHostTools = (session: SessionRecord): ReadonlySet<string> => {
+    const listed = options.remoteHostToolsFor?.(session);
+    if (listed === undefined) return hostWideTools;
+    const unknown = listed.filter((name) => !hostWideTools.has(name));
+    if (unknown.length) throw new Error(`remoteHostToolsFor: not a host tool this host allows: ${unknown.join(", ")} (remoteHostTools and remoteEmbedderTools list them)`);
+    return new Set(listed);
+  };
+  const wrap = options.toolCall;
   serversFor = (session: SessionRecord): Record<string, unknown> => {
     const hostAdapterOfSession = adapterFor(session.id);
     const remote = options.remoteRuntime?.(session);
-    // A remote session's runtime calls go to its own machine's runtime, except the fixed host tool set (remote-tools.ts).
+    const allowedHostTools = remote ? sessionHostTools(session) : hostWideTools;
+    // A remote session's runtime calls go to its own machine's runtime, except the host tools it may reach (remote-tools.ts).
     const adapter = remote
       ? {
           callTool: (name: string, args: unknown, _extra?: never) => {
             const hostTool = hostToolOf(name, args, remoteEmbedderTools);
             if (hostTool === undefined) return remoteClients.callTool(session.id, remote, name, args);
-            return remoteHostTools.has(hostTool) || remoteEmbedderTools.has(hostTool)
-              ? hostAdapterOfSession.callTool(name, args, undefined as never)
-              : Promise.resolve(refusedHostTool(hostTool));
+            return allowedHostTools.has(hostTool) ? hostAdapterOfSession.callTool(name, args, undefined as never) : Promise.resolve(refusedHostTool(hostTool));
           },
           readResource: (uri: string) => remoteClients.readResource(session.id, remote, uri),
         }
       : hostAdapterOfSession;
-    const call = async (name: string, args: unknown) => {
-      const result = (await adapter.callTool(name, args, undefined as never)) as {
-        content: unknown[];
-        isError?: boolean;
+    const runtimeCall =
+      (alias?: string) =>
+      (name: string, args: unknown): Promise<RemoteToolResult> => {
+        const next = async () => (await adapter.callTool(name, args, undefined as never)) as RemoteToolResult;
+        return wrap ? wrap(session, { kind: "runtime", tool: name, args: argsRecord(args), ...(alias ? { alias } : {}) }, next) : next();
       };
+    const runtimeRead =
+      (alias?: string) =>
+      (uri: string): Promise<RemoteToolResult> => {
+        const next = async (): Promise<RemoteToolResult> => {
+          try {
+            const read = (await adapter.readResource(uri)) as { contents: { uri: string; text?: string }[] };
+            return { content: read.contents.map((item) => ({ type: "text" as const, text: item.text ?? "" })), structuredContent: read };
+          } catch (error) {
+            return { content: [{ type: "text" as const, text: messageOf(error) }], isError: true };
+          }
+        };
+        return wrap ? wrap(session, { kind: "runtime", tool: "runtime_read_resource", args: { uri }, ...(alias ? { alias } : {}) }, next) : next();
+      };
+    // Without a wrapper a direct tool reads through the adapter as it always did; with one, through the wrapped read.
+    const readContents =
+      (alias?: string) =>
+      async (uri: string): Promise<{ contents: { uri: string; text?: string }[] }> => {
+        if (!wrap) return (await adapter.readResource(uri)) as { contents: { uri: string; text?: string }[] };
+        const result = await runtimeRead(alias)(uri);
+        if (result.isError) throw new Error(resultText(result.content));
+        const read = result.structuredContent as { contents?: { uri: string; text?: string }[] } | undefined;
+        return read?.contents ? { contents: read.contents } : { contents: [{ uri, text: resultText(result.content) }] };
+      };
+    const call = async (name: string, args: unknown) => {
+      const result = await runtimeCall()(name, args);
       return { content: result.content, ...(result.isError ? { isError: true } : {}) } as never;
     };
-    const directContext = {
+    const directContextFor = (alias: string): DirectToolContext => ({
       sessionId: session.id,
       workspacePath,
       trustedTypeScript: !remote && importPolicy !== undefined,
-      call: (name: string, args: unknown) => adapter.callTool(name, args, undefined as never) as never,
+      call: (name: string, args: unknown) => runtimeCall(alias)(name, args),
       invoke: async (capability: string, input: unknown = {}) => {
-        const result = (await adapter.callTool("runtime_exec", { targetType: "operation", target: capability, input }, undefined as never)) as {
-          structuredContent?: Record<string, any>;
-        };
-        const response = result.structuredContent ?? {};
+        const result = await runtimeCall(alias)("runtime_exec", { targetType: "operation", target: capability, input });
+        const response = (result.structuredContent ?? {}) as Record<string, any>;
         if (response.status !== "success") throw new Error(`${capability} failed: ${JSON.stringify(response.error ?? response).slice(0, 2000)}`);
         return response.result?.output;
       },
-      readResource: (uri: string) => adapter.readResource(uri) as never,
-    };
+      readResource: readContents(alias),
+    });
+    const runDirect =
+      (direct: DirectTool) =>
+      (args: Record<string, unknown>): Promise<RemoteToolResult> => {
+        const next = async (): Promise<RemoteToolResult> => {
+          try {
+            return await direct.handler(args, directContextFor(direct.name));
+          } catch (error) {
+            return { content: [{ type: "text" as const, text: messageOf(error) }], isError: true };
+          }
+        };
+        return wrap ? wrap(session, { kind: "direct", tool: direct.name, args }, next) : next();
+      };
     const embedderTools = directTools.map((direct: DirectTool) =>
-      tool(direct.name, direct.description, direct.inputSchema, async (args) => {
-        try {
-          return (await direct.handler(args as Record<string, unknown>, directContext)) as never;
-        } catch (error) {
-          return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], isError: true } as never;
-        }
-      }),
+      tool(direct.name, direct.description, direct.inputSchema, async (args) => (await runDirect(direct)(args as Record<string, unknown>)) as never),
     );
+    const execNote = remote && allowedHostTools.size ? remoteExecNote(allowedHostTools) : "";
     const runtimeToolList = [
         tool(
           "runtime_search",
@@ -726,7 +793,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         ),
         tool(
           "runtime_exec",
-          (RUNTIME_MCP_TOOLS[1]!.description ?? "") + (remote ? REMOTE_EXEC_NOTE : ""),
+          (RUNTIME_MCP_TOOLS[1]!.description ?? "") + execNote,
           {
             targetType: z.enum(["operation", "inline_module", "module"]),
             target: z.string().optional(),
@@ -734,6 +801,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
             module: z.record(z.string(), z.any()).optional(),
             input: z.any().optional(),
             timeoutMs: z.number().int().min(1).max(EXEC_TIMEOUT_MS).optional(),
+            // An idempotency key: a retried call with the same id is the same request (the approval retry). No `approval`: a session never approves its own call.
+            requestId: z.string().min(1).max(200).optional(),
+            executionMode: z.enum(["brokered", "trusted_node"]).optional(),
           },
           (args) => call("runtime_exec", args),
         ),
@@ -742,15 +812,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
           "Read a Marshal runtime resource by URI: an installed extension's skill (skill://<extension>/<name>) and the references it names, or a resource a runtime_search entry points to (action resource_read).",
           { uri: z.string().min(1).max(2048) },
           async ({ uri }) => {
-            try {
-              const read = (await adapter.readResource(uri)) as { contents: { uri: string; text?: string }[] };
-              return { content: read.contents.map((item) => ({ type: "text" as const, text: item.text ?? "" })) } as never;
-            } catch (error) {
-              return {
-                content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }],
-                isError: true,
-              } as never;
-            }
+            const result = await runtimeRead()(uri);
+            return { content: result.content, ...(result.isError ? { isError: true } : {}) } as never;
           },
         ),
       ];
@@ -766,8 +829,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       ...(browserServer ? { playwright: browserServer } : {}),
       // Providers other than the Claude Agent SDK take these tools directly; that SDK reads only string keys.
       [PROVIDER_TOOLS]: [
-        ...(runtimeTools ? marshalProviderTools(call as never, (uri) => adapter.readResource(uri) as never, RUNTIME_MCP_TOOLS as never) : []),
-        ...directProviderTools(directTools, directContext),
+        ...(runtimeTools ? marshalProviderTools(call as never, readContents(), RUNTIME_MCP_TOOLS as never) : []),
+        ...directProviderTools(directTools, runDirect),
       ],
     };
   };
@@ -948,19 +1011,38 @@ function playwrightServer(browser: MarshalHostBrowser, log: (line: string) => vo
   }
 }
 
-/** Embedder direct tools for providers that take tools directly (JSON Schema from the zod shape). */
-function directProviderTools(directTools: readonly DirectTool[], context: Parameters<DirectTool["handler"]>[1]): unknown[] {
+/** Embedder direct tools for providers that take tools directly (JSON Schema from the zod shape); `run` is the session's (wrapped) call of one. */
+function directProviderTools(
+  directTools: readonly DirectTool[],
+  run: (direct: DirectTool) => (args: Record<string, unknown>) => Promise<RemoteToolResult>,
+): unknown[] {
   return directTools.map((direct) => ({
     name: direct.name,
     description: direct.description,
     parameters: z.toJSONSchema(z.object(direct.inputSchema)),
     handler: async (args: unknown) => {
-      const result = await direct.handler((args ?? {}) as Record<string, unknown>, context);
-      const joined = result.content.map((item) => item.text).join("\n");
+      const result = await run(direct)((args ?? {}) as Record<string, unknown>);
+      const joined = resultText(result.content);
       if (result.isError) throw new Error(joined);
       return joined;
     },
   }));
+}
+
+/** A tool call's arguments as a record (an absent or non-object argument is an empty one). */
+function argsRecord(args: unknown): Record<string, unknown> {
+  return args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+}
+
+/** The text of an MCP result's content items, one per line. */
+function resultText(content: readonly unknown[]): string {
+  return content
+    .map((item) => (item && typeof item === "object" && "text" in item ? String((item as { text: unknown }).text) : JSON.stringify(item)))
+    .join("\n");
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 

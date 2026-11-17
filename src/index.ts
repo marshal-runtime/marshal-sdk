@@ -1,4 +1,4 @@
-export { createMarshalHost, type MarshalHost, type MarshalHostExtension, type MarshalHostLinkOptions, type MarshalHostOrgOptions, type MarshalHostOptions } from "./host.js";
+export { createMarshalHost, type MarshalHost, type MarshalHostExtension, type MarshalHostLinkOptions, type MarshalHostOrgOptions, type MarshalHostOptions, type MarshalToolCall, type MarshalToolCallWrapper } from "./host.js";
 export {
   composeBrokers,
   desktopDirectTools,
@@ -366,4 +366,4 @@ export {
   type MemoryStore,
 } from "./memory.js";
 export { typedGraphMemoryRoute, type TypedGraphExecute, type TypedGraphHit, type TypedGraphMemoryRouteOptions } from "./memory-typed-graph.js";
-export { REMOTE_HOST_TOOLS, remoteEmbedderToolSet, remoteHostToolSet, type RemoteRuntime } from "./remote-tools.js";
+export { isRuntimeConnection, REMOTE_HOST_TOOLS, remoteEmbedderToolSet, remoteHostToolSet, type RemoteRuntime, type RemoteRuntimeCommand, type RemoteRuntimeConnection, type RemoteToolResult } from "./remote-tools.js";
