@@ -83,7 +83,7 @@ function fakeRoute(id: string, seed: BrainMemory[] = []) {
 }
 
 const PERSON = { id: "person", key: { email: "omer@zyg.com" } };
-const WORKSPACE = { id: "workspace", key: { workspace: "zygstinct" } };
+const WORKSPACE = { id: "workspace", key: {}, name: "zygstinct" };
 const memory = (id: string, content: string, scope: string, extra: Partial<BrainMemory> = {}): BrainMemory => ({ id, content, category: "fact", scope, alwaysOn: false, createdAt: "2026-11-17T08:00:00.000Z", links: [], ...extra });
 
 function twoHomes(personal = fakeRoute("zyg"), workspace = fakeRoute("zygstinct")) {
@@ -96,7 +96,8 @@ function twoHomes(personal = fakeRoute("zyg"), workspace = fakeRoute("zygstinct"
 
 test("a person scope keeps the @ of the email, the form the Brain checks the writer against", () => {
   assert.equal(scopeString(PERSON), "person:email=omer@zyg.com");
-  assert.equal(scopeString(WORKSPACE), "workspace:workspace=zygstinct");
+  assert.equal(scopeString(WORKSPACE), "workspace:zygstinct");
+  assert.equal(scopeString({ id: "workspace", key: {}, name: "my repo" }), "workspace:my repo", "the desktop writes the name as is");
   assert.equal(scopeString({ id: "person", key: { brand: "b 1", member: "m/2" } }), "person:brand=b-1/member=m-2");
 });
 
@@ -108,7 +109,7 @@ test("remember: a preference goes to the personal home, anything else to the wor
   assert.equal(preference.alwaysOn, true);
   const gotcha = await host.remember(session, { fact: "Never edit packages/db migrations by hand.", category: "decision", links: [{ path: "packages/db/migrations-pgroll" }] });
   assert.equal(gotcha.home, "workspace");
-  assert.equal(gotcha.scope, "workspace:workspace=zygstinct");
+  assert.equal(gotcha.scope, "workspace:zygstinct");
   assert.deepEqual(gotcha.links, [{ path: "packages/db/migrations-pgroll" }]);
   assert.deepEqual(personal.calls.map((call) => call.op), ["create"]);
   assert.deepEqual(workspace.calls.map((call) => call.op), ["create"]);
@@ -134,7 +135,7 @@ test("remember: a home the session lacks is refused, and an unknown home is inva
 
 test("recall merges both homes by rank, tags each memory with its home, and dedupes", async () => {
   const personal = fakeRoute("zyg", [memory("p1", "deploy only with Omer's ok", "person:email=omer@zyg.com"), memory("p2", "deploy notes", "person:email=omer@zyg.com")]);
-  const workspace = fakeRoute("zygstinct", [memory("w1", "deploy runs through Argo", "workspace:workspace=zygstinct")]);
+  const workspace = fakeRoute("zygstinct", [memory("w1", "deploy runs through Argo", "workspace:zygstinct")]);
   const { host } = twoHomes(personal, workspace);
   const found = await host.recallWithStatus(session, { query: "deploy" });
   assert.deepEqual(found.memories.map((record) => [record.id, record.home]), [
@@ -144,7 +145,7 @@ test("recall merges both homes by rank, tags each memory with its home, and dedu
   ]);
   assert.deepEqual(found.degraded, []);
   assert.deepEqual(personal.calls.at(-1)!.input.scopes, ["person:email=omer@zyg.com"]);
-  assert.deepEqual(workspace.calls.at(-1)!.input.scopes, ["workspace:workspace=zygstinct"]);
+  assert.deepEqual(workspace.calls.at(-1)!.input.scopes, ["workspace:zygstinct"]);
 });
 
 test("recall keeps the healthy home's memories and names the one that could not be read", async () => {
@@ -165,8 +166,8 @@ test("the prompt block shows personal always-on memories first, then the workspa
     memory("p-fact", "Wife's birthday March 3.", "person:email=omer@zyg.com", { createdAt: "2026-11-12T00:00:00.000Z" }),
   ]);
   const workspace = fakeRoute("zygstinct", [
-    memory("w-pref", "Use pnpm here.", "workspace:workspace=zygstinct", { category: "preference", alwaysOn: true, createdAt: "2026-11-16T00:00:00.000Z" }),
-    memory("w-fact", "Argo tracks main.", "workspace:workspace=zygstinct", { createdAt: "2026-11-15T00:00:00.000Z" }),
+    memory("w-pref", "Use pnpm here.", "workspace:zygstinct", { category: "preference", alwaysOn: true, createdAt: "2026-11-16T00:00:00.000Z" }),
+    memory("w-fact", "Argo tracks main.", "workspace:zygstinct", { createdAt: "2026-11-15T00:00:00.000Z" }),
   ]);
   const { host } = twoHomes(personal, workspace);
   await host.warm(session);
@@ -184,7 +185,7 @@ test("the prompt block shows personal always-on memories first, then the workspa
 
 test("update, link and forget find the id in either home, trying the home that holds it first", async () => {
   const personal = fakeRoute("zyg", [memory("p1", "old", "person:email=omer@zyg.com")]);
-  const workspace = fakeRoute("zygstinct", [memory("w1", "old", "workspace:workspace=zygstinct")]);
+  const workspace = fakeRoute("zygstinct", [memory("w1", "old", "workspace:zygstinct")]);
   const { host } = twoHomes(personal, workspace);
   const updated = await host.update(session, { id: "w1", fact: "new" });
   assert.equal(updated.content, "new");
@@ -203,7 +204,7 @@ test("update, link and forget find the id in either home, trying the home that h
 
 test("forget reports a failed home instead of saying the memory does not exist", async () => {
   const personal = fakeRoute("zyg");
-  const workspace = fakeRoute("zygstinct", [memory("w1", "x", "workspace:workspace=zygstinct")]);
+  const workspace = fakeRoute("zygstinct", [memory("w1", "x", "workspace:zygstinct")]);
   workspace.setDown(true);
   const { host } = twoHomes(personal, workspace);
   await assert.rejects(host.forget(session, "w1"), /down/);
@@ -293,7 +294,7 @@ test("the kit's default stores: a workspace home, plus a personal home only when
   const stores = companyBrainStores(call, { workspace: "zygstinct", personEmail: " Omer@Zyg.com " });
   assert.deepEqual(stores.map((store) => [store.home, store.scopes.map(scopeString)]), [
     ["personal", ["person:email=omer@zyg.com"]],
-    ["workspace", ["workspace:workspace=zygstinct"]],
+    ["workspace", ["workspace:zygstinct"]],
   ]);
   const host = new HostMemory({ store: () => stores }, sessions);
   await host.warm(session);
@@ -302,8 +303,8 @@ test("the kit's default stores: a workspace home, plus a personal home only when
     [
       ["person:email=omer@zyg.com", "personal"],
       ["person:email=omer@zyg.com", "personal"],
-      ["workspace:workspace=zygstinct", "workspace"],
-      ["workspace:workspace=zygstinct", "workspace"],
+      ["workspace:zygstinct", "workspace"],
+      ["workspace:zygstinct", "workspace"],
     ],
   );
 });

@@ -29,6 +29,11 @@ export interface MemoryScope {
   /** The scope's name as sessions use it (`appliesTo`): lower-case letters, digits, `-`, `_`. */
   id: string;
   key: Record<string, string>;
+  /**
+   * A single bare value instead of `key`: the scope string is `<id>:<name>`, the name as given. The workspace home uses
+   * it (`workspace:<workspace name>`), byte for byte the desktop's `workspaceScope` and the Brain extension's default.
+   */
+  name?: string;
 }
 
 /** One edge from a memory: exactly one target (a graph node, a code path with an optional symbol, a session, a person). */
@@ -131,6 +136,7 @@ const KEY_PART = /[^A-Za-z0-9._@-]+/g;
 
 /** `<id>:<k>=<v>/...`: the scope as the Brain stores it, an opaque equality key. */
 export function scopeString(scope: MemoryScope): string {
+  if (scope.name !== undefined) return `${scope.id}:${scope.name}`;
   const parts = Object.entries(scope.key)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key.replace(KEY_PART, "-")}=${String(value).replace(KEY_PART, "-")}`);
@@ -191,7 +197,7 @@ export function brainCapabilityRoute(id: string, rawCall: BrainCall, options: { 
 }
 
 /**
- * The kit's default stores on the company Brain extension (R8): a `workspace` home (scope `workspace:workspace=<name>`,
+ * The kit's default stores on the company Brain extension (R8): a `workspace` home (scope `workspace:<name>`,
  * the extension routes it to the workspace's own Brain) and, when the person is known, a `personal` home (scope
  * `person:email=<email>`, the extension's pinned `memoryRoute`). Every call carries its home.
  */
@@ -199,7 +205,7 @@ export function companyBrainStores(call: BrainCall, input: { workspace: string; 
   const email = input.personEmail?.trim().toLowerCase();
   return [
     ...(email ? [{ home: "personal" as const, route: brainCapabilityRoute("brain:personal", call, { home: "personal" }), scopes: [{ id: "person", key: { email } }] }] : []),
-    { home: "workspace" as const, route: brainCapabilityRoute("brain:workspace", call, { home: "workspace" }), scopes: [{ id: "workspace", key: { workspace: input.workspace } }] },
+    { home: "workspace" as const, route: brainCapabilityRoute("brain:workspace", call, { home: "workspace" }), scopes: [{ id: "workspace", key: {}, name: input.workspace }] },
   ];
 }
 

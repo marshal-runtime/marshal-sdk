@@ -13,7 +13,7 @@ A memory lives in one of two homes, and a session reads both:
 | Home | Where | What goes there | Read in |
 | --- | --- | --- | --- |
 | `personal` | the default Brain (the company Brain, zyg), scope `person:email=<email>`, private to that person | preferences (always on) and private facts such as a birthday | every session of that person, in every workspace |
-| `workspace` | the session workspace's own Brain, scope `workspace:workspace=<name>` | knowledge about that workspace: conventions, gotchas, why code is the way it is, linked to its real code nodes | sessions of that workspace |
+| `workspace` | the session workspace's own Brain, scope `workspace:<name>` (the form the desktop and the extension write) | knowledge about that workspace: conventions, gotchas, why code is the way it is, linked to its real code nodes | sessions of that workspace |
 
 A workspace whose Brain has no code graph of its own keeps its workspace memories in the company Brain under its
 `workspace` scope (path links only) until it gets one. `remember` takes `home`; without it a preference is personal and
@@ -38,7 +38,7 @@ cache holds the id first, then the other.
 
 A route is one Brain store's memory operations: `create`, `update`, `link`, `delete`, `search` and `list` (types in
 `src/memory.ts`, exported from the package). Each write is a graph node or edge at once. Scopes travel as opaque
-strings `<id>:<k>=<v>/...` (`scopeString`), e.g. `brand:brand=<uuid>` and `person:brand=<uuid>/member=<uuid>`.
+strings `<id>:<k>=<v>/...`, or `<id>:<name>` for a scope with a bare `name` (`scopeString`), e.g. `brand:brand=<uuid>` and `person:brand=<uuid>/member=<uuid>`.
 
 - The company Brain: `brainCapabilityRoute(id, call, {home?})` maps the route onto the Brain extension's capabilities
   `memory.create`, `memory.update`, `memory.link`, `memory.delete`, `memory.search` and `memory.list`. With `home`, every
@@ -66,7 +66,7 @@ newest others of every home (`promptLimit`, default 20). The homes are read side
 
 - `store(session)`: `{route: BrainMemoryRoute, scopes: MemoryScope[], home?}` (broadest scope first), an array of them
   with one `home` each (`personal`, `workspace`), or `undefined`. Default when the kit carries `memory`: a `workspace`
-  home `[{id: "workspace", key: {workspace}}]` and, when the person is known, a `personal` home
+  home `[{id: "workspace", key: {}, name: <workspace>}]` (scope `workspace:<workspace>`) and, when the person is known, a `personal` home
   `[{id: "person", key: {email}}]`; otherwise the session has no memory and the tools answer `unavailable`. A single
   store without `home` (Marley's brand graph) behaves as before.
 - `personEmail`: the person this host works for; default `kit.brain.callerEmail`. Never taken from model input.
