@@ -10,6 +10,10 @@ import { createSessionToolsProvider } from "../src/agent-provider.js";
 import { createForkToolsProvider } from "../src/fork-provider.js";
 import type { SessionForks } from "../src/forks.js";
 import { FileSessionStore } from "../src/session-store.js";
+import { fsObjectStore } from "../src/object-store.js";
+import { INDEX_ROOT } from "../src/org-store/layout.js";
+import type { IndexRow } from "../src/org-store/org-store.js";
+import { OrgSessionSearch, rowDir } from "../src/org-store/search.js";
 
 function storeWithTwoTenants() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-scope-"));
@@ -71,4 +75,32 @@ test("requireCaller: subagent tools refuse a call with no calling session", asyn
   assert.deepEqual(calls, []);
   await guarded.invoke("marshal.tool.listSubagents", {}, as("p"));
   assert.deepEqual(calls, ["list:p"]);
+});
+
+test("sessionScopeLabel bounds org rows by their partition too: a row's brand in `part` counts, a row with no brand matches nobody", async () => {
+  const { store, caller } = storeWithTwoTenants();
+  const objects = fsObjectStore(fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-org-")));
+  const put = async (id: string, part: Record<string, string>, labels: Record<string, string>) => {
+    const row: IndexRow = {
+      v: 1, id, ws: "zygstinct", impl: "marley", part, day: "2026-11-17", createdAt: "2026-11-17T08:00:00.000Z", updatedAt: "2026-11-17T08:00:00.000Z",
+      state: "idle", messages: 1, title: `org ${id}`, labels, usage: { costUsd: 0, inputTokens: 0, outputTokens: 0 }, host: { id: "other", kind: "server" },
+      members: [id], has: { native: true }, gen: "1",
+    };
+    const segments = Object.entries(part).map(([key, value]) => `${key}=${value}`).join("/");
+    await objects.put(`${INDEX_ROOT}/zygstinct/marley/${segments}/2026-11-17/_rows/${id}.json`, JSON.stringify(row));
+    await objects.put(`${rowDir(row)}/transcripts/${id}.jsonl`, JSON.stringify({ role: "user", content: "invoice rounding in the org store" }) + "\n");
+  };
+  await put("org-a", { env: "local", brand: "a" }, { kind: "dm" });
+  await put("org-b", { env: "local", brand: "b" }, { kind: "dm" });
+  await put("org-none", { env: "local" }, { kind: "dm" });
+  const orgSearch = new OrgSessionSearch({ objects, workspace: "zygstinct" });
+  const scoped = createSessionToolsProvider({ hostId: "h" } as never, store, { scopeLabel: "brand", orgSearch });
+  const found = (await scoped.invoke("marshal.tool.searchSessions", { query: "invoice rounding org store", scope: "cloud" }, as(caller.id))) as Search;
+  assert.deepEqual(found.output.results.map((hit) => hit.sessionId), ["org-a"]);
+  const own = (await scoped.invoke("marshal.tool.getSessionTranscript", { sessionId: "org-a" }, as(caller.id))) as Transcript;
+  assert.equal(own.output.name, "org org-a");
+  for (const foreignId of ["org-b", "org-none"]) {
+    const foreign = (await scoped.invoke("marshal.tool.getSessionTranscript", { sessionId: foreignId }, as(caller.id))) as Transcript;
+    assert.deepEqual(foreign.output, { success: false, error: "Session not found" });
+  }
 });

@@ -39,7 +39,7 @@ import { type ForkPointOf, SessionForks, forksPromptSection } from "./forks.js";
 import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { SessionPublisher } from "./kit/publisher.js";
 import { OrgStore, type OrgStoreOptions, type OrgTranscriptOptions } from "./org-store/index.js";
-import { OrgSessionSearch } from "./org-store/search.js";
+import { OrgSessionSearch, type OrgSessionSearchOptions } from "./org-store/search.js";
 import { brainCapabilityRoute, createMemoryToolsProvider, HostMemory, type MemoryOptions } from "./memory.js";
 import { RunRecordsPublisher, type RunRecordsOptions } from "./run-records.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
@@ -141,6 +141,11 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * `isCurrent` says when this machine already holds a native session's transcript, so a resume reads nothing from the cloud.
    */
   orgStore?: Omit<OrgStoreOptions, "log"> & { isCurrent?: OrgTranscriptOptions["isCurrent"] };
+  /**
+   * Search-only access to an org store this host does not publish to: searchSessions and getSessionTranscript also read the sessions other hosts
+   * published under `workspace` (bounded by `sessionScopeLabel` like every other session). Ignored when `orgStore` is set, which searches its own.
+   */
+  orgSearch?: Omit<OrgSessionSearchOptions, "log">;
   /** Which provider answers each non-chat model service: decide, embed, speech (docs/models.md). */
   models?: ModelsConfig;
   /** Test hook: the HTTP client model services use. */
@@ -341,7 +346,12 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const sessions: SessionStore = new FileSessionStore(path.join(stateRoot, SESSIONS_DIRECTORY), origin);
   const orgStore = options.orgStore ? new OrgStore({ log, ...options.orgStore }, sessions, options.orgStore.isCurrent) : undefined;
   if (orgStore) sessions.transcripts = orgStore.transcripts;
-  const orgSearch = options.orgStore ? new OrgSessionSearch({ objects: options.orgStore.objects, workspace: options.orgStore.impl.workspace, log: (line, fields) => log(line + " " + JSON.stringify(fields ?? {})) }) : undefined;
+  const orgSearchLog = (line: string, fields?: Record<string, unknown>) => log(line + " " + JSON.stringify(fields ?? {}));
+  const orgSearch = options.orgStore
+    ? new OrgSessionSearch({ objects: options.orgStore.objects, workspace: options.orgStore.impl.workspace, log: orgSearchLog })
+    : options.orgSearch
+      ? new OrgSessionSearch({ ...options.orgSearch, log: orgSearchLog })
+      : undefined;
   // The kit's company Brain answers memory.* once the runtime exists (`invoke` below); until then a call fails as unavailable.
   let brainInvoke: ((capability: string, input: Record<string, unknown>) => Promise<unknown>) | undefined;
   const companyBrain = brainCapabilityRoute("brain", (capability, input) => {
