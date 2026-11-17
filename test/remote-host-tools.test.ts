@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { hostToolOf, isHostToolCall, isHostToolSearch, REMOTE_HOST_TOOLS, refusedHostTool, remoteEmbedderToolSet, remoteHostToolSet } from "../src/remote-tools.js";
+import { hostToolOf, isHostToolCall, isHostToolSearch, REMOTE_HOST_TOOLS, refusedHostTool, remoteEmbedderToolSet, remoteExecNote, remoteHostToolSet } from "../src/remote-tools.js";
 
 test("remoteHostToolSet: all host tools by default, a subset when given, an unknown name refused", () => {
   assert.deepEqual([...remoteHostToolSet(undefined)].sort(), [...REMOTE_HOST_TOOLS].sort());
@@ -37,4 +37,10 @@ test("remoteEmbedderTools: an embedder's capability is a host tool only when nam
   assert.deepEqual([...remoteEmbedderToolSet(undefined)], []);
   assert.throws(() => remoteEmbedderToolSet(["marshal.tool.remember"]), /not an embedder capability name: marshal\.tool\.remember/);
   assert.throws(() => remoteEmbedderToolSet(["runs today"]), /not an embedder capability name/);
+});
+
+test("remoteExecNote names only the host tools the host lets remote sessions reach", () => {
+  const note = remoteExecNote([...remoteHostToolSet(["marshal.tool.remember", "marshal.tool.searchSessions"]), ...remoteEmbedderToolSet(["marley.runs.today"])]);
+  assert.match(note, /Host tools \(marshal\.tool\.remember, marshal\.tool\.searchSessions, marley\.runs\.today\) run on the host/);
+  assert.doesNotMatch(note, /recordDecision/);
 });
