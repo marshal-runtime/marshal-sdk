@@ -349,15 +349,18 @@ export {
 } from "./extension-registry.js";
 export {
   brainCapabilityRoute,
+  companyBrainStores,
   createMemoryToolsProvider,
   HostMemory,
   MEMORY_CATEGORIES,
+  MEMORY_HOMES,
   scopeString,
   type BrainCall,
   type BrainMemory,
   type BrainMemoryLink,
   type BrainMemoryRoute,
   type MemoryCategory,
+  type MemoryHome,
   type MemoryOptions,
   type MemoryScope,
   type MemoryStore,

@@ -1,8 +1,9 @@
 // Memory on every host (docs/memory.md): marshal.tool.remember / recall / forget / link under the desktop's names,
 // kept as memory nodes in a Brain graph (Spanner) with links to code, sessions, people and entities. There is no other
 // store: no JSON objects, no files, no proposal a person approves. A host never defines its own memory tools; it says
-// which Brain store and which scopes a session uses (`memory.store(session)`), and preferences are rendered into every
-// session's prompt from a cache that no turn waits on after a scope's first read (R31).
+// which Brain store(s) and which scopes a session uses (`memory.store(session)`: one store, or a `personal` and a
+// `workspace` home, R8), and preferences are rendered into every session's prompt from a cache that no turn waits on
+// after a scope's first read (R31).
 import { RUNTIME_PROTOCOL_VERSION, type CapabilityProvider, type InvocationContext } from "@marshal/runtime";
 
 import { callerSessionId } from "./agent-provider.js";
@@ -11,6 +12,14 @@ import type { SessionRecord, SessionStore } from "./session-store.js";
 
 export const MEMORY_CATEGORIES = ["preference", "decision", "fact", "context"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
+
+/**
+ * Where a memory lives (Omer R8): `personal` is the person's own home in the default Brain (preferences, private facts
+ * such as a birthday), shown in every workspace; `workspace` is the session workspace's own Brain, where a memory links
+ * to that workspace's real code nodes.
+ */
+export const MEMORY_HOMES = ["personal", "workspace"] as const;
+export type MemoryHome = (typeof MEMORY_HOMES)[number];
 
 /**
  * A place memories are kept for, inside one Brain store. Marley: `{id: "brand", key: {brand}}` and
@@ -48,6 +57,8 @@ export interface BrainMemory {
   /** The session that wrote it. */
   sessionId?: string;
   author?: string;
+  /** The home of the store it was read from or written to (set by the host when the session's store has one). */
+  home?: MemoryHome;
 }
 
 /**
@@ -87,14 +98,22 @@ export interface BrainMemoryRoute {
 export interface MemoryStore {
   route: BrainMemoryRoute;
   scopes: readonly MemoryScope[];
+  /** Required when a session has several stores (one per home); a single store may leave it out. */
+  home?: MemoryHome;
 }
 
 export interface MemoryOptions {
   /**
-   * The Brain store and scopes of a session. Default: the kit's company Brain with one `workspace` scope when the host
-   * carries the kit's `memory` part; otherwise the session has no memory and the tools say so.
+   * The Brain store(s) and scopes of a session: one store, or one per home (`personal` and `workspace`). Default: the
+   * kit's company Brain when the host carries the kit's `memory` part, as a `workspace` home and, when the person is
+   * known (`personEmail`), a `personal` home; otherwise the session has no memory and the tools say so.
    */
-  store?: (session: SessionRecord | undefined) => MemoryStore | undefined;
+  store?: (session: SessionRecord | undefined) => MemoryStore | readonly MemoryStore[] | undefined;
+  /**
+   * The person this host works for (lower-case work email). With the kit's company Brain it gives every session a
+   * `personal` home (scope `person:email=<email>`). Default: the kit's `brain.callerEmail`. Never taken from model input.
+   */
+  personEmail?: string;
   /** Memories that are not always-on rendered into the prompt, newest first. Default 20. */
   promptLimit?: number;
   /** Always-on memories rendered at most. Default 50. */
@@ -107,7 +126,8 @@ export interface MemoryOptions {
 }
 
 const SCOPE_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/;
-const KEY_PART = /[^A-Za-z0-9._-]+/g;
+// `@` stays so a person scope is `person:email=<email>`, the form the Brain checks the writer against.
+const KEY_PART = /[^A-Za-z0-9._@-]+/g;
 
 /** `<id>:<k>=<v>/...`: the scope as the Brain stores it, an opaque equality key. */
 export function scopeString(scope: MemoryScope): string {
@@ -122,9 +142,11 @@ export type BrainCall = (capability: string, input: Record<string, unknown>) => 
 
 /**
  * The company Brain's memory capabilities as a route: `memory.create`, `memory.update`, `memory.link`,
- * `memory.delete`, `memory.list` and `memory.search`, each taking and returning the route's shapes.
+ * `memory.delete`, `memory.list` and `memory.search`, each taking and returning the route's shapes. With `home`, every
+ * call carries it, so the Brain extension uses that home's Brain only (the host merges the homes itself).
  */
-export function brainCapabilityRoute(id: string, call: BrainCall): BrainMemoryRoute {
+export function brainCapabilityRoute(id: string, rawCall: BrainCall, options: { home?: MemoryHome } = {}): BrainMemoryRoute {
+  const call: BrainCall = options.home ? (capability, input) => rawCall(capability, capability.startsWith("memory.") ? { ...input, home: options.home } : input) : rawCall;
   const one = (value: unknown): BrainMemory => {
     const record = (value as { memory?: unknown })?.memory ?? value;
     return record as BrainMemory;
@@ -168,6 +190,19 @@ export function brainCapabilityRoute(id: string, call: BrainCall): BrainMemoryRo
   };
 }
 
+/**
+ * The kit's default stores on the company Brain extension (R8): a `workspace` home (scope `workspace:workspace=<name>`,
+ * the extension routes it to the workspace's own Brain) and, when the person is known, a `personal` home (scope
+ * `person:email=<email>`, the extension's pinned `memoryRoute`). Every call carries its home.
+ */
+export function companyBrainStores(call: BrainCall, input: { workspace: string; personEmail?: string }): MemoryStore[] {
+  const email = input.personEmail?.trim().toLowerCase();
+  return [
+    ...(email ? [{ home: "personal" as const, route: brainCapabilityRoute("brain:personal", call, { home: "personal" }), scopes: [{ id: "person", key: { email } }] }] : []),
+    { home: "workspace" as const, route: brainCapabilityRoute("brain:workspace", call, { home: "workspace" }), scopes: [{ id: "workspace", key: { workspace: input.workspace } }] },
+  ];
+}
+
 /** The Brain extension does not have that capability (yet). */
 const missing = (error: unknown): boolean => {
   const code = String((error as { code?: unknown })?.code ?? "");
@@ -181,10 +216,16 @@ interface Held {
   recent: BrainMemory[];
 }
 
+/** Personal first: its always-on memories open the prompt block and it is tried first for an id. */
+const homeRank = (home: MemoryHome | undefined) => (home === "personal" ? 0 : home === "workspace" ? 1 : 2);
+
+const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid-request" });
+
 /**
  * The host's memory: tools, the prompt block and its cache. `warm(session)` runs before each turn (the port awaits it)
  * but reads the Brain only for a scope this host has never seen; every other scope is served from the cache, which this
  * host's own writes keep current, and is re-read in the background at most every `refreshMs` for other hosts' writes.
+ * A session may have one store, or one per home (`personal`, `workspace`): writes go to one home, reads merge both.
  */
 export class HostMemory {
   private readonly cache = new Map<string, Held>();
@@ -194,38 +235,57 @@ export class HostMemory {
   private readonly forgotten = new Set<string>();
 
   constructor(
-    private readonly options: MemoryOptions & { fallback?: (session: SessionRecord | undefined) => MemoryStore | undefined },
+    private readonly options: MemoryOptions & { fallback?: (session: SessionRecord | undefined) => MemoryStore | readonly MemoryStore[] | undefined },
     private readonly sessions: SessionStore,
   ) {}
 
+  /** The session's stores, personal first; empty when the session has no memory. */
+  storesOf(session: SessionRecord | undefined): MemoryStore[] {
+    const given = this.options.store?.(session) ?? this.options.fallback?.(session);
+    if (!given) return [];
+    const stores = Array.isArray(given) ? [...(given as readonly MemoryStore[])] : [given as MemoryStore];
+    const homes = new Set<string>();
+    for (const store of stores) {
+      for (const scope of store.scopes) if (!SCOPE_ID.test(scope.id)) throw new Error(`Invalid memory scope id "${scope.id}".`);
+      if (store.scopes.length === 0) throw new Error("A memory store needs at least one scope.");
+      if (stores.length > 1) {
+        if (!store.home) throw new Error("Each of a session's memory stores needs a home (personal or workspace).");
+        if (homes.has(store.home)) throw new Error(`Two memory stores have the home "${store.home}".`);
+        homes.add(store.home);
+      }
+    }
+    return stores.sort((a, b) => homeRank(a.home) - homeRank(b.home));
+  }
+
+  /** The session's first store (personal when it has one). */
   storeOf(session: SessionRecord | undefined): MemoryStore | undefined {
-    const store = this.options.store?.(session) ?? this.options.fallback?.(session);
-    if (!store) return undefined;
-    for (const scope of store.scopes) if (!SCOPE_ID.test(scope.id)) throw new Error(`Invalid memory scope id "${scope.id}".`);
-    if (store.scopes.length === 0) throw new Error("A memory store needs at least one scope.");
-    return store;
+    return this.storesOf(session)[0];
   }
 
-  scopesOf(session: SessionRecord | undefined): { scope: MemoryScope; key: string }[] {
-    return (this.storeOf(session)?.scopes ?? []).map((scope) => ({ scope, key: scopeString(scope) }));
+  scopesOf(session: SessionRecord | undefined): { scope: MemoryScope; key: string; store: MemoryStore }[] {
+    return this.storesOf(session).flatMap((store) => store.scopes.map((scope) => ({ scope, key: scopeString(scope), store })));
   }
 
-  private cacheKey(route: BrainMemoryRoute, scope: string): string {
-    return `${route.id}|${scope}`;
+  private cacheKey(store: MemoryStore, scope: string): string {
+    return `${store.route.id}|${store.home ?? ""}|${scope}`;
   }
 
-  private async read(route: BrainMemoryRoute, scope: string): Promise<Held> {
-    const key = this.cacheKey(route, scope);
+  private tagged(store: MemoryStore, records: BrainMemory[]): BrainMemory[] {
+    return store.home ? records.map((record) => ({ ...record, home: record.home ?? store.home })) : records;
+  }
+
+  private async read(store: MemoryStore, scope: string): Promise<Held> {
+    const key = this.cacheKey(store, scope);
     const startedAt = Date.now();
     const [alwaysOn, recent] = await Promise.all([
-      route.list({ scope, alwaysOn: true, limit: this.options.alwaysOnLimit ?? 50 }),
-      route.list({ scope, alwaysOn: false, limit: this.options.promptLimit ?? 20 }),
+      store.route.list({ scope, alwaysOn: true, limit: this.options.alwaysOnLimit ?? 50 }),
+      store.route.list({ scope, alwaysOn: false, limit: this.options.promptLimit ?? 20 }),
     ]);
     // A write by this host while the lists ran is newer than them: keep it.
     const held = this.cache.get(key);
     const newer = (records: BrainMemory[] | undefined, listed: BrainMemory[]) =>
       (records ?? []).filter((record) => Date.parse(record.updatedAt ?? record.createdAt) >= startedAt && !listed.some((other) => other.id === record.id));
-    const kept = (listed: BrainMemory[]) => listed.filter((record) => !this.forgotten.has(record.id));
+    const kept = (listed: BrainMemory[]) => this.tagged(store, listed.filter((record) => !this.forgotten.has(record.id)));
     const merged: Held = {
       alwaysOn: [...newer(held?.alwaysOn, alwaysOn), ...kept(alwaysOn)],
       recent: [...newer(held?.recent, recent), ...kept(recent)],
@@ -235,10 +295,10 @@ export class HostMemory {
     return merged;
   }
 
-  private refresh(route: BrainMemoryRoute, scope: string, log?: (line: string) => void): void {
-    const key = this.cacheKey(route, scope);
+  private refresh(store: MemoryStore, scope: string, log?: (line: string) => void): void {
+    const key = this.cacheKey(store, scope);
     if (this.refreshing.has(key) || Date.now() - (this.readAt.get(key) ?? 0) < (this.options.refreshMs ?? 60_000)) return;
-    const job = this.read(route, scope)
+    const job = this.read(store, scope)
       .then(() => undefined)
       .catch((error) => log?.(`memory: background read of ${key} failed: ${error instanceof Error ? error.message : String(error)}`))
       .finally(() => this.refreshing.delete(key));
@@ -250,25 +310,29 @@ export class HostMemory {
    * and refreshed in the background. A failed first read leaves the scope empty for this turn and is retried next turn.
    */
   async warm(session: SessionRecord | undefined, log?: (line: string) => void): Promise<void> {
-    let store: MemoryStore | undefined;
+    let scopes: ReturnType<HostMemory["scopesOf"]>;
     try {
-      store = this.storeOf(session);
+      scopes = this.scopesOf(session);
     } catch (error) {
       log?.(`memory: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
-    if (!store) return;
-    for (const { key: scope } of this.scopesOf(session)) {
-      if (this.readAt.has(this.cacheKey(store.route, scope))) {
-        this.refresh(store.route, scope, log);
-        continue;
-      }
-      try {
-        await this.read(store.route, scope);
-      } catch (error) {
-        log?.(`memory: could not read ${store.route.id} ${scope}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+    // Homes are read side by side: a slow Brain of one home does not hold up the other.
+    await Promise.all(
+      this.storesOf(session).map(async (store) => {
+        for (const { key: scope } of scopes.filter((entry) => entry.store === store)) {
+          if (this.readAt.has(this.cacheKey(store, scope))) {
+            this.refresh(store, scope, log);
+            continue;
+          }
+          try {
+            await this.read(store, scope);
+          } catch (error) {
+            log?.(`memory: could not read ${store.route.id}${store.home ? ` (${store.home})` : ""} ${scope}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }),
+    );
   }
 
   /** Waits for background reads in flight (shutdown, scripts). */
@@ -276,36 +340,47 @@ export class HostMemory {
     await Promise.all([...this.refreshing.values()]);
   }
 
-  /** The memory block of a session's prompt: every always-on memory of its scopes, then the newest others. */
+  /**
+   * The memory block of a session's prompt: the always-on memories of each home in turn (personal first, newest first
+   * within a home), then the newest others of every home.
+   */
   promptContext(session: SessionRecord | undefined): SessionPromptContext["memories"] | undefined {
-    let store: MemoryStore | undefined;
+    let scopes: ReturnType<HostMemory["scopesOf"]>;
     try {
-      store = this.storeOf(session);
+      scopes = this.scopesOf(session);
     } catch {
       return undefined;
     }
-    if (!store) return undefined;
-    const held = this.scopesOf(session).map(({ key }) => this.cache.get(this.cacheKey(store!.route, key)) ?? { alwaysOn: [], recent: [] });
+    if (scopes.length === 0) return undefined;
     const newest = (a: BrainMemory, b: BrainMemory) => b.createdAt.localeCompare(a.createdAt);
-    const alwaysOn = held.flatMap((entry) => entry.alwaysOn).sort(newest).slice(0, this.options.alwaysOnLimit ?? 50);
-    const recent = held.flatMap((entry) => entry.recent).filter((record) => !record.alwaysOn).sort(newest).slice(0, this.options.promptLimit ?? 20);
+    const heldOf = (store: MemoryStore) =>
+      scopes.filter((entry) => entry.store === store).map(({ key }) => this.cache.get(this.cacheKey(store, key)) ?? { alwaysOn: [], recent: [] });
+    const stores = this.storesOf(session);
+    const alwaysOn = stores.flatMap((store) => heldOf(store).flatMap((entry) => entry.alwaysOn).sort(newest)).slice(0, this.options.alwaysOnLimit ?? 50);
+    const recent = stores
+      .flatMap((store) => heldOf(store).flatMap((entry) => entry.recent))
+      .filter((record) => !record.alwaysOn)
+      .sort(newest)
+      .slice(0, this.options.promptLimit ?? 20);
     if (alwaysOn.length + recent.length === 0) return undefined;
     const entry = (record: BrainMemory): PromptMemoryEntry => ({ fact: record.content, category: record.category, createdAt: record.createdAt, source: record.sessionId ? "session" : "local" });
     return { entries: [...alwaysOn, ...recent].map(entry) };
   }
 
-  private requireStore(session: SessionRecord | undefined): MemoryStore {
-    const store = this.storeOf(session);
-    if (!store) throw unavailable();
-    return store;
+  private requireStores(session: SessionRecord | undefined): MemoryStore[] {
+    const stores = this.storesOf(session);
+    if (stores.length === 0) throw unavailable();
+    return stores;
   }
 
   /** Puts a memory this host just wrote or changed into the cache of its scope. */
-  private hold(route: BrainMemoryRoute, record: BrainMemory): void {
-    const key = this.cacheKey(route, record.scope);
+  private hold(store: MemoryStore, record: BrainMemory): BrainMemory {
+    const [tagged] = this.tagged(store, [record]);
+    const key = this.cacheKey(store, tagged!.scope);
     const held = this.cache.get(key) ?? { alwaysOn: [], recent: [] };
-    const without = (list: BrainMemory[]) => list.filter((existing) => existing.id !== record.id);
-    this.cache.set(key, record.alwaysOn ? { alwaysOn: [record, ...without(held.alwaysOn)], recent: without(held.recent) } : { alwaysOn: without(held.alwaysOn), recent: [record, ...without(held.recent)] });
+    const without = (list: BrainMemory[]) => list.filter((existing) => existing.id !== tagged!.id);
+    this.cache.set(key, tagged!.alwaysOn ? { alwaysOn: [tagged!, ...without(held.alwaysOn)], recent: without(held.recent) } : { alwaysOn: without(held.alwaysOn), recent: [tagged!, ...without(held.recent)] });
+    return tagged!;
   }
 
   private drop(route: BrainMemoryRoute, id: string): void {
@@ -316,85 +391,162 @@ export class HostMemory {
     }
   }
 
+  /** The stores to try for a memory by id: the one whose cache holds it first, then the rest in home order. */
+  private storesFor(session: SessionRecord | undefined, id: string): MemoryStore[] {
+    const stores = this.requireStores(session);
+    const holds = (store: MemoryStore) =>
+      store.scopes.some((scope) => {
+        const held = this.cache.get(this.cacheKey(store, scopeString(scope)));
+        return !!held && [...held.alwaysOn, ...held.recent].some((record) => record.id === id);
+      });
+    return [...stores.filter(holds), ...stores.filter((store) => !holds(store))];
+  }
+
+  /** Runs a write by id on each candidate store until one has the memory; the first error is thrown when none does. */
+  private async byId<T>(session: SessionRecord | undefined, id: string, run: (store: MemoryStore, scopes: string[]) => Promise<T>): Promise<{ store: MemoryStore; value: T }> {
+    let first: unknown;
+    for (const store of this.storesFor(session, id)) {
+      try {
+        return { store, value: await run(store, store.scopes.map(scopeString)) };
+      } catch (error) {
+        first ??= error;
+      }
+    }
+    throw first;
+  }
+
   async remember(
     session: SessionRecord | undefined,
-    input: { fact: string; category?: string; appliesTo?: string; replaces?: string; links?: BrainMemoryLink[]; alwaysOn?: boolean },
+    input: { fact: string; category?: string; appliesTo?: string; replaces?: string; links?: BrainMemoryLink[]; alwaysOn?: boolean; home?: string },
   ): Promise<BrainMemory> {
-    const store = this.requireStore(session);
+    const stores = this.requireStores(session);
     const fact = input.fact.trim();
-    if (!fact) throw Object.assign(new Error("fact is empty."), { code: "invalid-request" });
+    if (!fact) throw invalid("fact is empty.");
     const category: MemoryCategory = (MEMORY_CATEGORIES as readonly string[]).includes(input.category ?? "") ? (input.category as MemoryCategory) : "fact";
-    const scopes = this.scopesOf(session);
-    // A preference is about the person: the narrowest scope; anything else is shared: the broadest. `appliesTo` names one.
-    const target = input.appliesTo
-      ? scopes.find(({ scope }) => scope.id === input.appliesTo)
-      : category === "preference"
-        ? scopes.at(-1)
-        : scopes[0];
-    if (!target) throw Object.assign(new Error(`appliesTo must be one of: ${scopes.map(({ scope }) => scope.id).join(", ")}.`), { code: "invalid-request" });
+    if (input.home !== undefined && !(MEMORY_HOMES as readonly string[]).includes(input.home)) throw invalid(`home must be one of: ${MEMORY_HOMES.join(", ")}.`);
+    const homed = stores.length > 1 || stores[0]!.home !== undefined;
+    // An explicit home must exist when the session has homes; a single store without a home takes every write.
+    let candidates = stores;
+    if (input.home && homed) {
+      candidates = stores.filter((store) => store.home === input.home);
+      if (candidates.length === 0) throw invalid(`This session has no ${input.home} memory home; its homes: ${stores.map((store) => store.home).join(", ")}.`);
+    }
+    let store: MemoryStore;
+    let scope: MemoryScope | undefined;
+    if (input.appliesTo) {
+      const found = candidates.flatMap((each) => each.scopes.map((entry) => ({ store: each, scope: entry }))).find((entry) => entry.scope.id === input.appliesTo);
+      if (!found) throw invalid(`appliesTo must be one of: ${candidates.flatMap((each) => each.scopes.map((entry) => entry.id)).join(", ")}.`);
+      ({ store, scope } = found);
+    } else {
+      // Default home (R8): a preference is the person's; anything else belongs to the workspace. Missing homes fall back.
+      const wanted: MemoryHome = category === "preference" ? "personal" : "workspace";
+      store = input.home || !homed ? candidates[0]! : (candidates.find((each) => each.home === wanted) ?? candidates[0]!);
+      // Within a store: a preference goes to the narrowest scope (the person), anything else to the broadest.
+      scope = category === "preference" ? store.scopes.at(-1) : store.scopes[0];
+    }
     const record = await store.route.create({
       content: fact,
       category,
-      scope: target.key,
+      scope: scopeString(scope!),
       alwaysOn: input.alwaysOn ?? category === "preference",
       links: checkedLinks(input.links),
       ...(input.replaces ? { supersedes: input.replaces } : {}),
       ...(session ? { sessionId: session.id } : {}),
     });
     if (input.replaces) this.drop(store.route, input.replaces);
-    this.hold(store.route, record);
-    return record;
+    return this.hold(store, record);
   }
 
-  /** Finds memories by meaning (the Brain's search), or a scope's memories since a time when no query is given. */
-  async recall(session: SessionRecord | undefined, input: { query?: string; since?: string; category?: string; limit?: number }): Promise<BrainMemory[]> {
-    const store = this.requireStore(session);
+  /**
+   * Finds memories by meaning (each home's Brain search, merged by rank), or the scopes' memories since a time when no
+   * query is given. `degraded` names a home whose Brain could not be read; the other home's memories still come back.
+   */
+  async recallWithStatus(
+    session: SessionRecord | undefined,
+    input: { query?: string; since?: string; category?: string; limit?: number },
+  ): Promise<{ memories: BrainMemory[]; degraded: string[] }> {
+    const stores = this.requireStores(session);
     const limit = Math.max(1, Math.min(input.limit ?? 10, 50));
-    const scopes = this.scopesOf(session).map(({ key }) => key);
     const category = (MEMORY_CATEGORIES as readonly string[]).includes(input.category ?? "") ? (input.category as MemoryCategory) : undefined;
     const query = input.query?.trim();
-    if (query) return store.route.search({ query, scopes, limit, ...(category ? { category } : {}) });
-    if (!input.since) throw Object.assign(new Error("recall needs a query or since."), { code: "invalid-request" });
-    const lists = await Promise.all(scopes.map((scope) => store.route.list({ scope, since: input.since, limit })));
-    return lists
-      .flat()
-      .filter((record) => !category || record.category === category)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, limit);
+    if (!query && !input.since) throw invalid("recall needs a query or since.");
+    const results = await Promise.allSettled(
+      stores.map(async (store) => {
+        const scopes = store.scopes.map(scopeString);
+        if (query) return this.tagged(store, await store.route.search({ query, scopes, limit, ...(category ? { category } : {}) }));
+        const lists = await Promise.all(scopes.map((scope) => store.route.list({ scope, since: input.since, limit })));
+        return this.tagged(store, lists.flat());
+      }),
+    );
+    const failed = results.flatMap((result, index) => (result.status === "rejected" ? [{ store: stores[index]!, reason: result.reason }] : []));
+    if (failed.length === results.length) throw failed[0]!.reason;
+    const degraded = failed.map(({ store }) => store.home ?? store.route.id);
+    const lists = results.map((result) => (result.status === "fulfilled" ? result.value : []));
+    const seen = new Set<string>();
+    const unique = (record: BrainMemory) => (seen.has(record.id) ? false : (seen.add(record.id), true));
+    if (query) {
+      // Each home's own ranking is kept; the homes are interleaved by rank (1st of each, then 2nd of each, ...).
+      const merged: BrainMemory[] = [];
+      for (let rank = 0; rank < Math.max(0, ...lists.map((list) => list.length)); rank++) for (const list of lists) if (list[rank]) merged.push(list[rank]!);
+      return { memories: merged.filter(unique).slice(0, limit), degraded };
+    }
+    return {
+      memories: lists
+        .flat()
+        .filter((record) => !category || record.category === category)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .filter(unique)
+        .slice(0, limit),
+      degraded,
+    };
+  }
+
+  async recall(session: SessionRecord | undefined, input: { query?: string; since?: string; category?: string; limit?: number }): Promise<BrainMemory[]> {
+    return (await this.recallWithStatus(session, input)).memories;
   }
 
   async link(session: SessionRecord | undefined, input: { id: string; links: BrainMemoryLink[]; replace?: boolean }): Promise<BrainMemory> {
-    const store = this.requireStore(session);
     const links = checkedLinks(input.links);
-    const scopes = this.scopesOf(session).map(({ key }) => key);
-    const record = input.replace ? await store.route.update({ id: input.id, scopes, links }) : await store.route.link({ id: input.id, scopes, links });
-    this.hold(store.route, record);
-    return record;
+    const { store, value } = await this.byId(session, input.id, (each, scopes) =>
+      input.replace ? each.route.update({ id: input.id, scopes, links }) : each.route.link({ id: input.id, scopes, links }),
+    );
+    return this.hold(store, value);
   }
 
   async update(
     session: SessionRecord | undefined,
     input: { id: string; fact?: string; category?: string; alwaysOn?: boolean },
   ): Promise<BrainMemory> {
-    const store = this.requireStore(session);
     const category = (MEMORY_CATEGORIES as readonly string[]).includes(input.category ?? "") ? (input.category as MemoryCategory) : undefined;
-    const record = await store.route.update({
-      id: input.id,
-      scopes: this.scopesOf(session).map(({ key }) => key),
-      ...(input.fact?.trim() ? { content: input.fact.trim() } : {}),
-      ...(category ? { category } : {}),
-      ...(typeof input.alwaysOn === "boolean" ? { alwaysOn: input.alwaysOn } : {}),
-    });
-    this.hold(store.route, record);
-    return record;
+    const { store, value } = await this.byId(session, input.id, (each, scopes) =>
+      each.route.update({
+        id: input.id,
+        scopes,
+        ...(input.fact?.trim() ? { content: input.fact.trim() } : {}),
+        ...(category ? { category } : {}),
+        ...(typeof input.alwaysOn === "boolean" ? { alwaysOn: input.alwaysOn } : {}),
+      }),
+    );
+    return this.hold(store, value);
   }
 
-  /** Deletes a memory node; false when the store holds no memory of that id. */
+  /** Deletes a memory node; false when no store of the session holds a memory of that id. */
   async forget(session: SessionRecord | undefined, id: string): Promise<boolean> {
-    const store = this.requireStore(session);
-    const removed = await store.route.delete({ id, scopes: this.scopesOf(session).map(({ key }) => key) });
-    if (removed) this.drop(store.route, id);
-    return removed;
+    let first: unknown;
+    for (const store of this.storesFor(session, id)) {
+      try {
+        const removed = await store.route.delete({ id, scopes: store.scopes.map(scopeString) });
+        if (removed) {
+          this.drop(store.route, id);
+          return true;
+        }
+      } catch (error) {
+        first ??= error;
+      }
+    }
+    // A store that failed may be the one holding it: say so rather than "no such memory".
+    if (first !== undefined) throw first;
+    return false;
   }
 
   sessionOf(context: InvocationContext): SessionRecord | undefined {
@@ -439,6 +591,7 @@ const RECORD_OUTPUT = {
     createdAt: { type: "string" },
     alwaysOn: { type: "boolean" },
     links: LINKS,
+    home: { enum: [...MEMORY_HOMES] },
   },
   additionalProperties: false,
 } as const;
@@ -447,7 +600,7 @@ const MEMORY_TOOLS = {
   remember: {
     title: "Remember a fact",
     description:
-      "Save a memory as a node in the Brain graph, at once (no approval): a preference, decision, fact or context worth knowing next time. Link it to what it is about (`links`: a graph node id, a file path and symbol, a session id, a person). Preferences are shown in every later session of their scope; recall finds the rest. `appliesTo` names the scope (recall lists them); default: a preference goes to the narrowest scope (the person), anything else to the broadest. `replaces` supersedes the memory it corrects.",
+      "Save a memory as a node in the Brain graph, at once (no approval): a preference, decision, fact or context worth knowing next time. `home`: `personal` is yours in every workspace (preferences, private facts such as a birthday); `workspace` is this workspace's own Brain, where links reach its real code (conventions, gotchas, why code is the way it is). Default: a preference is personal, anything else workspace. Link it to what it is about (`links`: a graph node id, a file path and symbol, a session id, a person). Preferences are shown in every later session; recall finds the rest. `appliesTo` names a scope (recall lists them). `replaces` supersedes the memory it corrects.",
     input: {
       type: "object",
       required: ["fact"],
@@ -458,6 +611,7 @@ const MEMORY_TOOLS = {
         replaces: { type: "string", maxLength: 200 },
         links: LINKS,
         alwaysOn: { type: "boolean" },
+        home: { enum: [...MEMORY_HOMES] },
       },
     },
     output: { type: "object", properties: { success: { type: "boolean" }, memory: RECORD_OUTPUT }, additionalProperties: false },
@@ -465,7 +619,7 @@ const MEMORY_TOOLS = {
   recall: {
     title: "Recall memories",
     description:
-      "Find memories of this session's scopes in the Brain graph by meaning (`query`), or list those saved since a time (`since`, ISO; e.g. today's for a review of the day), newest first.",
+      "Find memories of this session's scopes in the Brain graph by meaning (`query`; both homes, personal and workspace, merged by rank), or list those saved since a time (`since`, ISO; e.g. today's for a review of the day), newest first. `degraded` names a home that could not be read.",
     input: {
       type: "object",
       properties: {
@@ -475,7 +629,11 @@ const MEMORY_TOOLS = {
         limit: { type: "integer", minimum: 1, maximum: 50 },
       },
     },
-    output: { type: "object", properties: { success: { type: "boolean" }, scopes: { type: "array", items: { type: "string" } }, memories: { type: "array", items: RECORD_OUTPUT } }, additionalProperties: false },
+    output: {
+      type: "object",
+      properties: { success: { type: "boolean" }, scopes: { type: "array", items: { type: "string" } }, memories: { type: "array", items: RECORD_OUTPUT }, degraded: { type: "array", items: { type: "string" } } },
+      additionalProperties: false,
+    },
   },
   linkMemory: {
     title: "Link a memory",
@@ -509,6 +667,7 @@ const shown = (record: BrainMemory) => ({
   createdAt: record.createdAt,
   alwaysOn: record.alwaysOn,
   links: record.links ?? [],
+  ...(record.home ? { home: record.home } : {}),
 });
 
 /** marshal.tool.remember / recall / linkMemory / updateMemory / forget on the host's Brain memory. */
@@ -543,17 +702,19 @@ export function createMemoryToolsProvider(memory: HostMemory): CapabilityProvide
             ...(typeof input.replaces === "string" ? { replaces: input.replaces } : {}),
             ...(links ? { links } : {}),
             ...(typeof input.alwaysOn === "boolean" ? { alwaysOn: input.alwaysOn } : {}),
+            ...(typeof input.home === "string" ? { home: input.home } : {}),
           });
           return { output: { success: true, memory: shown(record) } };
         }
         case "recall": {
-          const memories = await memory.recall(session, {
+          const { memories, degraded } = await memory.recallWithStatus(session, {
             ...(typeof input.query === "string" ? { query: input.query } : {}),
             ...(typeof input.since === "string" ? { since: input.since } : {}),
             ...(typeof input.category === "string" ? { category: input.category } : {}),
             ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
           });
-          return { output: { success: true, scopes: memory.scopesOf(session).map(({ scope }) => scope.id), memories: memories.map(shown) } };
+          const scopes = [...new Set(memory.scopesOf(session).map(({ scope }) => scope.id))];
+          return { output: { success: true, scopes, memories: memories.map(shown), ...(degraded.length ? { degraded } : {}) } };
         }
         case "linkMemory": {
           const record = await memory.link(session, { id: String(input.id ?? ""), links: links ?? [], replace: input.replace === true });
