@@ -1,4 +1,5 @@
 export { createMarshalHost, type MarshalHost, type MarshalHostExtension, type MarshalHostLinkOptions, type MarshalHostOrgOptions, type MarshalHostOptions, type MarshalToolCall, type MarshalToolCallWrapper } from "./host.js";
+export { createSessionMarshalServer, sessionMarshalTools, SESSION_SERVER_NAME, type RuntimeToolDescriptions, type SessionMarshalServerOptions, type SessionMarshalTools, type SessionRuntimeAdapter } from "./session-server.js";
 export {
   composeBrokers,
   desktopDirectTools,

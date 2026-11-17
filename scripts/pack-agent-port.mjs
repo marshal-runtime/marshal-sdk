@@ -3,7 +3,8 @@
 //
 //   node scripts/pack-agent-port.mjs [--out .pack]
 //
-// It holds two ESM entries, `@marshal/sdk/agent-port` and `@marshal/sdk/session-store`, bundled with the provider
+// It holds three ESM entries, `@marshal/sdk/agent-port`, `@marshal/sdk/session-store` and `@marshal/sdk/session-server`
+// (a session's `marshal` server from its own runtime connection, for an embedder that owns its sessions' runtimes), bundled with the provider
 // layer they reach, and their declarations. The only packages left external are the ones the host already has:
 // `@marshal/agent-runtime-claude` and `zod` at runtime, `@anthropic-ai/claude-agent-sdk` for types. They are peers, so
 // the host's own copies (its own patched runtime packs) are the ones used. Any other external import fails the pack.
@@ -19,7 +20,7 @@ const outIndex = process.argv.indexOf("--out");
 const out = path.resolve(outIndex > 0 ? process.argv[outIndex + 1] : path.join(root, ".pack"));
 const sdk = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-const entries = { "agent-port": "src/agent-port.ts", "session-store": "src/session-store.ts" };
+const entries = { "agent-port": "src/agent-port.ts", "session-store": "src/session-store.ts", "session-server": "src/session-server.ts" };
 // The range each peer accepts: any runtime pack, zod 4 (the bundle imports zod/v4), the SDK's own Agent SDK pin.
 const peers = {
   "@marshal/agent-runtime-claude": "*",
@@ -118,7 +119,7 @@ fs.rmSync(declarations, { recursive: true, force: true });
 const manifest = {
   name: sdk.name,
   version: `${sdk.version}-port.${sha.slice(0, 7)}`,
-  description: "The Marshal SDK's Claude agent port and session store, for hosts that bring their own runtime packs.",
+  description: "The Marshal SDK's Claude agent port, session store and session marshal server, for hosts that bring their own runtime packs.",
   type: "module",
   exports: Object.fromEntries(
     Object.entries(entries).map(([name, source]) => [
