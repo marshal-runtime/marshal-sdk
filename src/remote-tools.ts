@@ -49,11 +49,26 @@ export function remoteHostToolSet(allowed: readonly string[] | undefined): Reado
   return new Set(allowed);
 }
 
-/** The host tool a runtime call names (an `operation` whose target is in REMOTE_HOST_TOOLS, or a runtime_search for one by name), else undefined. */
-export function hostToolOf(name: string, args: unknown): string | undefined {
+/**
+ * The capabilities of the embedder's own providers (`providerSources`) that its remote sessions reach on the host (`remoteEmbedderTools`), e.g. a
+ * tool that reads state only the host holds. Names must look like capability names and must not be a fixed host tool (those are `remoteHostTools`).
+ */
+export function remoteEmbedderToolSet(names: readonly string[] | undefined): ReadonlySet<string> {
+  const list = names ?? [];
+  const bad = list.filter((name) => !/^[a-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)+$/.test(name) || HOST_TOOLS.has(name));
+  if (bad.length) throw new Error(`remoteEmbedderTools: not an embedder capability name: ${bad.join(", ")} (fixed host tools go in remoteHostTools)`);
+  return new Set(list);
+}
+
+/**
+ * The host tool a runtime call names (an `operation` whose target is in REMOTE_HOST_TOOLS or in `extra`, the embedder's remote tools, or a
+ * runtime_search for one by name), else undefined.
+ */
+export function hostToolOf(name: string, args: unknown, extra?: ReadonlySet<string>): string | undefined {
   const input = (args ?? {}) as { targetType?: unknown; target?: unknown; name?: unknown };
-  if (name === "runtime_exec" && input.targetType === "operation" && typeof input.target === "string" && HOST_TOOLS.has(input.target)) return input.target;
-  if (name === "runtime_search" && typeof input.name === "string" && HOST_TOOLS.has(input.name)) return input.name;
+  const named = (value: unknown): value is string => typeof value === "string" && (HOST_TOOLS.has(value) || extra?.has(value) === true);
+  if (name === "runtime_exec" && input.targetType === "operation" && named(input.target)) return input.target;
+  if (name === "runtime_search" && named(input.name)) return input.name;
   return undefined;
 }
 

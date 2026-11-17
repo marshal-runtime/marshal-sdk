@@ -51,11 +51,12 @@ import { createOrgBridge, type OrgBridge, type OrgBridgeOptions } from "./org-br
 import { httpLinkRelay, type LinkRelay } from "./org-host-room.js";
 import { ConversationRoomRoute } from "./rooms-route.js";
 import { FileSessionStore, type SessionRecord, type SessionStore } from "./session-store.js";
-import { REMOTE_HOST_TOOLS, hostToolOf, refusedHostTool, remoteHostToolSet, RemoteRuntimeClients, type RemoteRuntime } from "./remote-tools.js";
+import { REMOTE_HOST_TOOLS, hostToolOf, refusedHostTool, remoteEmbedderToolSet, remoteHostToolSet, RemoteRuntimeClients, type RemoteRuntime } from "./remote-tools.js";
 
 // A remote session's code (inline_module/module) runs in the remote machine's runtime, which has no host tools; only a top-level operation call
 // reaches them. Without this the model calls them from code and gets "Capability ... was not found" (Marley integ, 2026-11-17).
-const REMOTE_EXEC_NOTE = `\n\nHost tools (${REMOTE_HOST_TOOLS.join(", ")}) run on the host: call each as its own runtime_exec {targetType: "operation", target, input}. Code you run (inline_module, module) executes on this machine's runtime, where they do not exist.`;
+const remoteExecNote = (extra: ReadonlySet<string>) =>
+  `\n\nHost tools (${[...REMOTE_HOST_TOOLS, ...extra].join(", ")}) run on the host: call each as its own runtime_exec {targetType: "operation", target, input}. Code you run (inline_module, module) executes on this machine's runtime, where they do not exist.`;
 
 const HARNESS_ID = "marshal-sdk";
 const SDK_VERSION = "0.0.1";
@@ -187,6 +188,12 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * every session of the store.
    */
   remoteHostTools?: readonly string[];
+  /**
+   * Capabilities of the embedder's own providers (`providerSources`) that remote sessions reach on the host too, beside `remoteHostTools`: state
+   * only the host holds (Marley: the brand's runs of the day and its extensions). Every other embedder capability stays unreachable from a remote
+   * session. The provider bounds each call to the caller (the invocation's session), as the session tools do with `sessionScopeLabel`.
+   */
+  remoteEmbedderTools?: readonly string[];
   /**
    * The session label that bounds the session tools, for a host whose store holds several tenants' sessions (Marley: `brand`, set by the server on
    * every session it launches; forks copy their parent's labels). searchSessions and getSessionTranscript return only sessions (local and org)
@@ -647,6 +654,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   );
 
   const remoteHostTools = remoteHostToolSet(options.remoteHostTools);
+  const remoteEmbedderTools = remoteEmbedderToolSet(options.remoteEmbedderTools);
+  const REMOTE_EXEC_NOTE = remoteExecNote(remoteEmbedderTools);
   serversFor = (session: SessionRecord): Record<string, unknown> => {
     const hostAdapterOfSession = adapterFor(session.id);
     const remote = options.remoteRuntime?.(session);
@@ -654,9 +663,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     const adapter = remote
       ? {
           callTool: (name: string, args: unknown, _extra?: never) => {
-            const hostTool = hostToolOf(name, args);
+            const hostTool = hostToolOf(name, args, remoteEmbedderTools);
             if (hostTool === undefined) return remoteClients.callTool(session.id, remote, name, args);
-            return remoteHostTools.has(hostTool) ? hostAdapterOfSession.callTool(name, args, undefined as never) : Promise.resolve(refusedHostTool(hostTool));
+            return remoteHostTools.has(hostTool) || remoteEmbedderTools.has(hostTool)
+              ? hostAdapterOfSession.callTool(name, args, undefined as never)
+              : Promise.resolve(refusedHostTool(hostTool));
           },
           readResource: (uri: string) => remoteClients.readResource(session.id, remote, uri),
         }
