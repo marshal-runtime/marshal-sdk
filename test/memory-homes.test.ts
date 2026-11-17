@@ -319,3 +319,24 @@ test("the kit's Brain configuration pins the company Brain as the personal home 
   const readOnly = brainConfiguration({ brain: {}, workspaceName: "zygstinct", memoryWrites: false });
   assert.equal(readOnly.memoryRoute, undefined);
 });
+
+test("a refused memory write fails the tool call with MEMORY NOT SAVED / NOT FORGOTTEN, never a success-shaped answer", async () => {
+  const personal = fakeRoute("zyg");
+  const { host } = twoHomes(personal, fakeRoute("zygstinct"));
+  const provider = createMemoryToolsProvider(host) as unknown as {
+    invoke(name: string, input: unknown, context: InvocationContext): Promise<unknown>;
+  };
+  personal.setDown(true);
+  await assert.rejects(provider.invoke("marshal.tool.remember", { fact: "Video proof for every feature.", home: "personal" }, context), (error: Error & { code?: string }) => {
+    assert.match(error.message, /^MEMORY NOT SAVED: .*zyg is down.*\. Tell the user it was not saved\.$/);
+    assert.equal(error.code, "operation-failed");
+    return true;
+  });
+  personal.setDown(false);
+  await assert.rejects(provider.invoke("marshal.tool.forget", { id: "nothing" }, context), (error: Error & { code?: string }) => {
+    assert.equal(error.message, "MEMORY NOT FORGOTTEN: No memory with that id in this session's store. Tell the user it was not forgotten.");
+    assert.equal(error.code, "not-found");
+    return true;
+  });
+  await assert.rejects(provider.invoke("marshal.tool.updateMemory", { id: "nothing", fact: "x" }, context), /^Error: MEMORY NOT SAVED: /);
+});
