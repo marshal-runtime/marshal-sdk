@@ -989,7 +989,7 @@ export function hostKit(kit: readonly KitPartName[] | undefined, publish: Sessio
   return { kit: { parts: [...parts], sessions: { publish } } };
 }
 
-function publishArgument(audience: string | undefined, context: string | undefined): { publish?: SessionsPublishOptions } {
+export function publishArgument(audience: string | undefined, context: string | undefined): { publish?: SessionsPublishOptions } {
   const raw = (audience ?? process.env.MARSHAL_SDK_PUBLISH_SESSIONS ?? "").trim();
   if (!raw || raw === "off") return {};
   const line = (context ?? process.env.MARSHAL_SDK_PUBLISH_CONTEXT ?? "").trim();
@@ -997,7 +997,7 @@ function publishArgument(audience: string | undefined, context: string | undefin
   return { publish: { audience: people.length ? { people } : "team", ...(line ? { context: line } : {}) } };
 }
 
-function kitArgument(value: string | undefined): KitPartName[] | undefined {
+export function kitArgument(value: string | undefined): KitPartName[] | undefined {
   const raw = value ?? process.env.MARSHAL_SDK_KIT ?? "";
   const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
   for (const part of parts) if (!["brain", "memory", "sessions"].includes(part)) throw new Error(`--kit takes brain, memory and sessions, got ${part}.`);

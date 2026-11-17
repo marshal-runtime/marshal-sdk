@@ -1,0 +1,13 @@
+[project]
+name = "marshal-sdk"
+version = "0.1.0"
+description = "The Claude Agent SDK on a Marshal host: swap `claude_agent_sdk` for `marshal_sdk`."
+requires-python = ">=3.10"
+dependencies = ["claude-agent-sdk>=0.2.178"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["marshal_sdk"]
