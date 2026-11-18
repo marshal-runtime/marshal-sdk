@@ -879,7 +879,8 @@ const USAGE = `marshal-sdk page-run: one Page Studio page from an agent-sandbox 
   --depth <quick|single|deep>  (default single)   --rounds <1-4>   --idea <text | @file>
   --profile <id | role=id,…>  (default marshal: the host's own prompt and tools; page-studio, or one of Page Studio's data folder; roles: planner writer reviewer critic fixer picture-look default)
   --model <id>  --effort <low|medium|high|xhigh|max>   --quick-model <id>   --required-skill <name> (repeatable)
-  --kit <brain,memory,sessions>  kit parts on the host (default: $MARSHAL_SDK_KIT, else none)
+  --kit <brain,memory,sessions>  kit parts on the host (default: $MARSHAL_SDK_KIT, else none); the Brain answers for
+                     $MARSHAL_SDK_BRAIN_CALLER when set, so that person's always-on memories reach the sessions
   --publish-sessions <team|email,...>  publish the run's sessions to the team Brain's session index, for the team or
                      those people (default: $MARSHAL_SDK_PUBLISH_SESSIONS, else off); adds the Brain and sessions kit
   --publish-context <text>  one line in front of each published session's first prompt, e.g. the run id and the
@@ -995,11 +996,21 @@ function runPrompt(
   }), surface: desktopSurface() };
 }
 
-/** The host's kit: the parts asked for, plus the Brain and sessions when the run publishes its sessions. */
-export function hostKit(kit: readonly KitPartName[] | undefined, publish: SessionsPublishOptions | undefined): { kit?: KitOptions } {
-  if (!publish) return kit?.length ? { kit: { parts: [...kit] } } : {};
+/**
+ * The host's kit: the parts asked for, plus the Brain and sessions when the run publishes its sessions. The Brain
+ * caller (default $MARSHAL_SDK_BRAIN_CALLER) gives the host that person's memory home, so their always-on
+ * preferences reach the sessions; without it a cloud run sees only the workspace home.
+ */
+export function hostKit(
+  kit: readonly KitPartName[] | undefined,
+  publish: SessionsPublishOptions | undefined,
+  brainCaller: string | undefined = process.env.MARSHAL_SDK_BRAIN_CALLER,
+): { kit?: KitOptions } {
+  const caller = brainCaller?.trim();
+  const brain = caller ? { brain: { callerEmail: caller } } : {};
+  if (!publish) return kit?.length ? { kit: { parts: [...kit], ...brain } } : {};
   const parts = new Set<KitPartName>([...(kit ?? []), "brain", "sessions"]);
-  return { kit: { parts: [...parts], sessions: { publish } } };
+  return { kit: { parts: [...parts], sessions: { publish }, ...brain } };
 }
 
 export function publishArgument(audience: string | undefined, context: string | undefined): { publish?: SessionsPublishOptions } {
