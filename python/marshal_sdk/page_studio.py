@@ -18,6 +18,12 @@ Environment:
     MARSHAL_SDK_PAGE_STATE_ROOT         where each page's Marshal state is kept between a build and its edits: a folder or
                                         gs://bucket/prefix. Unset: a page can't be found again, so its edits run the
                                         caller's own agent.
+    MARSHAL_SDK_RUN_OUTPUT_ROOT         the run's output root as a template on the brief's page_generation_run_id, e.g.
+                                        gs://bucket/page-generation-runs/{run}/output. Set: the run's published sessions
+                                        name {root}/agent/marshal-state (where agent-sandbox uploads the state kept in its
+                                        logs folder), so Marshal desktops and Page Studio find the run.
+    MARSHAL_SDK_RUN_POINTER_PREFIX      with the output root: also write {prefix}/index/{run}.json = {"outputRoot": root},
+                                        the pointer a cloud host of the SDK sessions viewer lists.
 """
 
 from __future__ import annotations
@@ -51,6 +57,42 @@ LOG_PREFIX = "[marshal-sdk page-"
 PROGRESS_SUBTYPE = "marshal_page_studio"
 SUMMARY_SUBTYPE = "marshal_page_studio_summary"
 CHANGE_REQUEST_MARKER = "Change request:"
+OUTPUT_ROOT_ENV_VAR = "MARSHAL_SDK_RUN_OUTPUT_ROOT"
+POINTER_PREFIX_ENV_VAR = "MARSHAL_SDK_RUN_POINTER_PREFIX"
+STATE_LOCATION_ENV_VAR = "MARSHAL_SDK_STATE_LOCATION"
+# agent-sandbox uploads everything in the folder beside page-agent/ to <output root>/agent/, so state kept there lands at
+# <output root>/agent/marshal-state, the layout Marshal's cloud viewers read.
+CALLER_LOGS_DIRNAME = "page-agent-logs"
+STATE_DIRNAME = "marshal-state"
+UPLOADED_STATE_PATH = "agent/marshal-state"
+
+
+def run_label(cwd: Path) -> str | None:
+    """The brief's page_generation_run_id, when the caller's pack names one."""
+    try:
+        source = json.loads((cwd / "input" / "page" / "brief.json").read_text(encoding="utf-8")).get("source") or {}
+    except (OSError, ValueError, AttributeError):
+        return None
+    run = source.get("page_generation_run_id") if isinstance(source, dict) else None
+    return str(run) if isinstance(run, int) or (isinstance(run, str) and run.isdigit()) else None
+
+
+def output_root(cwd: Path) -> str | None:
+    """The run's gs:// output root from $MARSHAL_SDK_RUN_OUTPUT_ROOT and the brief's run id."""
+    template = (os.environ.get(OUTPUT_ROOT_ENV_VAR) or "").strip()
+    run = run_label(cwd)
+    return template.replace("{run}", run).rstrip("/") if template and run else None
+
+
+def write_pointer(root: str, run: str) -> None:
+    prefix = (os.environ.get(POINTER_PREFIX_ENV_VAR) or "").strip().rstrip("/")
+    if not prefix.startswith("gs://"):
+        return
+    from google.cloud import storage
+
+    bucket, _, path = prefix[len("gs://") :].partition("/")
+    blob = storage.Client().bucket(bucket).blob(f"{path}/index/{run}.json" if path else f"index/{run}.json")
+    blob.upload_from_string(json.dumps({"outputRoot": root}), content_type="application/json")
 
 
 def routes(options: ClaudeAgentOptions | None) -> bool:
@@ -154,10 +196,20 @@ async def run(options: ClaudeAgentOptions, bridge: str | None) -> AsyncIterator[
     """One page build or edit by Page Studio, as the caller's query would have made it."""
     cwd = Path(str(options.cwd)).resolve()
     run_dir = cwd.parent / RUN_DIRNAME
-    logs, state, out = run_dir / "logs", run_dir / "state", cwd / "out"
+    caller_logs = cwd.parent / CALLER_LOGS_DIRNAME
+    logs, out = run_dir / "logs", cwd / "out"
+    state = caller_logs / STATE_DIRNAME if caller_logs.is_dir() else run_dir / "state"
     logs.mkdir(parents=True, exist_ok=True)
     state.mkdir(parents=True, exist_ok=True)
     root = StateRoot(os.environ[STATE_ROOT_ENV_VAR]) if os.environ.get(STATE_ROOT_ENV_VAR) else None
+    env = host_env(options)
+    run_root = output_root(cwd)
+    if run_root is not None and state.parent == caller_logs:
+        env[STATE_LOCATION_ENV_VAR] = f"{run_root}/{UPLOADED_STATE_PATH}"
+        try:
+            write_pointer(run_root, str(run_label(cwd)))
+        except Exception as error:  # a missing pointer only hides the run from cloud listings
+            yield SystemMessage(subtype=PROGRESS_SUBTYPE, data={"warning": f"run pointer not written: {error!r}"})
     common = [
         *(["--model", options.model] if options.model else []),
         *(["--effort", str(options.effort)] if options.effort else []),
@@ -185,7 +237,7 @@ async def run(options: ClaudeAgentOptions, bridge: str | None) -> AsyncIterator[
             "--depth", os.environ.get(DEPTH_ENV_VAR, "single"),
         ]
     process = await asyncio.create_subprocess_exec(
-        *cli(bridge), *args, *common, env=host_env(options), cwd=str(cwd),
+        *cli(bridge), *args, *common, env=env, cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024,
     )
     assert process.stderr is not None and process.stdout is not None
