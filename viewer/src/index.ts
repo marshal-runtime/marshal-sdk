@@ -602,7 +602,7 @@ export function createExtension(context: Context) {
                 status: run.run?.status ?? (run.marshal ? "unknown" : "done"),
                 startedAt: run.run?.startedAt ?? sdkRun?.startedAt,
                 finishedAt: run.run?.finishedAt,
-                sessions: sdkRun?.sessions ?? 0,
+                sessions: sdkRun?.sessions ?? run.run?.sessionCount ?? 0,
                 costUsd: sdkRun?.costUsd,
                 previewUrl: run.previewUrl,
                 previewUri: run.previewUri,
