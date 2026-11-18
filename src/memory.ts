@@ -136,6 +136,12 @@ export interface MemoryOptions {
    * (`decideRelevance`). Without one, or when it fails, the top `RELEVANT_FALLBACK` hits by search rank are kept.
    */
   relevance?: RelevanceJudge;
+  /**
+   * What to search the Brain for, from a turn's message: no queries when the message gives no task yet (a warm-up such
+   * as "reply ready"), so the choice waits for the turn that does. Default: the host's decide service (`decideQueries`).
+   * Without one, or when it fails, the message's head is the query.
+   */
+  queries?: MemoryQueryPlanner;
   /** `newest` mode: memories that are not always-on rendered into the prompt, newest first. Default 20. */
   promptLimit?: number;
   /** `newest` mode: always-on memories rendered at most. Default 50. */
@@ -150,11 +156,50 @@ export interface MemoryOptions {
 /** Decides which candidate memories shape a task; returns the ids to keep. */
 export type RelevanceJudge = (input: { task: string; memories: readonly BrainMemory[] }) => Promise<ReadonlySet<string>>;
 
+/** Search queries for a turn's message; empty when the message gives no task yet. */
+export type MemoryQueryPlanner = (input: { message: string }) => Promise<readonly string[]>;
+
 /** Hits kept by search rank alone when no judgement is available. */
 export const RELEVANT_FALLBACK = 3;
 /** The Brain's memory.search takes at most 500 characters. */
 const SEARCH_QUERY_MAX = 500;
 const JUDGED_TASK_MAX = 6000;
+const PLANNED_QUERIES_MAX = 3;
+
+/** A long message's head and tail (a task's subject often sits in a brief after long instructions). */
+export function taskExcerpt(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const half = Math.floor((max - 5) / 2);
+  return `${text.slice(0, half)}\n...\n${text.slice(text.length - half)}`;
+}
+
+type DecideCall = (
+  request: { question: string; context?: unknown; schema?: Readonly<Record<string, unknown>> },
+  options?: { timeoutMs?: number },
+) => Promise<{ choice: unknown }>;
+
+/** Query planning on the host's decide service: a structured answer with 0 to 3 short queries naming the task's subject. */
+export function decideQueries(decide: DecideCall, options: { timeoutMs?: number; maxChars?: number } = {}): MemoryQueryPlanner {
+  return async ({ message }) => {
+    const result = await decide(
+      {
+        question:
+          "An agent just received context.message. If it gives the agent a task, write 1 to 3 short search queries (each under 200 characters) for the long-term memory of the person and team it works for, " +
+          "naming the task's own subject (the brand, product, page, codebase, people or kind of work), so remembered rules, preferences and decisions about it are found. " +
+          "If the message gives no task yet (a greeting, a warm-up, a request to reply 'ready'), return no queries.",
+        context: { message: taskExcerpt(message, options.maxChars ?? 12_000) },
+        schema: { type: "object", properties: { queries: { type: "array", items: { type: "string" } } }, required: ["queries"], additionalProperties: false },
+      },
+      { timeoutMs: options.timeoutMs ?? 20_000 },
+    );
+    const queries = (result.choice as { queries?: unknown } | undefined)?.queries;
+    if (!Array.isArray(queries)) throw new Error("the query planner answered no queries list");
+    return queries
+      .filter((query): query is string => typeof query === "string" && query.trim().length > 0)
+      .map((query) => query.trim().slice(0, SEARCH_QUERY_MAX))
+      .slice(0, PLANNED_QUERIES_MAX);
+  };
+}
 
 type JudgeCall = (request: JevAskRequest, options?: { timeoutMs?: number }) => Promise<JevAskResult>;
 
@@ -306,12 +351,19 @@ export class HostMemory {
   /** `relevant` mode: the memories chosen for each session on its first turn. */
   private readonly relevant = new Map<string, BrainMemory[]>();
   private judge: RelevanceJudge | undefined;
+  private planner: MemoryQueryPlanner | undefined;
 
   constructor(
     private readonly options: MemoryOptions & { fallback?: (session: SessionRecord | undefined) => MemoryStore | readonly MemoryStore[] | undefined },
     private readonly sessions: SessionStore,
   ) {
     this.judge = options.relevance;
+    this.planner = options.queries;
+  }
+
+  /** The host's default query planning (its decide service), used unless the options name one. */
+  useQueryPlanner(planner: MemoryQueryPlanner): void {
+    this.planner ??= planner;
   }
 
   /** The host's default judgement (its decide service), used unless the options name one. */
@@ -432,12 +484,32 @@ export class HostMemory {
     if (this.relevant.has(session.id)) return;
     const text = task?.trim();
     if (!text) return;
-    const query = text.replace(/\s+/g, " ").slice(0, SEARCH_QUERY_MAX);
+    const head = text.replace(/\s+/g, " ").slice(0, SEARCH_QUERY_MAX);
+    let queries: readonly string[] = [head];
+    if (this.planner) {
+      try {
+        queries = await this.planner({ message: text });
+      } catch (error) {
+        log?.(`memory: query planning failed, searching with the message head: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (queries.length === 0) {
+        log?.(`memory: no task in this turn yet for session ${session.id}; memories are chosen on a later turn`);
+        return;
+      }
+    }
     const stores = this.storesOf(session);
+    const perQuery = this.options.relevantCandidates ?? 12;
+    // One store's hits: its queries' lists interleaved by rank.
     const results = await Promise.allSettled(
-      stores.map(async (store) =>
-        this.tagged(store, await store.route.search({ query, scopes: store.scopes.map(scopeString), limit: this.options.relevantCandidates ?? 12 })),
-      ),
+      stores.map(async (store) => {
+        const scopes = store.scopes.map(scopeString);
+        const lists = await Promise.all(queries.map((query) => store.route.search({ query, scopes, limit: perQuery })));
+        const merged: BrainMemory[] = [];
+        for (let rank = 0; rank < Math.max(0, ...lists.map((list) => list.length)); rank++) {
+          for (const list of lists) if (list[rank]) merged.push(list[rank]!);
+        }
+        return this.tagged(store, merged);
+      }),
     );
     results.forEach((result, index) => {
       if (result.status === "rejected") log?.(`memory: relevance search of ${stores[index]!.home ?? stores[index]!.route.id} failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
@@ -459,7 +531,7 @@ export class HostMemory {
     let how: string;
     try {
       if (!this.judge) throw new Error("no relevance judgement on this host");
-      const kept = candidates.length ? await this.judge({ task: text.slice(0, JUDGED_TASK_MAX), memories: candidates }) : new Set<string>();
+      const kept = candidates.length ? await this.judge({ task: taskExcerpt(text, JUDGED_TASK_MAX), memories: candidates }) : new Set<string>();
       chosen = candidates.filter((record) => kept.has(record.id)).slice(0, limit);
       how = "judged";
     } catch (error) {
@@ -467,7 +539,7 @@ export class HostMemory {
       how = `search rank only (${error instanceof Error ? error.message : String(error)})`;
     }
     this.relevant.set(session.id, chosen);
-    log?.(`memory: ${chosen.length} of ${candidates.length} memories loaded by relevance (${how}) for session ${session.id}${chosen.length ? `: ${chosen.map((record) => `${record.id} [${record.home ?? record.scope}]`).join(", ")}` : ""}`);
+    log?.(`memory: ${chosen.length} of ${candidates.length} memories loaded by relevance (${how}; queries ${JSON.stringify(queries)}) for session ${session.id}${chosen.length ? `: ${chosen.map((record) => `${record.id} [${record.home ?? record.scope}]`).join(", ")}` : ""}`);
   }
 
   /** Waits for background reads in flight (shutdown, scripts). */

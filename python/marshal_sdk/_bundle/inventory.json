@@ -1,6 +1,6 @@
 {
   "sdk": "0.0.1",
-  "builtAt": "2026-11-18T15:27:36.309Z",
+  "builtAt": "2026-11-18T15:42:33.959Z",
   "packs": {
     "@marshal/agent-runtime-claude": {
       "version": "0.1.0",
