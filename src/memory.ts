@@ -348,6 +348,8 @@ interface Held {
 }
 
 /** Personal first: its always-on memories open the prompt block and it is tried first for an id. */
+/** The company Brain's company-wide memories: every session's, whatever its homes. */
+const ORG_SCOPE = "org";
 /** The home a scope string belongs to by its id (`person:…` personal, `workspace:…` workspace); others have none. */
 const scopeHome = (scope: string | undefined): MemoryHome | undefined =>
   scope?.startsWith("person:") ? "personal" : scope?.startsWith("workspace:") ? "workspace" : undefined;
@@ -425,15 +427,16 @@ export class HostMemory {
     return `${store.route.id}|${store.home ?? ""}|${scope}`;
   }
 
-  // A record's own scope names its home. The route's tag does not: a Brain whose search ignores `home` (the company
-  // Brain on a cloud host, R153) returns a workspace memory through the personal home too, tagged `personal`.
   // A Brain whose search ignores the scopes it is given (the company Brain on a cloud host, R153) returns the caller's
-  // own personal memories to a session that has only the workspace home: only the session's own scopes are kept.
+  // own personal memories to a session that has only the workspace home: only the session's own scopes are kept, plus
+  // the company's `org` memories, which belong to every session (as in memory-typed-graph.ts).
   private ofSession(stores: readonly MemoryStore[], records: BrainMemory[]): BrainMemory[] {
     const scopes = new Set(stores.flatMap((store) => store.scopes.map(scopeString)));
-    return records.filter((record) => scopes.has(record.scope));
+    return records.filter((record) => record.scope === ORG_SCOPE || scopes.has(record.scope));
   }
 
+  // A record's own scope names its home. The route's tag does not: a Brain whose search ignores `home` (the company
+  // Brain on a cloud host, R153) returns a workspace memory through the personal home too, tagged `personal`.
   private tagged(store: MemoryStore, records: BrainMemory[]): BrainMemory[] {
     return store.home ? records.map((record) => ({ ...record, home: scopeHome(record.scope) ?? record.home ?? store.home })) : records;
   }

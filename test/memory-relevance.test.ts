@@ -202,15 +202,19 @@ test("a search hit outside the session's scopes is dropped (a Brain that ignores
     memory("p-private", "Omer's private note.", "person:email=omer@zyg.com", { category: "preference" }),
     memory("w-guarantee", "RAWDOG pages: the guarantee line reads '60-day empty-jar guarantee'.", "workspace:page-run"),
     memory("o-other", "Another workspace's note.", "workspace:other"),
+    memory("org-rule", "Company-wide: prices include VAT.", "org"),
   ];
   leaky.route.search = async (input) => (leaky.calls.push({ op: "search", input }), held.slice(0, input.limit));
   const stores: MemoryStore[] = [{ home: "workspace", route: leaky.route, scopes: [{ id: "workspace", key: {}, name: "page-run" }] }];
   const seen: string[][] = [];
   const host = new HostMemory({ fallback: () => stores, relevance: async ({ memories }) => (seen.push(memories.map((record) => record.id)), new Set(memories.map((record) => record.id))) }, sessions);
   await host.warm(session, undefined, "RAWDOG page");
-  assert.deepEqual(seen[0], ["w-guarantee"], "only the session's own scope reaches the judgement");
-  assert.deepEqual(host.promptContext(session)!.entries.map((entry) => entry.fact), ["RAWDOG pages: the guarantee line reads '60-day empty-jar guarantee'. (memory w-guarantee)"]);
-  assert.deepEqual((await host.recall(session, { query: "RAWDOG" })).map((record) => record.id), ["w-guarantee"]);
+  assert.deepEqual(seen[0], ["w-guarantee", "org-rule"], "only the session's own scope and the company's org memories reach the judgement");
+  assert.deepEqual(host.promptContext(session)!.entries.map((entry) => entry.fact), [
+    "RAWDOG pages: the guarantee line reads '60-day empty-jar guarantee'. (memory w-guarantee)",
+    "Company-wide: prices include VAT. (memory org-rule)",
+  ]);
+  assert.deepEqual((await host.recall(session, { query: "RAWDOG" })).map((record) => record.id), ["w-guarantee", "org-rule"]);
 });
 
 test("relevantLimit caps the block", async () => {
