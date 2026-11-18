@@ -14,6 +14,8 @@ export interface HostPromptOptions extends PromptLayer {
   session?: (session: SessionRecord) => PromptLayer | undefined;
 }
 
+const READ_RESOURCE_PROMPT_TOOL = "mcp__marshal__runtime_read_resource";
+
 const RUNTIME_PROMPT_TOOLS = [
   { name: "mcp__marshal__runtime_search", description: "Find Marshal runtime capabilities and read their schemas." },
   {
@@ -22,7 +24,7 @@ const RUNTIME_PROMPT_TOOLS = [
       "Run a capability ({targetType: 'operation', target, input}) or TypeScript that calls context.runtime.invoke ({targetType: 'inline_module', source, input}).",
   },
   {
-    name: "mcp__marshal__runtime_read_resource",
+    name: READ_RESOURCE_PROMPT_TOOL,
     description: "Read a runtime resource by URI: an extension's skill (skill://...) and its references.",
   },
 ];
@@ -35,6 +37,8 @@ export function sdkBaseLayer(input: {
   repoRules?: string;
   /** Whether sessions see the runtime's own tools (MarshalHostOptions.runtimeTools). Default true. */
   runtimeTools?: boolean;
+  /** Whether the runtime tools include `runtime_read_resource` (a session server built with `readResourceTool: false` has none). Default true. */
+  readResourceTool?: boolean;
   /** Tools the embedder registered (MarshalHostOptions.directTools), named as sessions see them. */
   directTools?: readonly { name: string; description: string }[];
   /** The backend's own tools sessions keep (for Claude: Bash, Read, Write, Edit...). */
@@ -52,7 +56,9 @@ export function sdkBaseLayer(input: {
       "v2.memory-and-records.correct": "fix it (`marshal.tool.updateMemory`, or `marshal.tool.remember` with `replaces`), relink it (`marshal.tool.linkMemory`) or delete it (`marshal.tool.forget`)",
     },
     tools: [
-      ...(input.runtimeTools === false ? [] : RUNTIME_PROMPT_TOOLS),
+      ...(input.runtimeTools === false
+        ? []
+        : RUNTIME_PROMPT_TOOLS.filter((tool) => input.readResourceTool !== false || tool.name !== READ_RESOURCE_PROMPT_TOOL)),
       ...(input.directTools ?? []).map((direct) => ({ name: `mcp__marshal__${direct.name}`, description: direct.description })),
       ...(input.browser
         ? [{ name: "mcp__playwright__*", description: "A headless browser: open pages and local HTML files, resize, scroll, screenshot." }]
