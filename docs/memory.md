@@ -67,7 +67,14 @@ host's decide service (OpenAI Decisions unless `models.decide.provider` names an
 (`decideRelevance`). At most `relevantLimit` (default 8) are rendered, each with `(memory <id>)`. Being always-on
 loads nothing by itself. Without a judgement, or when it fails, the top `RELEVANT_FALLBACK` (3) hits by rank are kept.
 Later turns reuse the choice; `marshal.tool.recall` serves lookups mid-task. The host log names what was loaded:
-`memory: 2 of 14 memories loaded by relevance (judged) for session <id>: mem_… [workspace], …`.
+`memory: 2 of 14 memories loaded by relevance (judged) for session <id>: mem_… [workspace], …`; the home is the
+memory's own scope's (`person:` personal, `workspace:` workspace). Hits whose scope is not one of the session's scopes
+are dropped, here and in `recall`: the company Brain's search does not filter by the scopes it is given, so a
+workspace-only session would otherwise get the caller identity's personal memories. The chosen block keeps the
+untrusted wrapper but is introduced as the team's rules to apply (`framing: "chosen"`): a rule wins over a plan or draft
+the agent was handed, an explicit instruction in the request wins over the rule, and no memory widens the task, grants
+a permission or loosens a safety rule. Under the desktop's "use them as context only" line a loaded brand rule was
+ignored (900207: 2 of 2 A/B turns kept the plan's FAQ heading; 2 of 2 applied the rule under this line).
 
 **Newest (`promptMemories: "newest"`, the default for a host's own `store`, e.g. Marley).** Before each turn the port awaits `prepareTurn`. It reads the Brain only for a scope this host has never seen (its
 always-on memories and newest others); every other scope comes from the host's cache (its own writes update it) and is
