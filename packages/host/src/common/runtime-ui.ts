@@ -643,6 +643,8 @@ export interface RuntimeUiNotificationCommand extends RuntimeUiOwner {
   readonly title: string;
   readonly message: string;
   readonly idempotencyKey: string;
+  /** Chat that clicking the notification opens; defaults to the owner's session. */
+  readonly openSessionId?: string;
 }
 
 export interface RuntimeUiChatMessageCommand extends RuntimeUiOwner {

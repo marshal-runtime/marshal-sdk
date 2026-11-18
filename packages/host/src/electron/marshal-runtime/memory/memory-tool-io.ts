@@ -84,3 +84,33 @@ export function codeLinkHint(
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+const FAILED_WRITE = {
+  save: { prefix: "MEMORY NOT SAVED", tail: "Tell the user it was not saved." },
+  forget: { prefix: "MEMORY NOT FORGOTTEN", tail: "Tell the user it was not forgotten." },
+} as const;
+
+/** Runtime error codes a failed memory write maps to (the runtime keeps a normalized code and the message). */
+export type MemoryWriteFailureCode =
+  | "invalid-request"
+  | "not-found"
+  | "permission-denied"
+  | "operation-failed";
+
+/**
+ * A memory write that did not happen, thrown so the tool call itself fails (`ok: false`, a failed tool result)
+ * instead of returning a success-shaped `{success: false}` an agent can skim past. The message leads with
+ * `MEMORY NOT SAVED:` / `MEMORY NOT FORGOTTEN:` and ends by telling the agent to report it; the reason is cut so
+ * the whole message stays inside the runtime's 512-character error limit.
+ */
+export function memoryWriteFailure(
+  kind: keyof typeof FAILED_WRITE,
+  reason: string,
+  code: MemoryWriteFailureCode = "operation-failed",
+): Error & { code: MemoryWriteFailureCode } {
+  const { prefix, tail } = FAILED_WRITE[kind];
+  const budget = 512 - prefix.length - tail.length - 4;
+  const trimmed = reason.trim().replace(/[.\s]+$/, "") || "unknown error";
+  const why = trimmed.length > budget ? `${trimmed.slice(0, budget - 1)}…` : trimmed;
+  return Object.assign(new Error(`${prefix}: ${why}. ${tail}`), { code });
+}

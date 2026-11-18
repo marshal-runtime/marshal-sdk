@@ -122,6 +122,34 @@ describe("OrgExtensionCatalog", () => {
     });
   });
 
+  it("marks a pending entry that is installed, keeping an approved entry's state first", async () => {
+    const records = [
+      { identity: "@me/new", version: "0.1.0", integrity: { value: "a" } },
+      { identity: "@me/both", version: "1.0.0", integrity: { value: "b" } },
+    ];
+    const { service, requestJson } = setup({
+      runtime: testDouble<Runtime>({
+        listExtensions: async () => testDouble<Listed>({ ok: true, receipts: [], value: records }),
+      }),
+    });
+    requestJson.mockResolvedValueOnce({
+      version: 1,
+      isAdmin: true,
+      recommended: [],
+      available: [entry({ id: "@me/both", version: "1.0.0" })],
+      pending: [
+        entry({ id: "@me/new", version: "0.2.0", status: "pending" }),
+        entry({ id: "@me/both", version: "2.0.0", status: "pending" }),
+      ],
+    });
+    const result = await service.get(scope);
+    if (!result.success) throw new Error("unreachable");
+    expect(result.installed).toEqual({
+      "@me/new": { version: "0.1.0", state: "update" },
+      "@me/both": { version: "1.0.0", state: "current" },
+    });
+  });
+
   it("leaves install state out when no scope is given", async () => {
     const { service } = setup();
     const result = await service.get();
