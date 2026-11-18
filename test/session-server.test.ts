@@ -106,3 +106,16 @@ test("Edge Cases: runtimeTools false leaves only the direct tools, and the exec 
   assert.equal(tools.find((entry) => entry.name === "runtime_search")!.description, "find");
   assert.equal(tools.find((entry) => entry.name === "runtime_exec")!.description, "run + note");
 });
+
+test("Edge Cases: runtimeShapes replace the runtime tools' schemas, readResourceTool false drops the resource read", async () => {
+  const backend = runtime();
+  const shapes = { search: { query: z.string().optional(), limit: z.number().int().min(1).max(50).optional() }, exec: { targetType: z.enum(["operation"]), executionMode: z.enum(["sync", "async"]).optional() } };
+  const { client } = await connect({ runtime: backend, directTools: [lookup], runtimeShapes: shapes, readResourceTool: false });
+  const tools = (await client.listTools()).tools;
+  assert.deepEqual(tools.map((entry) => entry.name), ["runtime_search", "runtime_exec", "lookup"]);
+  assert.deepEqual(Object.keys(tools[0]!.inputSchema.properties ?? {}), ["query", "limit"]);
+  assert.equal((tools[0]!.inputSchema.properties as Record<string, { maximum?: number }>).limit!.maximum, 50);
+  assert.deepEqual((tools[1]!.inputSchema.properties as Record<string, { enum?: string[] }>).executionMode!.enum, ["sync", "async"]);
+  await client.callTool({ name: "runtime_exec", arguments: { targetType: "operation", executionMode: "sync" } });
+  assert.deepEqual(backend.calls.at(-1), { name: "runtime_exec", args: { targetType: "operation", executionMode: "sync" } });
+});
