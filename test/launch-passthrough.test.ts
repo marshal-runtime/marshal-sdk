@@ -105,7 +105,7 @@ test("without launch options a turn keeps the host's defaults", async () => {
   assert.equal(options.includePartialMessages, true);
   assert.deepEqual(options.settingSources, []);
   assert.deepEqual(options.tools, ["Read"]);
-  assert.equal(options.systemPrompt, "host prompt");
+  assert.deepEqual(options.systemPrompt, { type: "custom", prompt: "host prompt", snapshot: false });
   for (const key of ["agents", "plugins", "skills", "settings", "additionalDirectories", "thinking", "sessionId"]) {
     assert.equal(key in options, false, key);
   }

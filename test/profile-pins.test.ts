@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { systemPromptText } from "../src/agent-port.js";
 import { createMarshalHost } from "../src/host.js";
 import { PROFILE_PINS } from "../src/profile.js";
 
@@ -86,8 +87,8 @@ const EFFECTS: Record<(typeof PROFILE_PINS)[number], (r: Awaited<ReturnType<type
   async systemPromptAppend({ calls, launch }) {
     await launch("plain", {});
     await launch("append", { systemPromptAppend: "PROFILE-APPEND-LINE" });
-    assert.doesNotMatch(String(calls[0]!.systemPrompt), /PROFILE-APPEND-LINE/);
-    assert.match(String(calls[1]!.systemPrompt), /PROFILE-APPEND-LINE\s*$/);
+    assert.doesNotMatch(systemPromptText(calls[0]!.systemPrompt) ?? "", /PROFILE-APPEND-LINE/);
+    assert.match(systemPromptText(calls[1]!.systemPrompt) ?? "", /PROFILE-APPEND-LINE\s*$/);
   },
   async nativeTools({ calls, launch }) {
     await launch("tools", { nativeTools: ["Read", "Bash"] });

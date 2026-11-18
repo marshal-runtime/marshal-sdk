@@ -828,13 +828,17 @@ export class ClaudeAgentPort {
       // A live process keeps the servers it started with, so they are made only when one starts (openProcess).
       mcpServers: live ? {} : this.mcpServersOf(session, launch),
       // A launch's own prompt (a fork's included) is rendered fresh on every request: recorded once, a resumed or
-      // forked session would keep running on the prompt of its first turn (its parent's, for a fork).
+      // forked session would keep running on the prompt of its first turn (its parent's, for a fork). The host's own
+      // prompt too: it changes within a session (the memories a turn's task brings, R153), and on run 900209 every Page
+      // Studio session recorded its "reply ready" prompt and never sent the memory block its task turn chose.
       systemPrompt:
         agent.systemPrompt !== undefined
           ? { type: "custom", prompt: agent.systemPrompt, snapshot: false }
           : launch.systemPromptPreset
             ? { type: "preset", preset: "claude_code", ...(launch.systemPromptPreset.append ? { append: launch.systemPromptPreset.append } : {}) }
-            : (systemPrompt ?? { type: "preset", preset: "claude_code" }),
+            : systemPrompt !== undefined
+              ? { type: "custom", prompt: systemPrompt, snapshot: false }
+              : { type: "preset", preset: "claude_code" },
       ...toolsOption(session.nativeTools, launch.tools, this.options.tools),
       ...(session.native.sessionId
         ? { resume: session.native.sessionId }

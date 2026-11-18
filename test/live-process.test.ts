@@ -128,9 +128,20 @@ test("live off: every turn starts its own process, as before", async () => {
   await port.wait(agent.id);
   await turn(port, agent.id, "two");
   assert.equal(started.length, 2);
-  assert.equal(typeof started[0]!.options.systemPrompt, "string", "the host's own prompt stays a plain string");
+  assert.deepEqual(started[0]!.options.systemPrompt, { type: "custom", prompt: "host prompt", snapshot: false });
   assert.equal(started[1]!.options.resume, "native-1");
   assert.deepEqual(port.liveSessions(), []);
+});
+
+test("the host's prompt is not recorded: a resumed turn sends the prompt its own turn rendered (memories chosen on the task turn, R153)", async () => {
+  let memory = "";
+  const { port, started } = rig({ systemPrompt: () => `host prompt${memory}` });
+  const agent = port.launch({ task: "Reply with the single word ready.", idempotencyKey: "k" });
+  await port.wait(agent.id);
+  memory = "\n\n## Memory\n\nRAWDOG: the FAQ heading reads 'Your Eye Cream Questions, Answered'.";
+  await turn(port, agent.id, "Write the FAQ section.");
+  assert.equal(started[1]!.options.resume, "native-1");
+  assert.deepEqual(started[1]!.options.systemPrompt, { type: "custom", prompt: `host prompt${memory}`, snapshot: false });
 });
 
 test("live: one process serves every turn; each turn's cost is its share of the running total", async () => {
