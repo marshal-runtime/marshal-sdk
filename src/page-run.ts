@@ -16,6 +16,7 @@ import { cloudRunLayer } from "./prompt-cloud.js";
 import { desktopSurface } from "./prompt-desktop.js";
 import { turnSessions, writeRunLogs, type RunSummaryJson } from "./run-contract.js";
 import { escapeRegExp, finishPage, markSections, type FinishedPage } from "./page-finish.js";
+import { claudeScreenshotLook, pricedPack } from "./page-price.js";
 
 export { finishPage, markSections, type FinishedPage };
 
@@ -107,6 +108,18 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   };
   // Page Studio reads its folder and its Chrome from the process: it runs inside this process.
   process.env.PAGE_STUDIO_DIR = env.PAGE_STUDIO_DIR = studioDir;
+  const priced = options.fake || options.offline
+    ? { productDir: input.productDir, warnings: [] as string[] }
+    : await pricedPack({
+        productDir: input.productDir,
+        inputDir,
+        copyDir: path.join(state, "pack", input.productId),
+        handle: input.productHandle,
+        productName: input.productName || input.brandName,
+        look: claudeScreenshotLook(env),
+        log,
+      });
+  input.productDir = priced.productDir;
   // A brand-data provider in the sandbox (@zyg/brand-data-pack) serves this run's product pack (facts.md, pictures.json).
   process.env[INPUT_PACK_ENV] = env[INPUT_PACK_ENV] ??= input.productDir;
   const chrome = await resolveChrome();
@@ -149,7 +162,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   let usedSkills: string[] = [];
   let profiles: unknown[] = [];
   let profileText = profileLabel(options.profile);
-  const warnings: string[] = [];
+  const warnings: string[] = [...priced.warnings];
   let build: PageStudioBuild = {};
   try {
     const gate = browserGate({ depth, noLook: Boolean(options.noLook), usable: browserUsable, fake: Boolean(options.fake) });
@@ -866,7 +879,8 @@ const USAGE = `marshal-sdk page-run: one Page Studio page from an agent-sandbox 
   --depth <quick|single|deep>  (default single)   --rounds <1-4>   --idea <text | @file>
   --profile <id | role=id,…>  (default marshal: the host's own prompt and tools; page-studio, or one of Page Studio's data folder; roles: planner writer reviewer critic fixer picture-look default)
   --model <id>  --effort <low|medium|high|xhigh|max>   --quick-model <id>   --required-skill <name> (repeatable)
-  --kit <brain,memory,sessions>  kit parts on the host (default: $MARSHAL_SDK_KIT, else none)
+  --kit <brain,memory,sessions>  kit parts on the host (default: $MARSHAL_SDK_KIT, else none); the Brain answers for
+                     $MARSHAL_SDK_BRAIN_CALLER when set, so that person's always-on memories reach the sessions
   --publish-sessions <team|email,...>  publish the run's sessions to the team Brain's session index, for the team or
                      those people (default: $MARSHAL_SDK_PUBLISH_SESSIONS, else off); adds the Brain and sessions kit
   --publish-context <text>  one line in front of each published session's first prompt, e.g. the run id and the
@@ -982,14 +996,24 @@ function runPrompt(
   }), surface: desktopSurface() };
 }
 
-/** The host's kit: the parts asked for, plus the Brain and sessions when the run publishes its sessions. */
-export function hostKit(kit: readonly KitPartName[] | undefined, publish: SessionsPublishOptions | undefined): { kit?: KitOptions } {
-  if (!publish) return kit?.length ? { kit: { parts: [...kit] } } : {};
+/**
+ * The host's kit: the parts asked for, plus the Brain and sessions when the run publishes its sessions. The Brain
+ * caller (default $MARSHAL_SDK_BRAIN_CALLER) gives the host that person's memory home, so their always-on
+ * preferences reach the sessions; without it a cloud run sees only the workspace home.
+ */
+export function hostKit(
+  kit: readonly KitPartName[] | undefined,
+  publish: SessionsPublishOptions | undefined,
+  brainCaller: string | undefined = process.env.MARSHAL_SDK_BRAIN_CALLER,
+): { kit?: KitOptions } {
+  const caller = brainCaller?.trim();
+  const brain = caller ? { brain: { callerEmail: caller } } : {};
+  if (!publish) return kit?.length ? { kit: { parts: [...kit], ...brain } } : {};
   const parts = new Set<KitPartName>([...(kit ?? []), "brain", "sessions"]);
-  return { kit: { parts: [...parts], sessions: { publish } } };
+  return { kit: { parts: [...parts], sessions: { publish }, ...brain } };
 }
 
-function publishArgument(audience: string | undefined, context: string | undefined): { publish?: SessionsPublishOptions } {
+export function publishArgument(audience: string | undefined, context: string | undefined): { publish?: SessionsPublishOptions } {
   const raw = (audience ?? process.env.MARSHAL_SDK_PUBLISH_SESSIONS ?? "").trim();
   if (!raw || raw === "off") return {};
   const line = (context ?? process.env.MARSHAL_SDK_PUBLISH_CONTEXT ?? "").trim();
@@ -997,7 +1021,7 @@ function publishArgument(audience: string | undefined, context: string | undefin
   return { publish: { audience: people.length ? { people } : "team", ...(line ? { context: line } : {}) } };
 }
 
-function kitArgument(value: string | undefined): KitPartName[] | undefined {
+export function kitArgument(value: string | undefined): KitPartName[] | undefined {
   const raw = value ?? process.env.MARSHAL_SDK_KIT ?? "";
   const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
   for (const part of parts) if (!["brain", "memory", "sessions"].includes(part)) throw new Error(`--kit takes brain, memory and sessions, got ${part}.`);

@@ -129,3 +129,11 @@ test("page-run's hostKit adds the Brain and sessions when the run publishes", ()
   assert.deepEqual(hostKit(["memory"], undefined), { kit: { parts: ["memory"] } });
   assert.deepEqual(hostKit(["memory"], { audience: "team" }), { kit: { parts: ["memory", "brain", "sessions"], sessions: { publish: { audience: "team" } } } });
 });
+
+test("page-run's hostKit names the Brain caller, so the host gets that person's memory home", () => {
+  assert.deepEqual(hostKit(["memory"], undefined, "Omer@zyg.com "), { kit: { parts: ["memory"], brain: { callerEmail: "Omer@zyg.com" } } });
+  assert.deepEqual(hostKit(undefined, { audience: "team" }, "omer@zyg.com"), {
+    kit: { parts: ["brain", "sessions"], sessions: { publish: { audience: "team" } }, brain: { callerEmail: "omer@zyg.com" } },
+  });
+  assert.deepEqual(hostKit(["memory"], undefined, " "), { kit: { parts: ["memory"] } });
+});

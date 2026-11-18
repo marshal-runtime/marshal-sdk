@@ -132,8 +132,10 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
   const credential: ProviderCredential = apiKey !== undefined ? "api-key" : "subscription";
   const engine = selection.id === "claude" ? (selection.engine ?? DEFAULT_CLAUDE_ENGINE) : undefined;
   if (engine && engine !== "client" && engine !== "agent-sdk") throw new Error(`Unknown Claude engine "${String(engine)}"; use client or agent-sdk.`);
+  // The Claude CLI uses ANTHROPIC_API_KEY from its env over the account's login, so say so rather than "subscription".
+  const envKey = selection.id === "claude" && credential === "subscription" && Boolean(options.env.ANTHROPIC_API_KEY);
   const describe = (home: string | undefined) =>
-    `provider ${selection.id}${engine ? ` (${engine === "client" ? "Claude client" : "Claude Agent SDK"})` : ""}: ${credential === "api-key" ? `API key from ${selection.apiKeyEnv}` : `subscription, account ${account ?? DEFAULT_ACCOUNT}`}${home ? `, home ${home}` : ""}`;
+    `provider ${selection.id}${engine ? ` (${engine === "client" ? "Claude client" : "Claude Agent SDK"})` : ""}: ${credential === "api-key" ? `API key from ${selection.apiKeyEnv}` : envKey ? "API key from ANTHROPIC_API_KEY in the environment (it outranks the account login)" : `subscription, account ${account ?? DEFAULT_ACCOUNT}`}${home ? `, home ${home}` : ""}`;
   const fresh = (name: string) => {
     const dir = path.join(options.privateRoot, "providers", name);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

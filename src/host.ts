@@ -320,6 +320,8 @@ export interface MarshalHost {
   systemPrompt(sessionId?: string): string | undefined;
   /** Give one session its own prompt layer (soul, role, sections, context, override); undefined removes it. */
   setSessionPrompt(sessionId: string, layer: PromptLayer | undefined): void;
+  /** The MCP servers a session of this host gets (`marshal`: an in-process SDK server, `playwright` when a browser is on), for a Claude Code process the host does not launch itself (claude-bridge.ts). */
+  mcpServersFor(sessionId: string): Record<string, unknown>;
   /** The link server, when the host was created with `link`. */
   readonly link?: { url: string; port: number };
   /** The org bridge, when the host was created with `org`. */
@@ -832,6 +834,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       return prompts?.forSession(session ?? undefined);
     },
     setSessionPrompt: (sessionId, layer) => prompts?.setSessionLayer(sessionId, layer),
+    mcpServersFor: (sessionId) => {
+      const session = sessions.get(sessionId);
+      if (!session) throw new Error(`No session ${sessionId} on this host.`);
+      return serversFor(session);
+    },
     invoke,
     search,
     readResource: async (uri, sessionId) => {
