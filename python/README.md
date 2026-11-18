@@ -38,6 +38,8 @@ state, which is also what Marshal desktop's `sdksessions.pushToCloud` updates. D
 - The Brain: Google credentials the Brain front accepts. Without them runs still finish, without memories.
   `MARSHAL_SDK_BRAIN_CALLER` names whose personal memories a run reads; `MARSHAL_SDK_PUBLISH_SESSIONS` publishes its
   sessions to Marshal desktop.
+- For runs to show in Marshal desktop's cloud run list: `MARSHAL_SDK_RUN_POINTER_PREFIX` (defaults to
+  `gs://$GCS_BUCKET/marshal-sdk-cloud-runs` only when `GCS_BUCKET` is set; production agent-sandbox leaves it unset).
 
 ## Refreshing the bundle
 
