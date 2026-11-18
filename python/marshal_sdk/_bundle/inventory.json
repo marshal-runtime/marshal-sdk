@@ -1,0 +1,118 @@
+{
+  "sdk": "0.0.1",
+  "builtAt": "2026-11-18T08:49:00.984Z",
+  "packs": {
+    "@marshal/agent-runtime-claude": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-claude-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-org": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-org-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-prompt": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-prompt-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/runtime": {
+      "version": "0.1.0",
+      "tarball": "marshal-runtime-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agentic-debugger-extension": {
+      "version": "1.0.0",
+      "tarball": "marshal-agentic-debugger-extension-1.0.0-marshal-host-1.tgz"
+    },
+    "@marshal/overlay-review": {
+      "version": "0.1.0",
+      "tarball": "marshal-overlay-review-0.1.0-marshal-host-2.tgz"
+    },
+    "@marshal/swarm": {
+      "version": "0.1.0",
+      "tarball": "marshal-swarm-0.1.0-marshal-host-51.tgz"
+    },
+    "@marshal/agent-runtime-code-intelligence": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-code-intelligence-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-composer": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-composer-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-conformance": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-conformance-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-core": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-core-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-delegation": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-delegation-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-effects": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-effects-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-extensions": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-extensions-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-host": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-host-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-manifest": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-manifest-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-typescript": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-typescript-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-ui": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-ui-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-provider-kit": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-provider-kit-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-permissions": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-permissions-0.1.0-marshal-host-94.tgz"
+    },
+    "@marshal/agent-runtime-provider-artifacts": {
+      "version": "0.1.0",
+      "tarball": "marshal-agent-runtime-provider-artifacts-0.1.0-marshal-host-94.tgz"
+    }
+  },
+  "hoisted": {
+    "yjs": "^13.6.33",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@vscode/debugprotocol": "^1.68.0",
+    "commander": "^12.1.0",
+    "nanoid": "^5.1.6",
+    "pino": "^9.14.0",
+    "pino-roll": "^4.0.0",
+    "zod": "4.3.6",
+    "zod-to-json-schema": "^3.25.1",
+    "typescript": "^5.8.0",
+    "esbuild": "^0.27.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "extensions": [
+    {
+      "identity": "@zyg/page-studio",
+      "version": "0.1.0",
+      "path": "extensions/page-studio"
+    },
+    {
+      "identity": "@marshal/brain",
+      "version": "0.2.0",
+      "path": "extensions/brain"
+    }
+  ],
+  "artifact": "marshal-sdk-0.0.1.tgz"
+}

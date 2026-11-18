@@ -310,6 +310,9 @@ test("pushToCloud replaces the preview, keeps the old one, writes the page recor
   const preview = fs.readFileSync(path.join(runRoot, "preview", "index.html"), "utf8");
   assert.match(preview, /every call/);
   assert.match(preview, /src="\.\.\/images\/[^"]+"/);
+  // The pushed page names the state this push updated, so the run's next cloud edit starts from this version.
+  assert.equal((preview.match(/name="marshal-page-state"/g) ?? []).length, 1);
+  assert.match(preview, /<meta name="marshal-page-state" content="gs:\/\/dev-bucket\/runs\/demo-1\/agent\/marshal-state">/);
   // The inlined copy their UI also serves carries the edit, with its pictures as data: URLs.
   const inlined = fs.readFileSync(path.join(runRoot, "preview", "inline", "index.html"), "utf8");
   assert.match(inlined, /every call/);

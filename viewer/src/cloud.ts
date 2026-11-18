@@ -484,6 +484,16 @@ export interface PushRefused {
   baseVersion?: number;
 }
 
+const STATE_META = "marshal-page-state";
+
+/** The page with a marshal-page-state meta tag naming its Marshal state (replacing an older one). */
+export function stampStateLocation(html: string, location: string): string {
+  const meta = `<meta name="${STATE_META}" content="${location.replace(/[<>"&]/g, "")}">`;
+  const bare = html.replace(new RegExp(`<meta\\s+name="${STATE_META}"\\s+content="[^"]*"\\s*/?>\\s*`, "g"), "");
+  const head = /<head[^>]*>/i.exec(bare);
+  return head ? `${bare.slice(0, head.index + head[0].length)}${meta}${bare.slice(head.index + head[0].length)}` : `${meta}${bare}`;
+}
+
 export async function pushToCloud(input: PushInput): Promise<PushResult | PushRefused> {
   const root = trim(input.outputRoot);
   if (stateOf(root) !== `${root}/${STATE}`) {
@@ -510,7 +520,9 @@ export async function pushToCloud(input: PushInput): Promise<PushResult | PushRe
   fs.mkdirSync(out, { recursive: true });
   const finished = finishPage(input.renderedHtml, { libraryRoot: path.join(input.studioDir, "library"), outDir: out });
   // Their preview points pictures at ../images/<name> beside it; keep that shape so the UI renders it unchanged.
-  const html = finished.html.replace(/(["'(\s])assets\//g, "$1../images/");
+  // The page names the state this push updates, so the run's next edit (marshal_sdk's Page Studio route) continues
+  // from this version instead of the page as the build left it.
+  const html = stampStateLocation(finished.html.replace(/(["'(\s])assets\//g, "$1../images/"), stateOf(root));
   fs.writeFileSync(path.join(out, "index.html"), html);
   // The new version is committed first, with a conditional write on the artifact's manifest: a copy made from an older
   // version is refused here, before anything of the run's preview is touched.
