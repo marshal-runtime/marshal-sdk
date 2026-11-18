@@ -3,15 +3,17 @@
 //
 //   node scripts/pack-agent-port.mjs [--out .pack]
 //
-// It holds three ESM entries, `@marshal/sdk/agent-port`, `@marshal/sdk/session-store` and `@marshal/sdk/session-server`
-// (a session's `marshal` server from its own runtime connection, for an embedder that owns its sessions' runtimes), bundled with the provider
+// It holds four ESM entries, `@marshal/sdk/agent-port`, `@marshal/sdk/session-store`, `@marshal/sdk/session-server`
+// (a session's `marshal` server from its own runtime connection, for an embedder that owns its sessions' runtimes) and
+// `@marshal/sdk/session-prompt` (the default system prompt of a top-level session, with the SDK's own prompt package
+// bundled in), bundled with the provider
 // layer they reach, and their declarations. The only packages left external are the ones the host already has:
 // `@marshal/agent-runtime-claude` and `zod` at runtime, `@anthropic-ai/claude-agent-sdk` for types. They are peers, so
 // the host's own copies (its own patched runtime packs) are the ones used. Any other external import fails the pack.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { build } from "esbuild";
 
@@ -20,7 +22,21 @@ const outIndex = process.argv.indexOf("--out");
 const out = path.resolve(outIndex > 0 ? process.argv[outIndex + 1] : path.join(root, ".pack"));
 const sdk = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-const entries = { "agent-port": "src/agent-port.ts", "session-store": "src/session-store.ts", "session-server": "src/session-server.ts" };
+const entries = {
+  "agent-port": "src/agent-port.ts",
+  "session-store": "src/session-store.ts",
+  "session-server": "src/session-server.ts",
+  "session-prompt": "src/session-prompt.ts",
+};
+// Bundled, not a peer: the session prompt is the text of the SDK's own pin of the prompt package, whatever the host has.
+const bundled = ["@marshal/agent-runtime-prompt"];
+const bundledResolver = {
+  name: "bundle-pinned",
+  setup(pack) {
+    const filter = new RegExp(`^(${bundled.map((name) => name.replace(/[/.]/g, "\\$&")).join("|")})$`);
+    pack.onResolve({ filter }, (args) => ({ path: fileURLToPath(import.meta.resolve(args.path, pathToFileURL(path.join(root, "package.json")).href)) }));
+  },
+};
 // The range each peer accepts: any runtime pack, zod 4 (the bundle imports zod/v4), the SDK's own Agent SDK pin.
 const peers = {
   "@marshal/agent-runtime-claude": "*",
@@ -40,6 +56,7 @@ const result = await build({
   packages: "external",
   metafile: true,
   logLevel: "warning",
+  plugins: [bundledResolver],
 });
 const external = new Set(
   Object.values(result.metafile.outputs)
@@ -119,7 +136,7 @@ fs.rmSync(declarations, { recursive: true, force: true });
 const manifest = {
   name: sdk.name,
   version: `${sdk.version}-port.${sha.slice(0, 7)}`,
-  description: "The Marshal SDK's Claude agent port, session store and session marshal server, for hosts that bring their own runtime packs.",
+  description: "The Marshal SDK's Claude agent port, session store, session marshal server and default session prompt, for hosts that bring their own runtime packs.",
   type: "module",
   exports: Object.fromEntries(
     Object.entries(entries).map(([name, source]) => [
