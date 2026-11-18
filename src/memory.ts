@@ -7,6 +7,7 @@
 import { RUNTIME_PROTOCOL_VERSION, type CapabilityProvider, type InvocationContext } from "@marshal/runtime";
 
 import { callerSessionId } from "./agent-provider.js";
+import type { JevAskRequest, JevAskResult } from "./models/jev/api.js";
 import type { PromptMemoryEntry, SessionPromptContext } from "./prompt.js";
 import type { SessionRecord, SessionStore } from "./session-store.js";
 
@@ -119,15 +120,78 @@ export interface MemoryOptions {
    * `personal` home (scope `person:email=<email>`). Default: the kit's `brain.callerEmail`. Never taken from model input.
    */
   personEmail?: string;
-  /** Memories that are not always-on rendered into the prompt, newest first. Default 20. */
+  /**
+   * How a session's memory block is filled (R153). `relevant`: on the session's first turn each home's Brain search runs
+   * with the task, a judgement keeps the memories that shape it, and only those are rendered, with their ids. `newest`:
+   * every always-on memory, then the newest others. Default: `relevant` for the kit's company Brain, `newest` for a
+   * host's own `store` (Marley's brand graph).
+   */
+  promptMemories?: "relevant" | "newest";
+  /** Relevant memories rendered at most. Default 8. */
+  relevantLimit?: number;
+  /** Search hits per home the judgement looks at. Default 12. */
+  relevantCandidates?: number;
+  /**
+   * Which of the candidate memories shape this task (the ids kept). Default: the host's decide service
+   * (`decideRelevance`). Without one, or when it fails, the top `RELEVANT_FALLBACK` hits by search rank are kept.
+   */
+  relevance?: RelevanceJudge;
+  /** `newest` mode: memories that are not always-on rendered into the prompt, newest first. Default 20. */
   promptLimit?: number;
-  /** Always-on memories rendered at most. Default 50. */
+  /** `newest` mode: always-on memories rendered at most. Default 50. */
   alwaysOnLimit?: number;
   /**
    * How often, at most, a scope this host already holds is re-read in the background to pick up other hosts' writes.
    * Default 60 s. A turn never waits for it: only the first read of a scope this host has not seen is awaited.
    */
   refreshMs?: number;
+}
+
+/** Decides which candidate memories shape a task; returns the ids to keep. */
+export type RelevanceJudge = (input: { task: string; memories: readonly BrainMemory[] }) => Promise<ReadonlySet<string>>;
+
+/** Hits kept by search rank alone when no judgement is available. */
+export const RELEVANT_FALLBACK = 3;
+/** The Brain's memory.search takes at most 500 characters. */
+const SEARCH_QUERY_MAX = 500;
+const JUDGED_TASK_MAX = 6000;
+
+type JudgeCall = (request: JevAskRequest, options?: { timeoutMs?: number }) => Promise<JevAskResult>;
+
+/**
+ * A relevance judgement on the host's decide service: one yes/no question per candidate memory over one state (the task
+ * and the memories' text), kept when the probability that it shapes the task reaches `threshold`.
+ */
+export function decideRelevance(judge: JudgeCall, options: { threshold?: number; timeoutMs?: number } = {}): RelevanceJudge {
+  const threshold = options.threshold ?? 0.5;
+  return async ({ task, memories }) => {
+    if (memories.length === 0) return new Set();
+    const key = (index: number) => `m${index}`;
+    const result = await judge(
+      {
+        state: { task, memories: Object.fromEntries(memories.map((record, index) => [key(index), record.content])) },
+        questions: Object.fromEntries(
+          memories.map((_, index) => [
+            key(index),
+            {
+              type: "noul" as const,
+              instructions:
+                `Should remembered memory ${key(index)} (in state.memories) change how the task in state.task is done? ` +
+                "True when it is about the task's own subject (the same brand, product, page, codebase or kind of work) or states how the person wants this kind of work done. " +
+                "False when it is about a different brand, product, codebase or topic, or would not change the result.",
+            },
+          ]),
+        ),
+      },
+      { timeoutMs: options.timeoutMs ?? 20_000 },
+    );
+    const kept = new Set<string>();
+    memories.forEach((record, index) => {
+      const answer = result.answers[key(index)];
+      if (answer && "noul" in answer && answer.noul >= threshold) kept.add(record.id);
+    });
+    return kept;
+  };
 }
 
 const SCOPE_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/;
@@ -239,11 +303,25 @@ export class HostMemory {
   private readonly refreshing = new Map<string, Promise<void>>();
   /** Ids this host deleted: a background list that started before the delete must not bring them back. */
   private readonly forgotten = new Set<string>();
+  /** `relevant` mode: the memories chosen for each session on its first turn. */
+  private readonly relevant = new Map<string, BrainMemory[]>();
+  private judge: RelevanceJudge | undefined;
 
   constructor(
     private readonly options: MemoryOptions & { fallback?: (session: SessionRecord | undefined) => MemoryStore | readonly MemoryStore[] | undefined },
     private readonly sessions: SessionStore,
-  ) {}
+  ) {
+    this.judge = options.relevance;
+  }
+
+  /** The host's default judgement (its decide service), used unless the options name one. */
+  useRelevance(judge: RelevanceJudge): void {
+    this.judge ??= judge;
+  }
+
+  private mode(): "relevant" | "newest" {
+    return this.options.promptMemories ?? (this.options.store ? "newest" : "relevant");
+  }
 
   /** The session's stores, personal first; empty when the session has no memory. */
   storesOf(session: SessionRecord | undefined): MemoryStore[] {
@@ -315,12 +393,16 @@ export class HostMemory {
    * Before a turn: awaits the Brain only for a scope this host has never read; a held scope is served from the cache
    * and refreshed in the background. A failed first read leaves the scope empty for this turn and is retried next turn.
    */
-  async warm(session: SessionRecord | undefined, log?: (line: string) => void): Promise<void> {
+  async warm(session: SessionRecord | undefined, log?: (line: string) => void, task?: string): Promise<void> {
     let scopes: ReturnType<HostMemory["scopesOf"]>;
     try {
       scopes = this.scopesOf(session);
     } catch (error) {
       log?.(`memory: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (this.mode() === "relevant") {
+      if (session && scopes.length > 0) await this.chooseRelevant(session, task, log);
       return;
     }
     // Homes are read side by side: a slow Brain of one home does not hold up the other.
@@ -341,6 +423,51 @@ export class HostMemory {
     );
   }
 
+  /**
+   * `relevant` mode, a session's first turn with a task: each home's Brain search with the task, homes interleaved by
+   * rank, then the judgement keeps the memories that shape it. Later turns reuse the choice (`recall` serves mid-task
+   * lookups). When every home fails, nothing is held and the next turn tries again.
+   */
+  private async chooseRelevant(session: SessionRecord, task: string | undefined, log?: (line: string) => void): Promise<void> {
+    if (this.relevant.has(session.id)) return;
+    const text = task?.trim();
+    if (!text) return;
+    const query = text.replace(/\s+/g, " ").slice(0, SEARCH_QUERY_MAX);
+    const stores = this.storesOf(session);
+    const results = await Promise.allSettled(
+      stores.map(async (store) =>
+        this.tagged(store, await store.route.search({ query, scopes: store.scopes.map(scopeString), limit: this.options.relevantCandidates ?? 12 })),
+      ),
+    );
+    results.forEach((result, index) => {
+      if (result.status === "rejected") log?.(`memory: relevance search of ${stores[index]!.home ?? stores[index]!.route.id} failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+    });
+    if (results.every((result) => result.status === "rejected")) return;
+    const lists = results.map((result) => (result.status === "fulfilled" ? result.value.filter((record) => !this.forgotten.has(record.id)) : []));
+    const seen = new Set<string>();
+    const candidates: BrainMemory[] = [];
+    for (let rank = 0; rank < Math.max(0, ...lists.map((list) => list.length)); rank++) {
+      for (const list of lists) {
+        const record = list[rank];
+        if (record && !seen.has(record.id)) (seen.add(record.id), candidates.push(record));
+      }
+    }
+    const limit = this.options.relevantLimit ?? 8;
+    let chosen: BrainMemory[];
+    let how: string;
+    try {
+      if (!this.judge) throw new Error("no relevance judgement on this host");
+      const kept = candidates.length ? await this.judge({ task: text.slice(0, JUDGED_TASK_MAX), memories: candidates }) : new Set<string>();
+      chosen = candidates.filter((record) => kept.has(record.id)).slice(0, limit);
+      how = "judged";
+    } catch (error) {
+      chosen = candidates.slice(0, Math.min(limit, RELEVANT_FALLBACK));
+      how = `search rank only (${error instanceof Error ? error.message : String(error)})`;
+    }
+    this.relevant.set(session.id, chosen);
+    log?.(`memory: ${chosen.length} of ${candidates.length} memories loaded by relevance (${how}) for session ${session.id}${chosen.length ? `: ${chosen.map((record) => `${record.id} [${record.home ?? record.scope}]`).join(", ")}` : ""}`);
+  }
+
   /** Waits for background reads in flight (shutdown, scripts). */
   async settle(): Promise<void> {
     await Promise.all([...this.refreshing.values()]);
@@ -358,6 +485,13 @@ export class HostMemory {
       return undefined;
     }
     if (scopes.length === 0) return undefined;
+    if (this.mode() === "relevant") {
+      const chosen = (session ? this.relevant.get(session.id) ?? [] : []).filter((record) => !this.forgotten.has(record.id));
+      if (chosen.length === 0) return undefined;
+      return {
+        entries: chosen.map((record): PromptMemoryEntry => ({ fact: `${record.content} (memory ${record.id})`, category: record.category, createdAt: record.createdAt, source: "brain" })),
+      };
+    }
     const newest = (a: BrainMemory, b: BrainMemory) => b.createdAt.localeCompare(a.createdAt);
     const heldOf = (store: MemoryStore) =>
       scopes.filter((entry) => entry.store === store).map(({ key }) => this.cache.get(this.cacheKey(store, key)) ?? { alwaysOn: [], recent: [] });
@@ -386,6 +520,9 @@ export class HostMemory {
     const held = this.cache.get(key) ?? { alwaysOn: [], recent: [] };
     const without = (list: BrainMemory[]) => list.filter((existing) => existing.id !== tagged!.id);
     this.cache.set(key, tagged!.alwaysOn ? { alwaysOn: [tagged!, ...without(held.alwaysOn)], recent: without(held.recent) } : { alwaysOn: without(held.alwaysOn), recent: [tagged!, ...without(held.recent)] });
+    for (const [sessionId, chosen] of this.relevant) {
+      if (chosen.some((record) => record.id === tagged!.id)) this.relevant.set(sessionId, chosen.map((record) => (record.id === tagged!.id ? tagged! : record)));
+    }
     return tagged!;
   }
 

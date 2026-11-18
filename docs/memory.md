@@ -55,7 +55,17 @@ strings `<id>:<k>=<v>/...`, or `<id>:<name>` for a scope with a bare `name` (`sc
 
 ## Prompt
 
-Before each turn the port awaits `prepareTurn`. It reads the Brain only for a scope this host has never seen (its
+**Loaded when needed (`promptMemories: "relevant"`, the default with the kit's company Brain; Omer R153).** On a
+session's first turn `prepareTurn` gets the turn's message: each home's Brain `memory.search` runs with it (whitespace
+folded, cut to the Brain's 500 characters; `relevantCandidates` hits per home, default 12), the homes are interleaved by
+rank, and a judgement keeps the memories that would change how this task is done: one yes/no question per memory on the
+host's decide service (OpenAI Decisions unless `models.decide.provider` names another), kept at probability ≥ 0.5
+(`decideRelevance`). At most `relevantLimit` (default 8) are rendered, each with `(memory <id>)`. Being always-on
+loads nothing by itself. Without a judgement, or when it fails, the top `RELEVANT_FALLBACK` (3) hits by rank are kept.
+Later turns reuse the choice; `marshal.tool.recall` serves lookups mid-task. The host log names what was loaded:
+`memory: 2 of 14 memories loaded by relevance (judged) for session <id>: mem_… [workspace], …`.
+
+**Newest (`promptMemories: "newest"`, the default for a host's own `store`, e.g. Marley).** Before each turn the port awaits `prepareTurn`. It reads the Brain only for a scope this host has never seen (its
 always-on memories and newest others); every other scope comes from the host's cache (its own writes update it) and is
 re-read in the background at most every `refreshMs` (default 60 s) to pick up other hosts' writes, so a turn never
 waits on cloud I/O after a scope's first read. The prompt's memory block (`sessionContext.memories`, rendered in the
@@ -73,7 +83,8 @@ newest others of every home (`promptLimit`, default 20). The homes are read side
 - The workspace home's `<name>` is `MarshalHostOptions.workspaceName`: the Marshal workspace this host serves (e.g.
   `zygstinct` for a worktree of it), default the folder name. The kit's Brain route has the same name, and the desktop
   lists `workspace:<name>` exactly, so a host in a worktree or scratch path should pass the workspace's own name.
-- `promptLimit`, `alwaysOnLimit`, `refreshMs`.
+- `promptMemories`, `relevantLimit`, `relevantCandidates`, `relevance` (a `RelevanceJudge`); `newest` mode: `promptLimit`,
+  `alwaysOnLimit`, `refreshMs`.
 
 Access is the Brain's: a `person` scope is private to that person (the Brain checks the signed-in caller), a workspace
 memory is readable by the company's staff unless written with `audience: "me"`.

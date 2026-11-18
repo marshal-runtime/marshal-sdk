@@ -41,7 +41,7 @@ import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { SessionPublisher } from "./kit/publisher.js";
 import { OrgStore, type OrgStoreOptions, type OrgTranscriptOptions } from "./org-store/index.js";
 import { OrgSessionSearch, type OrgSessionSearchOptions } from "./org-store/search.js";
-import { companyBrainStores, createMemoryToolsProvider, HostMemory, type MemoryOptions } from "./memory.js";
+import { companyBrainStores, createMemoryToolsProvider, decideRelevance, HostMemory, type MemoryOptions } from "./memory.js";
 import { RunRecordsPublisher, type RunRecordsOptions } from "./run-records.js";
 import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
 import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
@@ -450,7 +450,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
           },
         }
       : {}),
-    prepareTurn: (session) => memory.warm(session, log),
+    prepareTurn: (session, message) => memory.warm(session, log, message),
     mcpServers: (session) => serversFor(session),
     log,
     onSessionEvent: (type, payload) => {
@@ -491,6 +491,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   let linkRelay: LinkRelay | undefined;
   const forks = new SessionForks(agents, sessions, { log, ...(options.forkPoint ? { forkPoint: options.forkPoint } : {}), ...(options.forkReports === false ? { reportToParent: false } : {}) });
   const models = createModelServices(options.models, { env: withSecrets(options.env ?? process.env, options.secrets), ...(options.modelsFetch ? { fetch: options.modelsFetch } : {}) });
+  // R153: which memories a session loads is judged on OpenAI Decisions (R54.2) unless the host names a decide provider.
+  memory.useRelevance(decideRelevance((request, judgeOptions) => models.decideFor(options.models?.decide?.provider ?? "decisions").judge(request, judgeOptions)));
   const importPolicy = importPolicyOf(options.trustedTypeScript);
   const broker =
     composeBrokers([kit?.permissionBroker, options.permissions?.broker], options.ui?.applicationAuthority) ?? createAllowAllPermissionBroker();
