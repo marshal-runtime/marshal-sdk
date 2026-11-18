@@ -294,6 +294,12 @@ const DESCRIPTORS: readonly CapabilityDescriptor[] = [
         ...OWNER_PROPERTIES,
         title: { type: "string", minLength: 1, maxLength: 512 },
         message: { type: "string", minLength: 1, maxLength: 16_384 },
+        openSessionId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description: "Chat that clicking the notification opens. Defaults to the calling chat.",
+        },
         ...IDEMPOTENCY_PROPERTY,
       },
     },
@@ -475,6 +481,9 @@ export function createRuntimeUiProvider(
               title: text(value, "title"),
               message: text(value, "message"),
               idempotencyKey: text(value, "idempotencyKey"),
+              ...(value.openSessionId === undefined
+                ? {}
+                : { openSessionId: text(value, "openSessionId") }),
             },
             signal,
           ),

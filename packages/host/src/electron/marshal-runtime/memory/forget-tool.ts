@@ -6,7 +6,7 @@ import {
 } from "./forget-completely-approval";
 import { forgetCompletelyResult } from "./forget-completely-result";
 import { FORGET_COMPLETELY_UNSUPPORTED } from "./local-memory-purge";
-import { errorMessage } from "./memory-tool-io";
+import { errorMessage, memoryWriteFailure, type MemoryWriteFailureCode } from "./memory-tool-io";
 
 export const FORGET_TOOL_DESCRIPTION =
   "Forget a memory by ID (from recall or listMemories). A plain forget removes it from recall; the result says what history remains. With completely: true it is erased with all its history, including this session's workspace and project memories, after the user approves a card for that one memory.";
@@ -61,4 +61,37 @@ export async function runForgetTool(
   } catch (error) {
     return forgetCompletelyFailure(error) ?? { success: false, error: errorMessage(error) };
   }
+}
+
+const FORGET_FAILURE_CODES: Readonly<Record<string, MemoryWriteFailureCode>> = {
+  approval_denied: "permission-denied",
+  interactive_approval_required: "permission-denied",
+  memory_purge_busy: "operation-failed",
+};
+
+/**
+ * The `forget` tool as agents call it: a forget that removed nothing throws a `MEMORY NOT FORGOTTEN:` error, so the
+ * tool call fails instead of returning a `{success: false}` payload an agent can read as done.
+ */
+export async function runForgetToolOrThrow(
+  store: IMemoryStore,
+  args: ForgetToolArgs,
+  sessionId: string | undefined,
+  deps: ForgetToolDeps,
+): Promise<Record<string, unknown>> {
+  let result: Record<string, unknown>;
+  try {
+    result = await runForgetTool(store, args, sessionId, deps);
+  } catch (error) {
+    throw memoryWriteFailure("forget", errorMessage(error));
+  }
+  if (result.success !== false) return result;
+  const reason =
+    typeof result.error === "string" ? result.error : "the memory store removed nothing";
+  const mapped = typeof result.code === "string" ? FORGET_FAILURE_CODES[result.code] : undefined;
+  throw memoryWriteFailure(
+    "forget",
+    reason,
+    mapped ?? (reason === "Memory not found" ? "not-found" : "operation-failed"),
+  );
 }

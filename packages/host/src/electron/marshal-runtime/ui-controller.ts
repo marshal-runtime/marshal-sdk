@@ -82,6 +82,7 @@ export interface RuntimeUiNotificationDelivery {
   readonly owner: RuntimeUiOwner;
   readonly title: string;
   readonly message: string;
+  readonly openSessionId?: string;
 }
 
 export interface RuntimeUiChatMessageDelivery {
@@ -449,6 +450,7 @@ export class MarshalRuntimeUiController {
               owner: ownerOf(normalized),
               title: normalized.title,
               message: normalized.message,
+              ...(normalized.openSessionId ? { openSessionId: normalized.openSessionId } : {}),
             }),
             signal,
           ),
@@ -1003,6 +1005,9 @@ export class MarshalRuntimeUiController {
         this.limits.maxStringLength,
       ),
       idempotencyKey: this.requiredString(command.idempotencyKey, "Idempotency key", 256),
+      ...(command.openSessionId === undefined
+        ? {}
+        : { openSessionId: this.requiredString(command.openSessionId, "Open session id", 128) }),
     };
     this.validatePayload(normalized);
     return immutable(normalized);

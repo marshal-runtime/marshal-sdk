@@ -151,9 +151,10 @@ export class OrgExtensionCatalog {
     if (!listed.ok) return undefined;
     const records = new Map(listed.value.map((record) => [record.identity, record]));
     const states: Record<string, OrgCatalogInstalled> = {};
-    for (const entry of [...catalog.recommended, ...catalog.available]) {
+    // Approved entries come first so a pending version of the same identity never replaces their state.
+    for (const entry of [...catalog.recommended, ...catalog.available, ...catalog.pending]) {
       const record = records.get(entry.id);
-      if (!record) continue;
+      if (!record || states[entry.id]) continue;
       const order = compareExtensionVersions(record.version, entry.version);
       const integrity = record.integrity.value;
       // An org-service identity whose installed package the organization never vouched for runs without those services.

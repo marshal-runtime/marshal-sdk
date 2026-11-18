@@ -23,7 +23,8 @@ type WatchFunction = (
 export interface LocalExtensionWatchEntry {
   readonly identity: string;
   readonly sourceRoot: string;
-  readonly scope: MarshalRuntimeScope;
+  /** The session that installed it; absent for watches restored after a restart. */
+  readonly scope?: MarshalRuntimeScope;
 }
 
 export type LocalExtensionReloadOutcome =

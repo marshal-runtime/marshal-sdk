@@ -1238,6 +1238,21 @@ export class MarshalRuntimeHost {
     return manager.list();
   }
 
+  /** Every installed extension with the package directory it was materialized from. */
+  async listExtensionPackages(): Promise<
+    readonly { identity: string; version: string; packageRoot: string }[]
+  > {
+    await this.requireBindings();
+    return this.serviceContainer
+      .get(RUNTIME_EXTENSION_LIFECYCLE_SERVICE)
+      .list()
+      .map((extension) => ({
+        identity: extension.identity,
+        version: extension.version,
+        packageRoot: extension.request.packageRoot,
+      }));
+  }
+
   /** The verified package directory of an enabled extension (for reading its own manifest), or undefined. */
   async enabledExtensionPackage(
     identity: string,
