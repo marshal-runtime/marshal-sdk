@@ -1,6 +1,6 @@
 {
   "sdk": "0.0.1",
-  "builtAt": "2026-11-18T08:49:00.984Z",
+  "builtAt": "2026-11-18T09:11:48.013Z",
   "packs": {
     "@marshal/agent-runtime-claude": {
       "version": "0.1.0",
@@ -104,14 +104,14 @@
   },
   "extensions": [
     {
-      "identity": "@zyg/page-studio",
-      "version": "0.1.0",
-      "path": "extensions/page-studio"
-    },
-    {
       "identity": "@marshal/brain",
       "version": "0.2.0",
       "path": "extensions/brain"
+    },
+    {
+      "identity": "@zyg/page-studio",
+      "version": "0.1.0",
+      "path": "extensions/page-studio"
     }
   ],
   "artifact": "marshal-sdk-0.0.1.tgz"
