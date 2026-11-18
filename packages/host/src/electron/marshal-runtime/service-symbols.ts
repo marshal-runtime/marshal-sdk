@@ -405,7 +405,7 @@ export interface MemoryStoreProvider { id: string; store: unknown; dispose?(): v
   execute(input: { command: string; input: Record<string, unknown>; context: { chatId: string; executionId: string; browserSessionId: string }}): Promise<{ success: boolean; data?: unknown; error?: { code: string; message: string; details?: unknown }; metadata?: { duration: number; timestamp: number; commandId?: string; context?: { chatId: string; executionId: string; browserSessionId: string } } }>;
 }`,
   uiDelivery: `export interface IUiDelivery {
-  notification(input: { deliveryId: string; owner: unknown; title: string; message: string }): Promise<void>;
+  notification(input: { deliveryId: string; owner: unknown; title: string; message: string; openSessionId?: string }): Promise<void>;
   chatMessage(input: { deliveryId: string; owner: unknown; content: unknown }): Promise<void>;
   chatCard(input: { deliveryId: string; owner: unknown; content: unknown }): Promise<void>;
 }`,

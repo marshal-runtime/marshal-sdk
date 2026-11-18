@@ -605,6 +605,15 @@ export interface SessionRequestLedgerPort {
   onPromptDelivered(message: Pick<RequestStoredMessage, "sessionId" | "messageId">): void;
 }
 
+/**
+ * Long-term memories for a message a person or a parent session sent: text to append to its prompt, or nothing. The
+ * host bounds its own latency and never throws; the send path still guards it.
+ */
+export type SessionTurnMemoryPort = (input: {
+  sessionId: string;
+  text: string;
+}) => Promise<string | undefined>;
+
 interface SessionSendToken {
   lifecycleToken: object;
   cancelled: boolean;
@@ -2859,6 +2868,29 @@ export class SessionManager
 
   setRequestLedger(port: SessionRequestLedgerPort | null): void {
     this.requestLedger = port;
+  }
+
+  private turnMemory: SessionTurnMemoryPort | null = null;
+
+  setTurnMemory(port: SessionTurnMemoryPort | null): void {
+    this.turnMemory = port;
+  }
+
+  /** Memories for a message a person or a parent sent (R31). A memory failure never fails the send. */
+  private async turnMemoryFor(
+    sessionId: string,
+    content: string,
+    requestOrigin: RequestOrigin | undefined,
+  ): Promise<string | undefined> {
+    if (!this.turnMemory || !requestOrigin) return undefined;
+    try {
+      return (await this.turnMemory({ sessionId, text: content }))?.trim() || undefined;
+    } catch (error) {
+      log
+        .with({ sessionId })
+        .warn(`Turn memory failed (${error instanceof Error ? error.name : typeof error})`);
+      return `[Marshal memories: search failed (${error instanceof Error ? error.name : "error"}); call recall yourself]`;
+    }
   }
 
   /**
@@ -12890,6 +12922,10 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     };
     this.viewEmission.emitEvent(sessionId, userMessageEvent);
     this.viewEmission.commitUserMessage(sessionId, userMessageEvent);
+
+    // After the message is on screen: the search is bounded, but the bubble should not wait for it.
+    const turnMemory = await this.turnMemoryFor(sessionId, content, requestOrigin);
+    if (turnMemory) sendPayload.prompt = `${sendPayload.prompt}\n\n${turnMemory}`;
 
     if (attachments?.length) {
       this.activeAttachmentTurns.add(sessionId);

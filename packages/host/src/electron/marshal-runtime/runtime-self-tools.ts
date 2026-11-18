@@ -67,6 +67,12 @@ interface RuntimeSelfToolOptions {
     readonly packageRoot: string;
     readonly scope: MarshalRuntimeScope;
   }) => void;
+  /** A directory update succeeded: record `packageRoot` as the extension's source. */
+  readonly onLocalExtensionUpdated?: (entry: {
+    readonly identity: string;
+    readonly packageRoot: string;
+    readonly scope: MarshalRuntimeScope;
+  }) => void;
   readonly onShowUiSourcesLive?: (instanceId: string, files: readonly string[]) => void;
   /** What runtimeShowUi's `file` source may read for a session. */
   readonly resolveFileAccess?: (sessionId: string) => ShowUiFileAccess;
@@ -304,7 +310,16 @@ export function getRuntimeSelfTools(options: RuntimeSelfToolOptions): readonly R
           idempotencyKey: optionalString(args.idempotencyKey) ?? invocation.toolCallId,
           signal: invocation.signal,
         });
-        if (result.ok) options.notifyExtensionsChanged?.(scope);
+        if (result.ok) {
+          options.notifyExtensionsChanged?.(scope);
+          if (!hasIntegritySha256) {
+            options.onLocalExtensionUpdated?.({
+              identity: result.value.identity,
+              packageRoot: requiredString(args.packageRoot),
+              scope,
+            });
+          }
+        }
         return JSON.stringify(result);
       },
     },

@@ -2451,6 +2451,52 @@ export interface RuntimeExtensionsLocalInstallRequest extends RuntimeExtensionsS
   readonly packageRoot: string;
 }
 
+/** auto: apply new commits without asking; notify: show and notify; pinned: never check. */
+export type RuntimeExtensionUpdatePolicy = "auto" | "notify" | "pinned";
+
+/** Where an installed extension came from, and whether a newer version of that source exists. */
+export interface RuntimeExtensionSourceState {
+  readonly identity: string;
+  /** git: tracked against a remote branch; local: a directory with no remote to follow. */
+  readonly kind: "git" | "local";
+  /** The directory the extension was installed from. */
+  readonly localPath: string;
+  readonly repoUrl?: string;
+  readonly branch?: string;
+  /** Package directory inside the repository, POSIX separators, "" for the root. */
+  readonly subdir?: string;
+  readonly installedCommit?: string;
+  /** The install came from a working tree with uncommitted changes in the package directory. */
+  readonly installedFromDirtyTree?: boolean;
+  readonly policy: RuntimeExtensionUpdatePolicy;
+  /** Re-install when files under localPath change. */
+  readonly hotReload: boolean;
+  readonly latestCommit?: string;
+  readonly checkedAt?: string;
+  readonly updateAvailable: boolean;
+  /** Commits between installedCommit and latestCommit that touch the package directory, newest first. */
+  readonly pendingCommits?: readonly { readonly sha: string; readonly subject: string }[];
+  readonly lastError?: string;
+  readonly lastUpdatedAt?: string;
+  readonly updating: boolean;
+}
+
+export interface RuntimeExtensionSourcePolicyRequest extends RuntimeExtensionsScope {
+  readonly identity: string;
+  readonly policy?: RuntimeExtensionUpdatePolicy;
+  readonly hotReload?: boolean;
+}
+
+export interface RuntimeExtensionSourceLinkRequest extends RuntimeExtensionsScope {
+  readonly identity: string;
+  /** Directory that holds the extension's runtime-extension.json. */
+  readonly path: string;
+}
+
+export interface RuntimeExtensionSourceCheckRequest extends RuntimeExtensionsScope {
+  readonly identity?: string;
+}
+
 export interface RuntimeExtensionsUpdateRequest extends RuntimeExtensionsScope {
   readonly identity: string;
   readonly catalogEntryId?: string;
@@ -2818,6 +2864,24 @@ export interface IpcInvokeMap extends RuntimeAcceptanceIpcInvokeMap {
   "runtime-extensions:remove": (
     request: RuntimeExtensionsIdentityRequest,
   ) => Promise<RuntimeExtensionsIpcResult<null>>;
+  "runtime-extensions:sources": (
+    request: RuntimeExtensionsScope,
+  ) => Promise<RuntimeExtensionsIpcResult<readonly RuntimeExtensionSourceState[]>>;
+  "runtime-extensions:checkSourceUpdates": (
+    request: RuntimeExtensionSourceCheckRequest,
+  ) => Promise<RuntimeExtensionsIpcResult<readonly RuntimeExtensionSourceState[]>>;
+  "runtime-extensions:findSources": (
+    request: RuntimeExtensionsScope,
+  ) => Promise<RuntimeExtensionsIpcResult<readonly RuntimeExtensionSourceState[]>>;
+  "runtime-extensions:applySourceUpdate": (
+    request: RuntimeExtensionsIdentityRequest,
+  ) => Promise<RuntimeExtensionsIpcResult<RuntimeExtensionSourceState>>;
+  "runtime-extensions:setSourcePolicy": (
+    request: RuntimeExtensionSourcePolicyRequest,
+  ) => Promise<RuntimeExtensionsIpcResult<RuntimeExtensionSourceState>>;
+  "runtime-extensions:linkSource": (
+    request: RuntimeExtensionSourceLinkRequest,
+  ) => Promise<RuntimeExtensionsIpcResult<RuntimeExtensionSourceState>>;
 
   // swarmAPI
   "swarm:create": (request: {
