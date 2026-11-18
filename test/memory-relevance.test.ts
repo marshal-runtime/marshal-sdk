@@ -191,7 +191,9 @@ test("decideRelevance asks one yes/no question per memory over the task and keep
 
 test("a warm-up turn with no task searches nothing; the turn that brings the task searches with the planned queries", async () => {
   const asked: string[] = [];
-  const planner: MemoryQueryPlanner = async ({ message }) => (asked.push(message), message.includes("RAWDOG") ? ["RAWDOG landing page rules", "RAWDOG FAQ"] : []);
+  const planner: MemoryQueryPlanner = async ({ message }) => (
+    asked.push(message), message.includes("RAWDOG") ? { queries: ["RAWDOG landing page rules", "RAWDOG FAQ"], task: "Plan a RAWDOG eye cream landing page." } : { queries: [] }
+  );
   let judgedTask = "";
   const judge: RelevanceJudge = async ({ task }) => ((judgedTask = task), new Set(["w-guarantee"]));
   const lines: string[] = [];
@@ -203,9 +205,10 @@ test("a warm-up turn with no task searches nothing; the turn that brings the tas
   const brief = `You plan one long landing page. ${"Rules. ".repeat(2000)} Brief: RAWDOG eye cream for men.`;
   await host.warm(session, (line) => lines.push(line), brief);
   assert.deepEqual(w.calls.map((call) => call.input.query), ["RAWDOG landing page rules", "RAWDOG FAQ"]);
-  assert.ok(judgedTask.endsWith("Brief: RAWDOG eye cream for men."), "the judgement sees the brief at the end of a long message");
+  assert.ok(judgedTask.startsWith("Plan a RAWDOG eye cream landing page.\n\n"), "the judgement reads the planner's task first");
+  assert.ok(judgedTask.endsWith("Brief: RAWDOG eye cream for men."), "then the message's head and tail");
   assert.deepEqual(host.promptContext(session)!.entries.map((entry) => entry.fact), ["RAWDOG pages: the guarantee line reads '60-day empty-jar guarantee'. (memory w-guarantee)"]);
-  assert.ok(lines.some((line) => line.includes('queries ["RAWDOG landing page rules","RAWDOG FAQ"]')));
+  assert.ok(lines.some((line) => line.includes('task "Plan a RAWDOG eye cream landing page."; queries ["RAWDOG landing page rules","RAWDOG FAQ"]')));
   // Chosen: later turns plan nothing more.
   await host.warm(session, undefined, "Now the hero.");
   assert.equal(asked.length, 2);
@@ -223,16 +226,20 @@ test("a failed query planner falls back to the message head", async () => {
   assert.equal(host.promptContext(session)!.entries.length, 1);
 });
 
-test("decideQueries asks for a structured list and keeps at most three trimmed queries", async () => {
+test("decideQueries asks whether the message gives a task first, then the task and at most three trimmed queries", async () => {
   let request: any;
-  const planner = decideQueries(async (asked) => ((request = asked), { choice: { queries: ["  RAWDOG page  ", "", "FAQ rules", "brand voice", "fourth"] } }));
-  assert.deepEqual([...(await planner({ message: "Build the RAWDOG page" }))], ["RAWDOG page", "FAQ rules", "brand voice"]);
+  const planner = decideQueries(async (asked) => (
+    (request = asked), { choice: { gives_task: true, task: " Plan the RAWDOG page. ", queries: ["  RAWDOG page  ", "", "FAQ rules", "brand voice", "fourth"] } }
+  ));
+  assert.deepEqual(await planner({ message: "Build the RAWDOG page" }), { queries: ["RAWDOG page", "FAQ rules", "brand voice"], task: "Plan the RAWDOG page." });
   assert.equal(request.context.message, "Build the RAWDOG page");
-  assert.deepEqual(request.schema.required, ["queries"]);
-  const none = decideQueries(async () => ({ choice: { queries: [] } }));
-  assert.deepEqual([...(await none({ message: "Reply ready" }))], []);
+  assert.deepEqual(request.schema.required, ["gives_task", "task", "queries"]);
+  const warmUp = decideQueries(async () => ({ choice: { gives_task: false, task: "", queries: ["stray"] } }));
+  assert.deepEqual(await warmUp({ message: "Reply ready" }), { queries: [] });
+  const taskOnly = decideQueries(async () => ({ choice: { gives_task: true, task: "Edit the BioVelvet hero.", queries: [] } }));
+  assert.deepEqual(await taskOnly({ message: "x" }), { queries: ["Edit the BioVelvet hero."], task: "Edit the BioVelvet hero." });
   const broken = decideQueries(async () => ({ choice: "nope" }));
-  await assert.rejects(broken({ message: "x" }), /no queries list/);
+  await assert.rejects(broken({ message: "x" }), /no task decision/);
 });
 
 test("taskExcerpt keeps a long message's head and tail", () => {

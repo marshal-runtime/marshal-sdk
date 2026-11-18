@@ -156,8 +156,11 @@ export interface MemoryOptions {
 /** Decides which candidate memories shape a task; returns the ids to keep. */
 export type RelevanceJudge = (input: { task: string; memories: readonly BrainMemory[] }) => Promise<ReadonlySet<string>>;
 
-/** Search queries for a turn's message; empty when the message gives no task yet. */
-export type MemoryQueryPlanner = (input: { message: string }) => Promise<readonly string[]>;
+/**
+ * Search queries for a turn's message, empty when the message gives no task yet, and a one-sentence `task` naming its
+ * subject (what the relevance judgement reads in place of a long message).
+ */
+export type MemoryQueryPlanner = (input: { message: string }) => Promise<{ queries: readonly string[]; task?: string }>;
 
 /** Hits kept by search rank alone when no judgement is available. */
 export const RELEVANT_FALLBACK = 3;
@@ -178,26 +181,39 @@ type DecideCall = (
   options?: { timeoutMs?: number },
 ) => Promise<{ choice: unknown }>;
 
-/** Query planning on the host's decide service: a structured answer with 0 to 3 short queries naming the task's subject. */
+/**
+ * Query planning on the host's decide service: it reads the whole message (a Page Studio brief names its brand only in
+ * the input data, ~44k characters in) and answers whether it gives a task, the task in one sentence, and 0 to 3 queries.
+ * `gives_task` comes first: asked for queries alone, the model returned none for a task it called one.
+ */
 export function decideQueries(decide: DecideCall, options: { timeoutMs?: number; maxChars?: number } = {}): MemoryQueryPlanner {
   return async ({ message }) => {
     const result = await decide(
       {
         question:
-          "An agent just received context.message. If it gives the agent a task, write 1 to 3 short search queries (each under 200 characters) for the long-term memory of the person and team it works for, " +
-          "naming the task's own subject (the brand, product, page, codebase, people or kind of work), so remembered rules, preferences and decisions about it are found. " +
-          "If the message gives no task yet (a greeting, a warm-up, a request to reply 'ready'), return no queries.",
-        context: { message: taskExcerpt(message, options.maxChars ?? 12_000) },
-        schema: { type: "object", properties: { queries: { type: "array", items: { type: "string" } } }, required: ["queries"], additionalProperties: false },
+          "context.message was just sent to an agent; read all of it, including any input data or brief inside it. Decide gives_task: true when the message asks the agent to do or produce work (plan, build, edit, review, answer); " +
+          "false only when it asks for nothing but an acknowledgement such as replying 'ready'. When gives_task is true: task is one sentence naming what the work is and who or what it is for (the specific brand, product, page, codebase or people named in the message); " +
+          "queries are 1 to 3 short search queries (each under 200 characters) for the long-term memory of the person and team the agent works for, each naming that specific subject, so remembered rules, preferences and decisions about it are found. " +
+          "When gives_task is false, task is empty and queries is empty.",
+        context: { message: taskExcerpt(message, options.maxChars ?? 200_000) },
+        schema: {
+          type: "object",
+          properties: { gives_task: { type: "boolean" }, task: { type: "string" }, queries: { type: "array", items: { type: "string" } } },
+          required: ["gives_task", "task", "queries"],
+          additionalProperties: false,
+        },
       },
-      { timeoutMs: options.timeoutMs ?? 20_000 },
+      { timeoutMs: options.timeoutMs ?? 30_000 },
     );
-    const queries = (result.choice as { queries?: unknown } | undefined)?.queries;
-    if (!Array.isArray(queries)) throw new Error("the query planner answered no queries list");
-    return queries
+    const answer = result.choice as { gives_task?: unknown; task?: unknown; queries?: unknown } | undefined;
+    if (typeof answer?.gives_task !== "boolean" || !Array.isArray(answer.queries)) throw new Error("the query planner answered no task decision");
+    if (!answer.gives_task) return { queries: [] };
+    const queries = answer.queries
       .filter((query): query is string => typeof query === "string" && query.trim().length > 0)
       .map((query) => query.trim().slice(0, SEARCH_QUERY_MAX))
       .slice(0, PLANNED_QUERIES_MAX);
+    const task = typeof answer.task === "string" && answer.task.trim() ? answer.task.trim() : undefined;
+    return { queries: queries.length || !task ? queries : [task.slice(0, SEARCH_QUERY_MAX)], ...(task ? { task } : {}) };
   };
 }
 
@@ -486,9 +502,12 @@ export class HostMemory {
     if (!text) return;
     const head = text.replace(/\s+/g, " ").slice(0, SEARCH_QUERY_MAX);
     let queries: readonly string[] = [head];
+    let summary: string | undefined;
     if (this.planner) {
       try {
-        queries = await this.planner({ message: text });
+        const plan = await this.planner({ message: text });
+        queries = plan.queries;
+        summary = plan.task;
       } catch (error) {
         log?.(`memory: query planning failed, searching with the message head: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -531,7 +550,7 @@ export class HostMemory {
     let how: string;
     try {
       if (!this.judge) throw new Error("no relevance judgement on this host");
-      const kept = candidates.length ? await this.judge({ task: taskExcerpt(text, JUDGED_TASK_MAX), memories: candidates }) : new Set<string>();
+      const kept = candidates.length ? await this.judge({ task: summary ? `${summary}\n\n${taskExcerpt(text, JUDGED_TASK_MAX)}` : taskExcerpt(text, JUDGED_TASK_MAX), memories: candidates }) : new Set<string>();
       chosen = candidates.filter((record) => kept.has(record.id)).slice(0, limit);
       how = "judged";
     } catch (error) {
@@ -539,7 +558,7 @@ export class HostMemory {
       how = `search rank only (${error instanceof Error ? error.message : String(error)})`;
     }
     this.relevant.set(session.id, chosen);
-    log?.(`memory: ${chosen.length} of ${candidates.length} memories loaded by relevance (${how}; queries ${JSON.stringify(queries)}) for session ${session.id}${chosen.length ? `: ${chosen.map((record) => `${record.id} [${record.home ?? record.scope}]`).join(", ")}` : ""}`);
+    log?.(`memory: ${chosen.length} of ${candidates.length} memories loaded by relevance (${how}; ${summary ? `task ${JSON.stringify(summary)}; ` : ""}queries ${JSON.stringify(queries)}) for session ${session.id}${chosen.length ? `: ${chosen.map((record) => `${record.id} [${record.home ?? record.scope}]`).join(", ")}` : ""}`);
   }
 
   /** Waits for background reads in flight (shutdown, scripts). */
