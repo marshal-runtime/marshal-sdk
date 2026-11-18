@@ -135,6 +135,18 @@ test("a turn with no task, or every home down, holds nothing and the next turn s
   assert.deepEqual(host.promptContext(session)!.entries.map((entry) => entry.fact), ["RAWDOG pages: the guarantee line reads '60-day empty-jar guarantee'. (memory w-guarantee)"]);
 });
 
+test("a workspace memory the personal home's search also returns, tagged personal by its route, is labelled workspace", async () => {
+  // The company Brain on a cloud host ignores `home` in search: the personal store finds the workspace rule first.
+  const rule = memory("w-guarantee", "RAWDOG pages: the guarantee line reads '60-day empty-jar guarantee'.", "workspace:page-run");
+  const p = rankedRoute("zyg", [{ ...rule, home: "personal" }]);
+  p.route.search = async (input) => (p.calls.push({ op: "search", input }), [{ ...rule, home: "personal" }]);
+  const lines: string[] = [];
+  const { host } = kitHost({ judge: keeps("w-guarantee"), personalRoute: p });
+  await host.warm(session, (line) => lines.push(line), "RAWDOG page");
+  assert.ok(lines.some((line) => /1 of \d+ memories loaded by relevance.*w-guarantee \[workspace\]/.test(line)), lines.join("\n"));
+  assert.equal(host.promptContext(session)!.entries.length, 1);
+});
+
 test("one home down: the other home's memories still load", async () => {
   const p = personal();
   p.setDown(true);

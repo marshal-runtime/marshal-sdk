@@ -348,6 +348,9 @@ interface Held {
 }
 
 /** Personal first: its always-on memories open the prompt block and it is tried first for an id. */
+/** The home a scope string belongs to by its id (`person:…` personal, `workspace:…` workspace); others have none. */
+const scopeHome = (scope: string | undefined): MemoryHome | undefined =>
+  scope?.startsWith("person:") ? "personal" : scope?.startsWith("workspace:") ? "workspace" : undefined;
 const homeRank = (home: MemoryHome | undefined) => (home === "personal" ? 0 : home === "workspace" ? 1 : 2);
 
 const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid-request" });
@@ -422,8 +425,10 @@ export class HostMemory {
     return `${store.route.id}|${store.home ?? ""}|${scope}`;
   }
 
+  // A record's own scope names its home. The route's tag does not: a Brain whose search ignores `home` (the company
+  // Brain on a cloud host, R153) returns a workspace memory through the personal home too, tagged `personal`.
   private tagged(store: MemoryStore, records: BrainMemory[]): BrainMemory[] {
-    return store.home ? records.map((record) => ({ ...record, home: record.home ?? store.home })) : records;
+    return store.home ? records.map((record) => ({ ...record, home: scopeHome(record.scope) ?? record.home ?? store.home })) : records;
   }
 
   private async read(store: MemoryStore, scope: string): Promise<Held> {
