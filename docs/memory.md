@@ -56,9 +56,13 @@ strings `<id>:<k>=<v>/...`, or `<id>:<name>` for a scope with a bare `name` (`sc
 ## Prompt
 
 **Loaded when needed (`promptMemories: "relevant"`, the default with the kit's company Brain; Omer R153).** On a
-session's first turn `prepareTurn` gets the turn's message: each home's Brain `memory.search` runs with it (whitespace
-folded, cut to the Brain's 500 characters; `relevantCandidates` hits per home, default 12), the homes are interleaved by
-rank, and a judgement keeps the memories that would change how this task is done: one yes/no question per memory on the
+session's turn `prepareTurn` gets the turn's message. A query planner (`decideQueries` on the host's decide service)
+reads the whole message (up to 200k characters; a Page Studio brief names its brand only in its input data) and answers
+whether it gives a task, the task in one sentence naming its subject, and up to 3 search queries; a message that gives
+no task yet (Page Studio opens each session with "reply ready") gets none, and the choice waits for the next turn. The
+judgement reads the planner's task sentence, then the message's head and tail. Each home's
+Brain `memory.search` runs with each query (`relevantCandidates` hits per query, default 12; without a planner, or when
+it fails, the message's head is the query), the lists are interleaved by rank, and a judgement keeps the memories that would change how this task is done: one yes/no question per memory on the
 host's decide service (OpenAI Decisions unless `models.decide.provider` names another), kept at probability ≥ 0.5
 (`decideRelevance`). At most `relevantLimit` (default 8) are rendered, each with `(memory <id>)`. Being always-on
 loads nothing by itself. Without a judgement, or when it fails, the top `RELEVANT_FALLBACK` (3) hits by rank are kept.

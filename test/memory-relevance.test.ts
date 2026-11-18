@@ -3,7 +3,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { decideRelevance, HostMemory, RELEVANT_FALLBACK, type BrainMemory, type BrainMemoryRoute, type MemoryStore, type RelevanceJudge } from "../src/memory.js";
+import {
+  decideQueries,
+  decideRelevance,
+  HostMemory,
+  RELEVANT_FALLBACK,
+  taskExcerpt,
+  type BrainMemory,
+  type BrainMemoryRoute,
+  type MemoryQueryPlanner,
+  type MemoryStore,
+  type RelevanceJudge,
+} from "../src/memory.js";
 import type { SessionRecord, SessionStore } from "../src/session-store.js";
 
 const session = { id: "s1", title: "Page" } as SessionRecord;
@@ -49,14 +60,14 @@ const workspace = () =>
   ]);
 
 /** The kit's default stores reach HostMemory as its fallback, which turns on `relevant` mode. */
-function kitHost(options: { judge?: RelevanceJudge; personalRoute?: ReturnType<typeof rankedRoute>; workspaceRoute?: ReturnType<typeof rankedRoute> } = {}) {
+function kitHost(options: { judge?: RelevanceJudge; planner?: MemoryQueryPlanner; personalRoute?: ReturnType<typeof rankedRoute>; workspaceRoute?: ReturnType<typeof rankedRoute> } = {}) {
   const p = options.personalRoute ?? personal();
   const w = options.workspaceRoute ?? workspace();
   const stores: MemoryStore[] = [
     { home: "personal", route: p.route, scopes: [{ id: "person", key: { email: "omer@zyg.com" } }] },
     { home: "workspace", route: w.route, scopes: [{ id: "workspace", key: {}, name: "page-run" }] },
   ];
-  const host = new HostMemory({ fallback: () => stores, ...(options.judge ? { relevance: options.judge } : {}) }, sessions);
+  const host = new HostMemory({ fallback: () => stores, ...(options.judge ? { relevance: options.judge } : {}), ...(options.planner ? { queries: options.planner } : {}) }, sessions);
   return { host, personal: p, workspace: w };
 }
 
@@ -76,7 +87,7 @@ test("a session's first turn searches both homes with its task; only the memorie
     block.entries.map((entry) => entry.fact),
     ["RAWDOG hero CTA reads 'Get My Morning Eye Fix'. (memory p-rawdog)", "RAWDOG pages: the guarantee line reads '60-day empty-jar guarantee'. (memory w-guarantee)"],
   );
-  assert.ok(lines.some((line) => /2 of 6 memories loaded by relevance \(judged\).*p-rawdog \[personal\].*w-guarantee \[workspace\]/.test(line)), lines.join("\n"));
+  assert.ok(lines.some((line) => /2 of 6 memories loaded by relevance \(judged; queries \["Build a RAWDOG eye cream landing page\."\]\).*p-rawdog \[personal\].*w-guarantee \[workspace\]/.test(line)), lines.join("\n"));
   // Later turns reuse the choice: no new search.
   await host.warm(session, undefined, "Now make the hero bolder.");
   assert.equal(p.calls.length + w.calls.length, 2);
@@ -176,4 +187,63 @@ test("decideRelevance asks one yes/no question per memory over the task and keep
   assert.deepEqual(Object.keys(request.questions), ["m0", "m1", "m2"]);
   assert.equal(request.questions.m0.type, "noul");
   assert.deepEqual([...(await judge({ task: "x", memories: [] }))], []);
+});
+
+test("a warm-up turn with no task searches nothing; the turn that brings the task searches with the planned queries", async () => {
+  const asked: string[] = [];
+  const planner: MemoryQueryPlanner = async ({ message }) => (
+    asked.push(message), message.includes("RAWDOG") ? { queries: ["RAWDOG landing page rules", "RAWDOG FAQ"], task: "Plan a RAWDOG eye cream landing page." } : { queries: [] }
+  );
+  let judgedTask = "";
+  const judge: RelevanceJudge = async ({ task }) => ((judgedTask = task), new Set(["w-guarantee"]));
+  const lines: string[] = [];
+  const { host, personal: p, workspace: w } = kitHost({ planner, judge });
+  await host.warm(session, (line) => lines.push(line), "Reply with the single word ready. Your instructions come in the next message.");
+  assert.equal(p.calls.length + w.calls.length, 0);
+  assert.equal(host.promptContext(session), undefined);
+  assert.ok(lines.some((line) => line.includes("no task in this turn yet")));
+  const brief = `You plan one long landing page. ${"Rules. ".repeat(2000)} Brief: RAWDOG eye cream for men.`;
+  await host.warm(session, (line) => lines.push(line), brief);
+  assert.deepEqual(w.calls.map((call) => call.input.query), ["RAWDOG landing page rules", "RAWDOG FAQ"]);
+  assert.ok(judgedTask.startsWith("Plan a RAWDOG eye cream landing page.\n\n"), "the judgement reads the planner's task first");
+  assert.ok(judgedTask.endsWith("Brief: RAWDOG eye cream for men."), "then the message's head and tail");
+  assert.deepEqual(host.promptContext(session)!.entries.map((entry) => entry.fact), ["RAWDOG pages: the guarantee line reads '60-day empty-jar guarantee'. (memory w-guarantee)"]);
+  assert.ok(lines.some((line) => line.includes('task "Plan a RAWDOG eye cream landing page."; queries ["RAWDOG landing page rules","RAWDOG FAQ"]')));
+  // Chosen: later turns plan nothing more.
+  await host.warm(session, undefined, "Now the hero.");
+  assert.equal(asked.length, 2);
+});
+
+test("a failed query planner falls back to the message head", async () => {
+  const planner: MemoryQueryPlanner = async () => {
+    throw new Error("planner down");
+  };
+  const lines: string[] = [];
+  const { host, workspace: w } = kitHost({ planner, judge: keeps("w-argo") });
+  await host.warm(session, (line) => lines.push(line), "Deploy  the\nservice");
+  assert.deepEqual(w.calls.map((call) => call.input.query), ["Deploy the service"]);
+  assert.ok(lines.some((line) => line.includes("query planning failed")));
+  assert.equal(host.promptContext(session)!.entries.length, 1);
+});
+
+test("decideQueries asks whether the message gives a task first, then the task and at most three trimmed queries", async () => {
+  let request: any;
+  const planner = decideQueries(async (asked) => (
+    (request = asked), { choice: { gives_task: true, task: " Plan the RAWDOG page. ", queries: ["  RAWDOG page  ", "", "FAQ rules", "brand voice", "fourth"] } }
+  ));
+  assert.deepEqual(await planner({ message: "Build the RAWDOG page" }), { queries: ["RAWDOG page", "FAQ rules", "brand voice"], task: "Plan the RAWDOG page." });
+  assert.equal(request.context.message, "Build the RAWDOG page");
+  assert.deepEqual(request.schema.required, ["gives_task", "task", "queries"]);
+  const warmUp = decideQueries(async () => ({ choice: { gives_task: false, task: "", queries: ["stray"] } }));
+  assert.deepEqual(await warmUp({ message: "Reply ready" }), { queries: [] });
+  const taskOnly = decideQueries(async () => ({ choice: { gives_task: true, task: "Edit the BioVelvet hero.", queries: [] } }));
+  assert.deepEqual(await taskOnly({ message: "x" }), { queries: ["Edit the BioVelvet hero."], task: "Edit the BioVelvet hero." });
+  const broken = decideQueries(async () => ({ choice: "nope" }));
+  await assert.rejects(broken({ message: "x" }), /no task decision/);
+});
+
+test("taskExcerpt keeps a long message's head and tail", () => {
+  assert.equal(taskExcerpt("short", 100), "short");
+  const excerpt = taskExcerpt(`HEAD${"x".repeat(1000)}TAIL`, 105);
+  assert.ok(excerpt.startsWith("HEAD") && excerpt.endsWith("TAIL") && excerpt.length <= 105);
 });
