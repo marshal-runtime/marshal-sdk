@@ -11614,9 +11614,9 @@ This accountable main/user session was explicitly launched in workspace ${worksp
   }
 
   /**
-   * Every field but messages, for per-call permission and scope checks: a
-   * long session's full load cost ~250 ms and blocked the main thread on
-   * each runtime call.
+   * The small stored fields (no messages, no conversation-sized field), for
+   * per-call permission and scope checks: a long session's full load cost
+   * ~250 ms and blocked the main thread on each runtime call.
    */
   getSessionMetadata(id: string): SessionMetadataSnapshot | null {
     const metadata = this.loadStoredSessionMetadata(id);

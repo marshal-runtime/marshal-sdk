@@ -1,7 +1,32 @@
 import type { PersistedSession } from "../../host/engine-host-types";
 
-/** Every persisted session field except the transcript. */
-export type SessionMetadataSnapshot = Readonly<Omit<PersistedSession, "messages">>;
+/**
+ * Session fields whose size follows the conversation: a saved conversation state or a pinned
+ * system message runs from tens of kilobytes to megabytes. A snapshot stays in memory for every
+ * session the store has touched since startup, so it must not carry them: with them, 8,400
+ * sessions held 800 MB of the main process heap (2026-11-18 out-of-memory crashes). Read these
+ * from the stored header or the full session.
+ */
+type ConversationSizedField =
+  | "runtimeConversationState"
+  | "liveTurnCheckpoint"
+  | "runtimeExecutions"
+  | "permissionCards"
+  | "contextSummary"
+  | "systemPromptOverride"
+  | "systemPromptAppend";
+
+/** A fork's place in its group, without the parent's pinned system message. */
+export type SessionForkSummary = Readonly<
+  Omit<NonNullable<PersistedSession["fork"]>, "systemMessage">
+>;
+
+/** The persisted session fields that stay small: no transcript and no conversation-sized field. */
+export type SessionMetadataSnapshot = Readonly<
+  Omit<PersistedSession, "messages" | "fork" | ConversationSizedField> & {
+    fork?: SessionForkSummary;
+  }
+>;
 
 /** The session fields that runtime authority, delegation and scope checks need. */
 export type SessionScope = Pick<
@@ -55,16 +80,26 @@ function metadataOf(session: SessionMetadataSource): SessionMetadataSnapshot {
     chunkCount: _chunkCount,
     messageCount: _messageCount,
     lastMessagePreview: _lastMessagePreview,
+    runtimeConversationState: _runtimeConversationState,
+    liveTurnCheckpoint: _liveTurnCheckpoint,
+    runtimeExecutions: _runtimeExecutions,
+    permissionCards: _permissionCards,
+    contextSummary: _contextSummary,
+    systemPromptOverride: _systemPromptOverride,
+    systemPromptAppend: _systemPromptAppend,
+    fork,
     ...metadata
   } = session;
-  return Object.freeze(metadata);
+  if (!fork) return Object.freeze(metadata);
+  const { systemMessage: _systemMessage, ...forkSummary } = fork;
+  return Object.freeze({ ...metadata, fork: Object.freeze(forkSummary) });
 }
 
 /**
- * Metadata (everything but messages) of recently read or written sessions, so
- * per-call policy and scope checks neither rebuild the transcript nor decrypt
- * the header. The store refreshes an entry every time it writes that session's
- * header and drops it when the session is deleted.
+ * Metadata (the small fields, see SessionMetadataSnapshot) of every session read or written
+ * since startup, so per-call policy and scope checks neither rebuild the transcript nor decrypt
+ * the header. The store refreshes an entry every time it writes that session's header and drops
+ * it when the session is deleted.
  */
 export class SessionMetadataCache {
   readonly #entries = new Map<string, SessionMetadataSnapshot>();
