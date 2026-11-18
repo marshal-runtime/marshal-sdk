@@ -352,8 +352,10 @@ export {
   brainCapabilityRoute,
   companyBrainStores,
   createMemoryToolsProvider,
+  decideRelevance,
   HostMemory,
   MEMORY_CATEGORIES,
+  RELEVANT_FALLBACK,
   MEMORY_HOMES,
   scopeString,
   type BrainCall,
@@ -363,6 +365,7 @@ export {
   type MemoryCategory,
   type MemoryHome,
   type MemoryOptions,
+  type RelevanceJudge,
   type MemoryScope,
   type MemoryStore,
 } from "./memory.js";
