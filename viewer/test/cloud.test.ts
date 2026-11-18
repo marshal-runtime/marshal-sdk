@@ -151,6 +151,25 @@ test("a session id alone finds its run by mirroring the runs not yet pulled", as
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("an agent-sandbox run with no run.json is listed with its status, start and session count before it is pulled", async () => {
+  const { gcs, pullRoot, dir } = setup();
+  const root = path.join(gcs, "dev-bucket", "runs", "sandbox-210");
+  const state = path.join(root, "agent", "marshal-state");
+  const store = new FileSessionStore(path.join(state, "host", "sessions"), { runId: "run-210", host: { id: "agent-sandbox", kind: "sandbox" } });
+  for (const title of ["Page Studio · plan", "Page Studio · section hero"]) store.update(store.create({ title, runtime: "claude", native: { kind: "claude", cwd: "/ws" } }).id, { state: "idle" });
+  fs.writeFileSync(path.join(state, "page-run.json"), JSON.stringify({ runId: "run-210", pageId: PAGE_ID }));
+  const host = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot);
+  const building = (await host.cloudRuns(true)).find((run) => run.outputRoot.endsWith("/sandbox-210"))!;
+  assert.equal(building.run?.status, "running");
+  assert.equal(building.run?.sessionCount, 2);
+  assert.equal(typeof building.run?.startedAt, "string");
+  fs.writeFileSync(path.join(root, "output.json"), JSON.stringify({ ok: true }));
+  const finished = (await host.cloudRuns(true)).find((run) => run.outputRoot.endsWith("/sandbox-210"))!;
+  assert.equal(finished.run?.status, "done");
+  assert.deepEqual(await host.pulledRuns(), []);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("a run elsewhere in the bucket is listed through its pointer under the prefix", async () => {
   const { gcs, pullRoot, dir } = setup();
   const root = path.join(gcs, "dev-bucket", "page-generation-runs", "901", "output");

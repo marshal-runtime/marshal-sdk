@@ -181,6 +181,22 @@ export function cloudHost(config: CloudHostConfig, pullRoot: string, discover: (
     const [pageRun, runJson] = await Promise.all([readJson(`${state}/page-run.json`), readJson(`${state}/run.json`)]);
     if (pageRun) entry.run = { runId: pageRun.runId, pageId: pageRun.pageId, depth: pageRun.depth, edits: Array.isArray(pageRun.edits) ? pageRun.edits.length : 0 };
     if (runJson) entry.run = { ...(entry.run ?? {}), ...runJson };
+    // agent-sandbox's runner writes no run.json (only a desktop push or backfill adds one), so its status and sessions
+    // come from its own files: output.json is its finish line, host/sessions/index.json its session store's index.
+    if (pageRun) {
+      const [output, index] = await Promise.all([
+        entry.run?.status ? undefined : readJson(`${root}/output.json`),
+        readJson(`${state}/host/sessions/index.json`) as Promise<unknown>,
+      ]);
+      const sessions = Array.isArray(index) ? (index as Row[]) : [];
+      const starts = sessions.map((session) => session.createdAt).filter((at): at is string => typeof at === "string").sort();
+      entry.run = {
+        ...(entry.run ?? {}),
+        ...(entry.run?.status ? {} : { status: output ? "done" : "running" }),
+        ...(!entry.run?.startedAt && starts[0] ? { startedAt: starts[0] } : {}),
+        sessionCount: sessions.length,
+      };
+    }
     // agent-sandbox's run.json carries no title or brand: they live in the run's page (pageId) in page-studio/.
     const pageId = entry.run?.pageId;
     if (!entry.run?.title && typeof pageId === "string" && /^[A-Za-z0-9._-]+$/.test(pageId)) {
