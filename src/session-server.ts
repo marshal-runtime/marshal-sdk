@@ -4,7 +4,7 @@
 // engine: each session's runtime is its own child process) builds it here, from the session's runtime connection alone.
 // It imports no Marshal runtime package: the runtime is whatever `runtime` answers.
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
+import { z, type ZodRawShape } from "zod";
 
 import type { DirectTool, DirectToolContext } from "./host-options.js";
 import type { RemoteToolResult } from "./remote-tools.js";
@@ -13,6 +13,7 @@ import type { SessionRecord } from "./session-store.js";
 /** The server's name: its tools reach the model as `mcp__marshal__<tool>`. */
 export const SESSION_SERVER_NAME = "marshal";
 const SERVER_VERSION = "0.1.0";
+const READ_RESOURCE_TOOL = "runtime_read_resource";
 /** The longest runtime_exec a session may ask for. */
 export const SESSION_EXEC_TIMEOUT_MS = 300_000;
 const RESULT_ERROR_CHARS = 2000;
@@ -48,6 +49,35 @@ const DEFAULT_DESCRIPTIONS: RuntimeToolDescriptions = {
   exec: "Run a discovered capability (targetType 'operation' with `target` and `input`), or TypeScript (targetType 'inline_module' with `source`, which may `return` a value and call `context.runtime.invoke(capability, input)`).",
 };
 
+/** The input shapes of runtime_search and runtime_exec, for an embedder whose sessions must see its own earlier schemas (the same request to the model as before it moved onto this server). */
+export interface RuntimeToolShapes {
+  search?: ZodRawShape;
+  exec?: ZodRawShape;
+}
+
+/** runtime_search's default input: a query or one exact name. */
+const SEARCH_SHAPE = {
+  query: z.string().optional(),
+  name: z.string().optional(),
+  catalogId: z.string().optional(),
+  detail: z.enum(["summary", "full"]).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  tags: z.array(z.string()).optional(),
+};
+
+/** runtime_exec's default input. */
+const EXEC_SHAPE = {
+  targetType: z.enum(["operation", "inline_module", "module"]),
+  target: z.string().optional(),
+  source: z.string().optional(),
+  module: z.record(z.string(), z.any()).optional(),
+  input: z.any().optional(),
+  timeoutMs: z.number().int().min(1).max(SESSION_EXEC_TIMEOUT_MS).optional(),
+  // An idempotency key: a retried call with the same id is the same request (the approval retry). No `approval`: a session never approves its own call.
+  requestId: z.string().min(1).max(200).optional(),
+  executionMode: z.enum(["brokered", "trusted_node"]).optional(),
+};
+
 /** A session's `marshal` server, built from its runtime alone. */
 export interface SessionMarshalServerOptions {
   session: SessionRecord;
@@ -63,6 +93,10 @@ export interface SessionMarshalServerOptions {
   /** Text added to runtime_exec's description (a remote session's host tools). */
   execNote?: string;
   descriptions?: RuntimeToolDescriptions;
+  /** The shapes of runtime_search and runtime_exec. Default the SDK's own. */
+  runtimeShapes?: RuntimeToolShapes;
+  /** Offer runtime_read_resource beside runtime_search and runtime_exec. Default true. */
+  readResourceTool?: boolean;
   toolCall?: MarshalToolCallWrapper;
 }
 
@@ -148,34 +182,17 @@ export function sessionMarshalTools(options: SessionMarshalServerOptions): Sessi
     tool(
       "runtime_search",
       descriptions.search,
-      {
-        query: z.string().optional(),
-        name: z.string().optional(),
-        catalogId: z.string().optional(),
-        detail: z.enum(["summary", "full"]).optional(),
-        limit: z.number().int().min(1).max(100).optional(),
-        tags: z.array(z.string()).optional(),
-      },
+      options.runtimeShapes?.search ?? SEARCH_SHAPE,
       async (args) => (await call("runtime_search", args)) as never,
     ),
     tool(
       "runtime_exec",
       descriptions.exec + (options.execNote ?? ""),
-      {
-        targetType: z.enum(["operation", "inline_module", "module"]),
-        target: z.string().optional(),
-        source: z.string().optional(),
-        module: z.record(z.string(), z.any()).optional(),
-        input: z.any().optional(),
-        timeoutMs: z.number().int().min(1).max(SESSION_EXEC_TIMEOUT_MS).optional(),
-        // An idempotency key: a retried call with the same id is the same request (the approval retry). No `approval`: a session never approves its own call.
-        requestId: z.string().min(1).max(200).optional(),
-        executionMode: z.enum(["brokered", "trusted_node"]).optional(),
-      },
+      options.runtimeShapes?.exec ?? EXEC_SHAPE,
       async (args) => (await call("runtime_exec", args)) as never,
     ),
     tool(
-      "runtime_read_resource",
+      READ_RESOURCE_TOOL,
       "Read a Marshal runtime resource by URI: an installed extension's skill (skill://<extension>/<name>) and the references it names, or a resource a runtime_search entry points to (action resource_read).",
       { uri: z.string().min(1).max(2048) },
       async ({ uri }) => {
@@ -183,7 +200,7 @@ export function sessionMarshalTools(options: SessionMarshalServerOptions): Sessi
         return { content: result.content, ...(result.isError ? { isError: true } : {}) } as never;
       },
     ),
-  ];
+  ].filter((entry) => options.readResourceTool !== false || entry.name !== READ_RESOURCE_TOOL);
   const server = createSdkMcpServer({
     name: SESSION_SERVER_NAME,
     version: SERVER_VERSION,
