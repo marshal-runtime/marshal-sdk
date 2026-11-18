@@ -427,6 +427,13 @@ export class HostMemory {
 
   // A record's own scope names its home. The route's tag does not: a Brain whose search ignores `home` (the company
   // Brain on a cloud host, R153) returns a workspace memory through the personal home too, tagged `personal`.
+  // A Brain whose search ignores the scopes it is given (the company Brain on a cloud host, R153) returns the caller's
+  // own personal memories to a session that has only the workspace home: only the session's own scopes are kept.
+  private ofSession(stores: readonly MemoryStore[], records: BrainMemory[]): BrainMemory[] {
+    const scopes = new Set(stores.flatMap((store) => store.scopes.map(scopeString)));
+    return records.filter((record) => scopes.has(record.scope));
+  }
+
   private tagged(store: MemoryStore, records: BrainMemory[]): BrainMemory[] {
     return store.home ? records.map((record) => ({ ...record, home: scopeHome(record.scope) ?? record.home ?? store.home })) : records;
   }
@@ -532,7 +539,7 @@ export class HostMemory {
         for (let rank = 0; rank < Math.max(0, ...lists.map((list) => list.length)); rank++) {
           for (const list of lists) if (list[rank]) merged.push(list[rank]!);
         }
-        return this.tagged(store, merged);
+        return this.tagged(store, this.ofSession(stores, merged));
       }),
     );
     results.forEach((result, index) => {
@@ -588,6 +595,7 @@ export class HostMemory {
       if (chosen.length === 0) return undefined;
       return {
         entries: chosen.map((record): PromptMemoryEntry => ({ fact: `${record.content} (memory ${record.id})`, category: record.category, createdAt: record.createdAt, source: "brain" })),
+        framing: "chosen",
       };
     }
     const newest = (a: BrainMemory, b: BrainMemory) => b.createdAt.localeCompare(a.createdAt);
@@ -714,9 +722,9 @@ export class HostMemory {
     const results = await Promise.allSettled(
       stores.map(async (store) => {
         const scopes = store.scopes.map(scopeString);
-        if (query) return this.tagged(store, await store.route.search({ query, scopes, limit, ...(category ? { category } : {}) }));
+        if (query) return this.tagged(store, this.ofSession(stores, await store.route.search({ query, scopes, limit, ...(category ? { category } : {}) })));
         const lists = await Promise.all(scopes.map((scope) => store.route.list({ scope, since: input.since, limit })));
-        return this.tagged(store, lists.flat());
+        return this.tagged(store, this.ofSession(stores, lists.flat()));
       }),
     );
     const failed = results.flatMap((result, index) => (result.status === "rejected" ? [{ store: stores[index]!, reason: result.reason }] : []));
