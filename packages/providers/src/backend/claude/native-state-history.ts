@@ -3,6 +3,7 @@ import type {
   ProviderSessionMessage as SessionMessage,
 } from "../../contract/host-types";
 import { stripHostTurnDecorations } from "../conversation-state";
+import { jsonlLines } from "./jsonl-lines";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -40,7 +41,7 @@ export function claudeJsonlToSessionMessages(
   const messages: SessionMessage[] = [];
   const toolCalls = new Map<string, MessageToolCall>();
   let assistant: SessionMessage | null = null;
-  for (const line of Buffer.from(bytes).toString("utf8").split("\n")) {
+  for (const line of jsonlLines(bytes)) {
     if (!line.trim()) continue;
     let entry: unknown;
     try {

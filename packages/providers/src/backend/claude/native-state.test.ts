@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   claudeProjectDirectoryName,
+  detachParentBackgroundTasks,
   forkClaudeNativeState,
   readClaudeNativeState,
   writeClaudeNativeState,
@@ -362,5 +363,38 @@ describe("forkClaudeNativeState", () => {
     await expect(forkClaudeNativeState(configDir, "parent", "/repo", request, 250)).rejects.toThrow(
       "fork-call-not-found",
     );
+  });
+});
+
+describe("detachParentBackgroundTasks", () => {
+  const started = (id: string, extra: object = {}) =>
+    JSON.stringify({ type: "user", uuid: id, toolUseResult: { stdout: "שלום 👋", ...extra } });
+
+  it("rewrites only the entries that started a background command and copies the rest byte for byte", () => {
+    const topLevelKey = JSON.stringify({ type: "user", backgroundTaskId: "not a tool result" });
+    const source = [
+      'not json "backgroundTaskId"',
+      `${started("b1", { backgroundTaskId: "b1" })}\r`,
+      `${topLevelKey}\r`,
+      "",
+      started("plain"),
+      started("b2", { backgroundTaskId: "b2" }),
+    ].join("\n");
+
+    const out = Buffer.from(detachParentBackgroundTasks(Buffer.from(source))).toString("utf8");
+
+    expect(out.split("\n")).toEqual([
+      'not json "backgroundTaskId"',
+      started("b1"),
+      `${topLevelKey}\r`,
+      "",
+      started("plain"),
+      started("b2"),
+    ]);
+  });
+
+  it("returns the bytes it was given when no entry started a background command", () => {
+    const bytes = Buffer.from(`${started("plain")}\n`);
+    expect(detachParentBackgroundTasks(bytes)).toBe(bytes);
   });
 });
