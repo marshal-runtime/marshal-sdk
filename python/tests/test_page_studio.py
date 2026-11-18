@@ -106,3 +106,51 @@ def test_dry_build_then_edit_through_query(tmp_path, monkeypatch):
     assert summary.data["summary"]["marshal"]["job"] == "edit"
     assert json.loads((edit.parent / page_studio.RUN_DIRNAME / "logs" / "summary.json").read_text())["marshal"]["request"] == "make the buttons blue"
     assert page_studio.page_state_key((edit / "out" / "index.html").read_text()) not in (None, key)
+
+
+def test_output_root_comes_from_the_template_and_the_briefs_run(tmp_path, monkeypatch):
+    cwd = workspace(tmp_path)
+    monkeypatch.delenv(page_studio.OUTPUT_ROOT_ENV_VAR, raising=False)
+    assert page_studio.run_label(cwd) is None and page_studio.output_root(cwd) is None
+    (cwd / "input" / "page" / "brief.json").write_text(json.dumps({"source": {"kind": "page_run", "page_generation_run_id": 900101}}))
+    assert page_studio.run_label(cwd) == "900101"
+    assert page_studio.output_root(cwd) is None
+    monkeypatch.setenv(page_studio.OUTPUT_ROOT_ENV_VAR, "gs://b/page-generation-runs/{run}/output/")
+    assert page_studio.output_root(cwd) == "gs://b/page-generation-runs/900101/output"
+
+
+def test_state_sits_in_the_callers_logs_folder_and_page_run_is_told_where_it_is_uploaded(tmp_path, monkeypatch):
+    """agent-sandbox uploads page-agent-logs/ to <root>/agent/, so the state must be there and named for the sessions."""
+    cwd = workspace(tmp_path)
+    (cwd / "input" / "page" / "brief.json").write_text(json.dumps({"source": {"page_generation_run_id": 900102}}))
+    (tmp_path / page_studio.CALLER_LOGS_DIRNAME).mkdir()
+    monkeypatch.setenv(page_studio.OUTPUT_ROOT_ENV_VAR, "gs://b/page-generation-runs/{run}/output")
+    monkeypatch.delenv(page_studio.POINTER_PREFIX_ENV_VAR, raising=False)
+    seen: dict = {}
+
+    async def fake_exec(*args, env, cwd, **_kwargs):
+        seen["args"], seen["env"] = list(args), env
+
+        class Process:
+            stdout = asyncio.StreamReader()
+            stderr = asyncio.StreamReader()
+
+            async def wait(self):
+                return 1
+
+        process = Process()
+        process.stdout.feed_eof()
+        process.stderr.feed_eof()
+        return process
+
+    monkeypatch.setattr(page_studio.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setenv(page_studio.CLI_ENV_VAR, "/x/cli.js")
+
+    async def run() -> list:
+        return [m async for m in page_studio.run(ClaudeAgentOptions(cwd=str(cwd)), None)]
+
+    messages = asyncio.run(run())
+    state = seen["args"][seen["args"].index("--state") + 1]
+    assert state == str((tmp_path / page_studio.CALLER_LOGS_DIRNAME / "marshal-state").resolve())
+    assert seen["env"][page_studio.STATE_LOCATION_ENV_VAR] == "gs://b/page-generation-runs/900102/output/agent/marshal-state"
+    assert isinstance(messages[-1], ResultMessage) and messages[-1].is_error
