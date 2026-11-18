@@ -24,6 +24,8 @@ Environment (all optional):
     MARSHAL_SDK_PAGE_STATE_ROOT         a folder or gs://bucket/prefix to keep each page's state in as well, by key (for
                                         callers whose output root is unknown)
     MARSHAL_SDK_KIT                     host kit parts (default brain,memory,sessions; "none" turns the kit off)
+    MARSHAL_SDK_RUN_POINTER_PREFIX      where the run's pointer for Marshal desktop's cloud run list goes (default
+                                        gs://$GCS_BUCKET/marshal-sdk-cloud-runs when GCS_BUCKET is set)
     MARSHAL_SDK_RUN_OUTPUT_ROOT         the run's output root as a template on the brief's page_generation_run_id
                                         (default: agent-sandbox's own layout, gs://$GCS_BUCKET/page-generation-runs/{run}/
                                         output, with its default bucket when GCS_BUCKET is unset). The run's published sessions
@@ -75,6 +77,7 @@ SANDBOX_BUCKET_ENV_VAR = "GCS_BUCKET"
 SANDBOX_DEFAULT_BUCKET = "zyg-ecom-prod-shops-artifacts"
 SANDBOX_OUTPUT_ROOT = "gs://{bucket}/page-generation-runs/{{run}}/output"
 STATE_DOWNLOAD_WORKERS = 16
+DEFAULT_POINTER_FOLDER = "marshal-sdk-cloud-runs"
 POINTER_PREFIX_ENV_VAR = "MARSHAL_SDK_RUN_POINTER_PREFIX"
 STATE_LOCATION_ENV_VAR = "MARSHAL_SDK_STATE_LOCATION"
 # agent-sandbox uploads everything in the folder beside page-agent/ to <output root>/agent/, so state kept there lands at
@@ -103,8 +106,16 @@ def output_root(cwd: Path) -> str | None:
     return template.replace("{run}", run).rstrip("/") if template and run else None
 
 
+def pointer_prefix() -> str:
+    """Where Marshal desktop's cloud run list looks: $MARSHAL_SDK_RUN_POINTER_PREFIX, else gs://$GCS_BUCKET/marshal-sdk-cloud-runs
+    when GCS_BUCKET is set explicitly (never the sandbox's default bucket, so a dev run writes nothing into it)."""
+    given = (os.environ.get(POINTER_PREFIX_ENV_VAR) or "").strip().rstrip("/")
+    bucket = (os.environ.get(SANDBOX_BUCKET_ENV_VAR) or "").strip()
+    return given or (f"gs://{bucket}/{DEFAULT_POINTER_FOLDER}" if bucket else "")
+
+
 def write_pointer(root: str, run: str) -> None:
-    prefix = (os.environ.get(POINTER_PREFIX_ENV_VAR) or "").strip().rstrip("/")
+    prefix = pointer_prefix()
     if not prefix.startswith("gs://"):
         return
     from google.cloud import storage

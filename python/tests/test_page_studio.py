@@ -260,3 +260,13 @@ def test_the_kit_defaults_to_brain_memory_sessions_and_none_turns_it_off(monkeyp
 
 async def _collect(stream) -> list:
     return [message async for message in stream]
+
+
+def test_the_run_pointer_defaults_to_the_explicit_sandbox_bucket_only(monkeypatch):
+    monkeypatch.delenv(page_studio.POINTER_PREFIX_ENV_VAR, raising=False)
+    monkeypatch.delenv(page_studio.SANDBOX_BUCKET_ENV_VAR, raising=False)
+    assert page_studio.pointer_prefix() == ""
+    monkeypatch.setenv(page_studio.SANDBOX_BUCKET_ENV_VAR, "shop-builder-local-runs")
+    assert page_studio.pointer_prefix() == "gs://shop-builder-local-runs/marshal-sdk-cloud-runs"
+    monkeypatch.setenv(page_studio.POINTER_PREFIX_ENV_VAR, "gs://x/y/")
+    assert page_studio.pointer_prefix() == "gs://x/y"
