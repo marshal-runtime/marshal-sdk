@@ -130,8 +130,8 @@ test("an agent profile appends to the host prompt, keeps named MCP servers and r
     mcpServerNames: ["other"],
   });
   await port.wait(profiled.id);
-  assert.equal(calls[0].systemPrompt, "host prompt");
-  assert.equal(calls[1].systemPrompt, "host prompt\n\nBuild one page.");
+  assert.deepEqual(calls[0].systemPrompt, { type: "custom", prompt: "host prompt", snapshot: false });
+  assert.deepEqual(calls[1].systemPrompt, { type: "custom", prompt: "host prompt\n\nBuild one page.", snapshot: false });
   assert.deepEqual(Object.keys(calls[0].mcpServers), ["marshal"]);
   assert.deepEqual(calls[1].mcpServers, {});
   assert.deepEqual(store.get(profiled.id)?.extensions, ["@zyg/page-studio"]);

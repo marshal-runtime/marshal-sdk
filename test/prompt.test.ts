@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { CLOUD_SLACK_SURFACE, ROLE_DELTAS } from "@marshal/agent-runtime-prompt";
 
-import type { QueryFn } from "../src/agent-port.js";
+import { systemPromptText, type QueryFn } from "../src/agent-port.js";
 import { createMarshalHost } from "../src/host.js";
 import { desktopSurface } from "../src/prompt-desktop.js";
 import { assembleHostPrompt, mergePromptLayers, renderMemoryBlock, type PromptLayer } from "../src/prompt.js";
@@ -166,7 +166,7 @@ test("host: prompt option, per-session layers, forks get the fork role", async (
   const prompts: string[] = [];
   const query: QueryFn = ({ options }) =>
     (async function* () {
-      prompts.push(String(options.systemPrompt));
+      prompts.push(systemPromptText(options.systemPrompt) ?? "");
       yield { type: "system", subtype: "init", session_id: `native-${prompts.length}` };
       yield { type: "result", subtype: "success", is_error: false, result: "ok", usage: {} };
     })();
@@ -219,7 +219,7 @@ test("host with no prompt option: every turn gets v2 with Autonomy and persisten
   const prompts: string[] = [];
   const query: QueryFn = ({ options }) =>
     (async function* () {
-      prompts.push(String(options.systemPrompt));
+      prompts.push(systemPromptText(options.systemPrompt) ?? "");
       yield { type: "system", subtype: "init", session_id: `native-${prompts.length}` };
       yield { type: "result", subtype: "success", is_error: false, result: "ok", usage: {} };
     })();

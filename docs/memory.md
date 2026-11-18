@@ -74,7 +74,10 @@ workspace-only session would otherwise get the caller identity's personal memori
 untrusted wrapper but is introduced as the team's rules to apply (`framing: "chosen"`): a rule wins over a plan or draft
 the agent was handed, an explicit instruction in the request wins over the rule, and no memory widens the task, grants
 a permission or loosens a safety rule. Under the desktop's "use them as context only" line a loaded brand rule was
-ignored (900207: 2 of 2 A/B turns kept the plan's FAQ heading; 2 of 2 applied the rule under this line).
+ignored (900207: 2 of 2 A/B turns kept the plan's FAQ heading; 2 of 2 applied the rule under this line). The block
+reaches the model only because the port sends the host's prompt unrecorded (`{type: "custom", prompt, snapshot: false}`):
+Claude Code records a plain-string prompt on a conversation's first request and replays it on every resume, so on run
+900209 every Page Studio session kept its "reply ready" prompt and never sent the memories its task turn chose.
 
 **Newest (`promptMemories: "newest"`, the default for a host's own `store`, e.g. Marley).** Before each turn the port awaits `prepareTurn`. It reads the Brain only for a scope this host has never seen (its
 always-on memories and newest others); every other scope comes from the host's cache (its own writes update it) and is
