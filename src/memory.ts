@@ -449,7 +449,9 @@ export class HostMemory {
     for (let rank = 0; rank < Math.max(0, ...lists.map((list) => list.length)); rank++) {
       for (const list of lists) {
         const record = list[rank];
-        if (record && !seen.has(record.id)) (seen.add(record.id), candidates.push(record));
+        if (!record || seen.has(record.id)) continue;
+        seen.add(record.id);
+        candidates.push(record);
       }
     }
     const limit = this.options.relevantLimit ?? 8;
