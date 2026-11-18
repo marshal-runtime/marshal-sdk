@@ -9,12 +9,17 @@ marshal-sdk npm package), which starts a Marshal host around the Claude Code CLI
 Marshal's runtime tools and the run is recorded as a Marshal session, while hooks, subagents, permission callbacks and
 in-process MCP tools work as before.
 
+Nothing else needs installing: Node comes from the nodejs-wheel-binaries dependency, and the marshal-sdk npm package
+(with the Page Studio extension and the Brain inside) ships in this package and is installed when its wheel is built
+(see _node.py).
+
 Environment:
-    MARSHAL_CLAUDE        path of the marshal-claude executable (default: ``marshal-claude`` on PATH)
+    MARSHAL_CLAUDE        path of a marshal-claude executable (default: the one this package carries, else on PATH)
     MARSHAL_SDK_OFF=1     run on plain claude_agent_sdk (no Marshal host), for an A/B or a rollback
     MARSHAL_SDK_KIT       host kit parts: brain, memory, sessions (comma separated)
     MARSHAL_SDK_STATE     where the host keeps its sessions (default: a temp folder per run)
-    MARSHAL_SDK_ENGINE=page-studio   page-agent builds and edits run on the Page Studio extension (see page_studio.py)
+    MARSHAL_SDK_ENGINE    page-studio (default): page-agent builds and edits run on the Page Studio extension
+                          (see page_studio.py); claude: they run the caller's own agent
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ from claude_agent_sdk import ClaudeAgentOptions, Message
 from claude_agent_sdk import ClaudeSDKClient as _ClaudeSDKClient
 from claude_agent_sdk._internal.transport import Transport
 
-from marshal_sdk import page_studio
+from marshal_sdk import _node, page_studio
 
 __all__ = list(_sdk.__all__)
 
@@ -42,18 +47,21 @@ REAL_CLI_ENV_VAR = "MARSHAL_SDK_CLAUDE_CLI"
 OFF_ENV_VAR = "MARSHAL_SDK_OFF"
 
 
-class MarshalNotInstalledError(RuntimeError):
-    """marshal-claude is not on PATH and MARSHAL_CLAUDE does not name it."""
+MarshalNotInstalledError = _node.MarshalNotInstalledError
 
 
 def _bridge() -> str:
-    found = os.environ.get(BRIDGE_ENV_VAR) or shutil.which(BRIDGE_NAME)
-    if not found:
-        raise MarshalNotInstalledError(
-            f"{BRIDGE_NAME} was not found: install the marshal-sdk npm package (npm i -g <marshal-sdk tarball>) "
-            f"or set {BRIDGE_ENV_VAR} to its path."
-        )
-    return found
+    """marshal-claude: $MARSHAL_CLAUDE, the one this package carries, else one on PATH."""
+    given = os.environ.get(BRIDGE_ENV_VAR)
+    if given:
+        return given
+    try:
+        return _node.bridge()
+    except _node.MarshalNotInstalledError:
+        on_path = shutil.which(BRIDGE_NAME)
+        if on_path:
+            return on_path
+        raise
 
 
 def _claude_cli(options: ClaudeAgentOptions) -> str:
@@ -75,7 +83,7 @@ def on_marshal(options: ClaudeAgentOptions | None) -> ClaudeAgentOptions:
     if os.environ.get(OFF_ENV_VAR) == "1":
         return options
     return dataclasses.replace(
-        options, cli_path=_bridge(), env={**options.env, REAL_CLI_ENV_VAR: _claude_cli(options)}
+        options, cli_path=_bridge(), env={**_node.tool_env(), **options.env, REAL_CLI_ENV_VAR: _claude_cli(options)}
     )
 
 
@@ -85,14 +93,14 @@ async def query(
     options: ClaudeAgentOptions | None = None,
     transport: Transport | None = None,
 ) -> AsyncIterator[Message]:
-    """claude_agent_sdk.query on a Marshal host; a page-agent build goes to Page Studio under MARSHAL_SDK_ENGINE=page-studio."""
+    """claude_agent_sdk.query on a Marshal host; a page-agent build or edit goes to Page Studio."""
 
     def own_agent() -> AsyncIterator[Message]:
         return _sdk.query(prompt=prompt, options=on_marshal(options), transport=transport)
 
     if transport is None and os.environ.get(OFF_ENV_VAR) != "1" and page_studio.routes(options):
         assert options is not None
-        async for message in page_studio.query(options, os.environ.get(BRIDGE_ENV_VAR) or shutil.which(BRIDGE_NAME), own_agent):
+        async for message in page_studio.query(options, own_agent):
             yield message
         return
     async for message in own_agent():

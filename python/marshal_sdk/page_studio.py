@@ -1,6 +1,6 @@
 """Page builds on the Page Studio extension: an agent-sandbox page-agent query, answered by ``marshal-sdk page-run``.
 
-With ``MARSHAL_SDK_ENGINE=page-studio`` a query whose working folder is an agent-sandbox page-agent workspace
+A query whose working folder is an agent-sandbox page-agent workspace
 (``input/page/brief.json`` and ``input/products/``) does not start the caller's own agent. The page is built (or, when
 ``input/page/base-page/index.html`` exists, edited) by Page Studio on a headless Marshal host, on Marshal's own system
 prompt and Page Studio's own skills, critic and copy. The caller's system prompt, skills, subagents and in-process MCP
@@ -10,16 +10,23 @@ The run contract is the one the caller's agent would have met: ``out/index.html`
 ``out/notes.md``). The query yields a ``SystemMessage`` per host log line and one ``ResultMessage`` carrying the run's
 whole usage and cost, so the caller's run log and summary work unchanged.
 
-Environment:
-    MARSHAL_SDK_ENGINE=page-studio     route page-agent workspaces to Page Studio (default: the caller's own agent)
-    MARSHAL_SDK_CLI                     the marshal-sdk CLI (default: next to marshal-claude, else ``marshal-sdk`` on PATH)
-    MARSHAL_SDK_PAGE_STUDIO             Page Studio's package folder (read by marshal-sdk)
+Each page carries where its Marshal state is kept (a ``marshal-page-state`` meta tag): the run's uploaded logs,
+``<output root>/agent/marshal-state``. An edit loads that state, so it continues the page as it is now, including an
+edit made in Marshal desktop's Page Studio and pushed back to the run (sdksessions.pushToCloud updates that state and
+re-stamps the tag).
+
+Environment (all optional):
+    MARSHAL_SDK_ENGINE                  page-studio (default) routes page-agent workspaces to Page Studio; claude runs the
+                                        caller's own agent
+    MARSHAL_SDK_CLI                     the marshal-sdk CLI (default: the one this package carries)
+    MARSHAL_SDK_PAGE_STUDIO             Page Studio's package folder (default: the one packed inside marshal-sdk)
     MARSHAL_SDK_PAGE_DEPTH              quick | single | deep (default single)
-    MARSHAL_SDK_PAGE_STATE_ROOT         where each page's Marshal state is kept between a build and its edits: a folder or
-                                        gs://bucket/prefix. Unset: a page can't be found again, so its edits run the
-                                        caller's own agent.
-    MARSHAL_SDK_RUN_OUTPUT_ROOT         the run's output root as a template on the brief's page_generation_run_id, e.g.
-                                        gs://bucket/page-generation-runs/{run}/output. Set: the run's published sessions
+    MARSHAL_SDK_PAGE_STATE_ROOT         a folder or gs://bucket/prefix to keep each page's state in as well, by key (for
+                                        callers whose output root is unknown)
+    MARSHAL_SDK_KIT                     host kit parts (default brain,memory,sessions; "none" turns the kit off)
+    MARSHAL_SDK_RUN_OUTPUT_ROOT         the run's output root as a template on the brief's page_generation_run_id
+                                        (default: agent-sandbox's own layout, gs://$GCS_BUCKET/page-generation-runs/{run}/
+                                        output, with its default bucket when GCS_BUCKET is unset). The run's published sessions
                                         name {root}/agent/marshal-state (where agent-sandbox uploads the state kept in its
                                         logs folder), so Marshal desktops and Page Studio find the run.
     MARSHAL_SDK_RUN_POINTER_PREFIX      with the output root: also write {prefix}/index/{run}.json = {"outputRoot": root},
@@ -33,6 +40,7 @@ import json
 import os
 import re
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -40,12 +48,16 @@ from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions, Message, ResultMessage, SystemMessage
 
+from marshal_sdk import _node
+
 ENGINE_ENV_VAR = "MARSHAL_SDK_ENGINE"
 ENGINE_PAGE_STUDIO = "page-studio"
+ENGINE_CLAUDE = "claude"
 CLI_ENV_VAR = "MARSHAL_SDK_CLI"
 DEPTH_ENV_VAR = "MARSHAL_SDK_PAGE_DEPTH"
 STATE_ROOT_ENV_VAR = "MARSHAL_SDK_PAGE_STATE_ROOT"
 KIT_ENV_VAR = "MARSHAL_SDK_KIT"
+DEFAULT_KIT = "brain,memory,sessions"
 # Page Studio's scripted backend (no model): the dry path, for tests.
 FAKE_ENV_VAR = "MARSHAL_SDK_PAGE_FAKE"
 # The host, not the agent's tools, calls the Decisions API that routes Page Studio's edits; the caller's agent env
@@ -58,6 +70,11 @@ PROGRESS_SUBTYPE = "marshal_page_studio"
 SUMMARY_SUBTYPE = "marshal_page_studio_summary"
 CHANGE_REQUEST_MARKER = "Change request:"
 OUTPUT_ROOT_ENV_VAR = "MARSHAL_SDK_RUN_OUTPUT_ROOT"
+# agent-sandbox's own run layout (its edit_turn_service checks base runs against it): GCS_BUCKET, else its default bucket.
+SANDBOX_BUCKET_ENV_VAR = "GCS_BUCKET"
+SANDBOX_DEFAULT_BUCKET = "zyg-ecom-prod-shops-artifacts"
+SANDBOX_OUTPUT_ROOT = "gs://{bucket}/page-generation-runs/{{run}}/output"
+STATE_DOWNLOAD_WORKERS = 16
 POINTER_PREFIX_ENV_VAR = "MARSHAL_SDK_RUN_POINTER_PREFIX"
 STATE_LOCATION_ENV_VAR = "MARSHAL_SDK_STATE_LOCATION"
 # agent-sandbox uploads everything in the folder beside page-agent/ to <output root>/agent/, so state kept there lands at
@@ -79,7 +96,9 @@ def run_label(cwd: Path) -> str | None:
 
 def output_root(cwd: Path) -> str | None:
     """The run's gs:// output root from $MARSHAL_SDK_RUN_OUTPUT_ROOT and the brief's run id."""
-    template = (os.environ.get(OUTPUT_ROOT_ENV_VAR) or "").strip()
+    template = (os.environ.get(OUTPUT_ROOT_ENV_VAR) or "").strip() or SANDBOX_OUTPUT_ROOT.format(
+        bucket=os.environ.get(SANDBOX_BUCKET_ENV_VAR) or SANDBOX_DEFAULT_BUCKET
+    )
     run = run_label(cwd)
     return template.replace("{run}", run).rstrip("/") if template and run else None
 
@@ -97,7 +116,7 @@ def write_pointer(root: str, run: str) -> None:
 
 def routes(options: ClaudeAgentOptions | None) -> bool:
     """Whether this query is a page-agent build that Page Studio answers."""
-    if os.environ.get(ENGINE_ENV_VAR) != ENGINE_PAGE_STUDIO or options is None or options.cwd is None:
+    if os.environ.get(ENGINE_ENV_VAR, ENGINE_PAGE_STUDIO) != ENGINE_PAGE_STUDIO or options is None or options.cwd is None:
         return False
     input_dir = Path(options.cwd) / "input"
     return (input_dir / "page" / "brief.json").is_file() and (input_dir / "products").is_dir()
@@ -109,14 +128,19 @@ def base_page(cwd: Path) -> Path | None:
 
 
 def page_state_key(html: str) -> str | None:
-    found = re.search(rf'<meta\s+name="{STATE_META}"\s+content="([A-Za-z0-9-]+)"', html)
+    """The page's state link: a location (gs://… or a folder) or, from older runs, a key under the state root."""
+    found = re.search(rf'<meta\s+name="{STATE_META}"\s+content="([^"<>]+)"', html)
     return found.group(1) if found else None
+
+
+def is_location(link: str) -> bool:
+    return link.startswith("gs://") or link.startswith("/")
 
 
 def stamp_state_key(html: str, key: str) -> str:
     """The page with its state key in a meta tag (replacing an older one), so an edit of it finds its Marshal state."""
     meta = f'<meta name="{STATE_META}" content="{key}">'
-    html = re.sub(rf'<meta\s+name="{STATE_META}"\s+content="[^"]*">\s*', "", html)
+    html = re.sub(rf'<meta\s+name="{STATE_META}"\s+content="[^"]*"\s*/?>\s*', "", html)
     head = re.search(r"<head[^>]*>", html, re.IGNORECASE)
     return f"{html[: head.end()]}{meta}{html[head.end():]}" if head else f"{meta}{html}"
 
@@ -152,19 +176,23 @@ class StateRoot:
 
     def load(self, key: str, state: Path) -> bool:
         if not self._root.startswith("gs://"):
-            source = Path(self._root) / key
+            source = Path(self._root) / key if key else Path(self._root)
             if not source.is_dir():
                 return False
             shutil.copytree(source, state, symlinks=True, dirs_exist_ok=True)
             return True
         bucket, prefix = self._bucket()
-        found = False
-        for blob in bucket.list_blobs(prefix=f"{prefix}{key}/"):
-            target = state / blob.name[len(f"{prefix}{key}/") :]
+        folder = f"{prefix}{key}/" if key else prefix
+        blobs = [blob for blob in bucket.list_blobs(prefix=folder) if not blob.name.endswith("/")]
+
+        def fetch(blob: Any) -> None:
+            target = state / blob.name[len(folder) :]
             target.parent.mkdir(parents=True, exist_ok=True)
             blob.download_to_filename(str(target))
-            found = True
-        return found
+
+        with ThreadPoolExecutor(max_workers=STATE_DOWNLOAD_WORKERS) as pool:
+            list(pool.map(fetch, blobs))
+        return bool(blobs)
 
     def _bucket(self) -> tuple[Any, str]:
         from google.cloud import storage  # the sandbox has it; only gs:// roots need it
@@ -173,26 +201,37 @@ class StateRoot:
         return storage.Client().bucket(bucket), f"{prefix}/" if prefix else ""
 
 
-def cli(bridge: str | None) -> list[str]:
+def cli() -> list[str]:
+    """The marshal-sdk CLI: $MARSHAL_SDK_CLI, else the one this package carries."""
     found = os.environ.get(CLI_ENV_VAR)
-    if not found and bridge:
-        sibling = Path(bridge).resolve().parent / "cli.js"
-        found = str(sibling) if sibling.is_file() else None
-    found = found or shutil.which("marshal-sdk")
     if not found:
-        raise RuntimeError(f"No marshal-sdk CLI: set {CLI_ENV_VAR} or install the marshal-sdk npm package.")
-    return ["node", found] if found.endswith(".js") else [found]
+        return _node.cli_command()
+    return [_node.node(), found] if found.endswith(".js") else [found]
+
+
+def kit() -> str | None:
+    parts = os.environ.get(KIT_ENV_VAR, DEFAULT_KIT).strip()
+    return None if parts.lower() in ("", "none", "off") else parts
 
 
 def host_env(options: ClaudeAgentOptions) -> dict[str, str]:
-    env = {**os.environ, **{key: str(value) for key, value in (options.env or {}).items()}}
+    env = {**os.environ, **_node.tool_env(), **{key: str(value) for key, value in (options.env or {}).items()}}
     for key in HOST_KEYS:
         if os.environ.get(key):
             env[key] = os.environ[key]
     return env
 
 
-async def run(options: ClaudeAgentOptions, bridge: str | None) -> AsyncIterator[Message]:
+def load_base_state(link: str | None, root: StateRoot | None, state: Path) -> bool:
+    """The base page's Marshal state into the edit's state folder: from the location the page names, else by key."""
+    if link is None:
+        return False
+    if is_location(link):
+        return StateRoot(link).load("", state)
+    return root is not None and root.load(link, state)
+
+
+async def run(options: ClaudeAgentOptions) -> AsyncIterator[Message]:
     """One page build or edit by Page Studio, as the caller's query would have made it."""
     cwd = Path(str(options.cwd)).resolve()
     run_dir = cwd.parent / RUN_DIRNAME
@@ -204,8 +243,9 @@ async def run(options: ClaudeAgentOptions, bridge: str | None) -> AsyncIterator[
     root = StateRoot(os.environ[STATE_ROOT_ENV_VAR]) if os.environ.get(STATE_ROOT_ENV_VAR) else None
     env = host_env(options)
     run_root = output_root(cwd)
-    if run_root is not None and state.parent == caller_logs:
-        env[STATE_LOCATION_ENV_VAR] = f"{run_root}/{UPLOADED_STATE_PATH}"
+    location = f"{run_root}/{UPLOADED_STATE_PATH}" if run_root is not None and state.parent == caller_logs else None
+    if location is not None:
+        env[STATE_LOCATION_ENV_VAR] = location
         try:
             write_pointer(run_root, str(run_label(cwd)))
         except Exception as error:  # a missing pointer only hides the run from cloud listings
@@ -213,14 +253,14 @@ async def run(options: ClaudeAgentOptions, bridge: str | None) -> AsyncIterator[
     common = [
         *(["--model", options.model] if options.model else []),
         *(["--effort", str(options.effort)] if options.effort else []),
-        *(["--kit", os.environ[KIT_ENV_VAR]] if os.environ.get(KIT_ENV_VAR) else []),
+        *(["--kit", kit()] if kit() else []),
         *(["--fake"] if os.environ.get(FAKE_ENV_VAR) == "1" else []),
         "--host-id", "agent-sandbox",
     ]
     edited = base_page(cwd)
     if edited is not None:
-        key = page_state_key(edited.read_text(encoding="utf-8"))
-        if root is None or key is None or not root.load(key, state):
+        link = page_state_key(edited.read_text(encoding="utf-8"))
+        if not load_base_state(link, root, state):
             yield SystemMessage(
                 subtype=PROGRESS_SUBTYPE,
                 data={"warning": "the base page has no Marshal state to edit; this edit runs the caller's own agent"},
@@ -237,7 +277,7 @@ async def run(options: ClaudeAgentOptions, bridge: str | None) -> AsyncIterator[
             "--depth", os.environ.get(DEPTH_ENV_VAR, "single"),
         ]
     process = await asyncio.create_subprocess_exec(
-        *cli(bridge), *args, *common, env=env, cwd=str(cwd),
+        *cli(), *args, *common, env=env, cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024,
     )
     assert process.stderr is not None and process.stdout is not None
@@ -252,11 +292,17 @@ async def run(options: ClaudeAgentOptions, bridge: str | None) -> AsyncIterator[
     summary: dict[str, Any] = json.loads(summary_file.read_text(encoding="utf-8")) if summary_file.is_file() else {}
     index = out / "index.html"
     key = None
-    if root is not None and index.is_file() and code == 0:
-        key = str(uuid.uuid4())
-        root.save(key, state)
-        index.write_text(stamp_state_key(index.read_text(encoding="utf-8"), key), encoding="utf-8")
-    yield SystemMessage(subtype=SUMMARY_SUBTYPE, data={"summary": summary, "state_key": key, "exit_code": code})
+    if index.is_file() and code == 0:
+        if root is not None:
+            key = str(uuid.uuid4())
+            root.save(key, state)
+        # The location wins: it is the state a desktop push updates; the key is only a copy taken now.
+        link = location or key
+        if link is not None:
+            index.write_text(stamp_state_key(index.read_text(encoding="utf-8"), link), encoding="utf-8")
+    yield SystemMessage(
+        subtype=SUMMARY_SUBTYPE, data={"summary": summary, "state_key": key, "state_location": location, "exit_code": code}
+    )
     yield result_message(summary, code)
 
 
@@ -296,10 +342,10 @@ def result_message(summary: dict[str, Any], code: int) -> ResultMessage:
     )
 
 
-async def query(options: ClaudeAgentOptions, bridge: str | None, fallback: Any) -> AsyncIterator[Message]:
+async def query(options: ClaudeAgentOptions, fallback: Any) -> AsyncIterator[Message]:
     """Page Studio's answer to the query, or the caller's own agent when an edit has no Marshal state."""
     try:
-        async for message in run(options, bridge):
+        async for message in run(options):
             yield message
     except _PassThrough:
         async for message in fallback():
