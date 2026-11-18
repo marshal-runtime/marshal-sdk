@@ -15,6 +15,7 @@ import {
 
 import type { ProviderSessionMessage as SessionMessage } from "../../contract/host-types";
 import type { RuntimeNativeSessionState } from "../runtime-contract";
+import { bufferOver, concatBytes } from "./jsonl-lines";
 import { claudeJsonlToSessionMessages } from "./native-state-history";
 import { sanitizeClaudeJsonl } from "./native-state-sanitizer";
 
@@ -23,6 +24,8 @@ export type { ClaudeForkRequest };
 
 const INVALID_SESSION_ID = "Invalid Claude session id";
 const FORK_CALL_POLL_MS = 100;
+const NEWLINE_BYTE = 0x0a;
+const BACKGROUND_TASK_KEY = Buffer.from('"backgroundTaskId"');
 
 /**
  * Reads the session's native JSONL for export, or null when Claude has not persisted it. The bytes
@@ -72,26 +75,41 @@ export async function writeClaudeNativeState(
  * never sees `toolUseResult`, so the copy still matches the parent's prompt cache.
  */
 export function detachParentBackgroundTasks(bytes: Uint8Array): Uint8Array {
-  const lines = new TextDecoder().decode(bytes).split("\n");
-  let changed = false;
-  const kept = lines.map((line) => {
-    if (!line.includes('"backgroundTaskId"')) return line;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line) as unknown;
-    } catch {
-      return line;
+  const source = bufferOver(bytes);
+  const parts: Uint8Array[] = [];
+  let copied = 0;
+  // Only the lines that name a background task are decoded; the rest is copied as bytes.
+  for (let at = source.indexOf(BACKGROUND_TASK_KEY); at >= 0; ) {
+    const lineStart = source.lastIndexOf(NEWLINE_BYTE, at) + 1;
+    const newline = source.indexOf(NEWLINE_BYTE, at);
+    const lineEnd = newline < 0 ? source.length : newline;
+    const detached = withoutBackgroundTask(source.toString("utf8", lineStart, lineEnd));
+    if (detached !== undefined) {
+      parts.push(source.subarray(copied, lineStart), Buffer.from(detached));
+      copied = lineEnd;
     }
-    if (typeof entry !== "object" || entry === null) return line;
-    const result = (entry as { toolUseResult?: unknown }).toolUseResult;
-    if (typeof result !== "object" || result === null || !("backgroundTaskId" in result)) {
-      return line;
-    }
-    delete (result as { backgroundTaskId?: unknown }).backgroundTaskId;
-    changed = true;
-    return JSON.stringify(entry);
-  });
-  return changed ? new TextEncoder().encode(kept.join("\n")) : bytes;
+    at = source.indexOf(BACKGROUND_TASK_KEY, lineEnd);
+  }
+  if (parts.length === 0) return bytes;
+  parts.push(source.subarray(copied));
+  return concatBytes(parts);
+}
+
+/** The line without its background task id, or undefined when it does not carry one. */
+function withoutBackgroundTask(line: string): string | undefined {
+  let entry: unknown;
+  try {
+    entry = JSON.parse(line) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (typeof entry !== "object" || entry === null) return undefined;
+  const result = (entry as { toolUseResult?: unknown }).toolUseResult;
+  if (typeof result !== "object" || result === null || !("backgroundTaskId" in result)) {
+    return undefined;
+  }
+  delete (result as { backgroundTaskId?: unknown }).backgroundTaskId;
+  return JSON.stringify(entry);
 }
 
 /**
