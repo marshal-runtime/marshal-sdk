@@ -16,6 +16,7 @@ import { cloudRunLayer } from "./prompt-cloud.js";
 import { desktopSurface } from "./prompt-desktop.js";
 import { turnSessions, writeRunLogs, type RunSummaryJson } from "./run-contract.js";
 import { escapeRegExp, finishPage, markSections, type FinishedPage } from "./page-finish.js";
+import { claudeScreenshotLook, pricedPack } from "./page-price.js";
 
 export { finishPage, markSections, type FinishedPage };
 
@@ -107,6 +108,18 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   };
   // Page Studio reads its folder and its Chrome from the process: it runs inside this process.
   process.env.PAGE_STUDIO_DIR = env.PAGE_STUDIO_DIR = studioDir;
+  const priced = options.fake || options.offline
+    ? { productDir: input.productDir, warnings: [] as string[] }
+    : await pricedPack({
+        productDir: input.productDir,
+        inputDir,
+        copyDir: path.join(state, "pack", input.productId),
+        handle: input.productHandle,
+        productName: input.productName || input.brandName,
+        look: claudeScreenshotLook(env),
+        log,
+      });
+  input.productDir = priced.productDir;
   // A brand-data provider in the sandbox (@zyg/brand-data-pack) serves this run's product pack (facts.md, pictures.json).
   process.env[INPUT_PACK_ENV] = env[INPUT_PACK_ENV] ??= input.productDir;
   const chrome = await resolveChrome();
@@ -149,7 +162,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   let usedSkills: string[] = [];
   let profiles: unknown[] = [];
   let profileText = profileLabel(options.profile);
-  const warnings: string[] = [];
+  const warnings: string[] = [...priced.warnings];
   let build: PageStudioBuild = {};
   try {
     const gate = browserGate({ depth, noLook: Boolean(options.noLook), usable: browserUsable, fake: Boolean(options.fake) });
