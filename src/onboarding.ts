@@ -593,6 +593,8 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
     ? (brainFromKit(kit) ?? envPackage(env[brainSpec.env]) ?? (shippedBrain && fs.existsSync(path.join(shippedBrain, "runtime-extension.json")) ? shippedBrain : undefined))
     : undefined;
   if (kitAsksForBrain(kit) && !kitBrain) problems.push(`the kit's Brain is on, but no ${BRAIN_EXTENSION} package was found: set ${brainSpec.env} to a built package.`);
+  // The host loads the Brain package checked here, not whatever its own environment names later.
+  if (kitBrain && !brainFromKit(kit)) kit = withBrain(kit, kitBrain);
   problems.push(...unmetRequirements([...(kitBrain ? [{ packageRoot: kitBrain }] : []), ...all]));
   if (problems.length) {
     throw new OnboardingError("requirements-missing", `${file} cannot start a host:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
