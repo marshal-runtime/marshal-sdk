@@ -3,7 +3,7 @@
   "identity": "@fixture/pages",
   "version": "0.1.0",
   "displayName": "Fake page agent",
-  "entrypoint": "dist/index.cjs",
+  "entrypoint": "runtime.cjs",
   "moduleFormat": "commonjs-bundle-v1",
   "contributes": {
     "capabilities": [
