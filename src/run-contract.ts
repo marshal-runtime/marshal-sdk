@@ -7,7 +7,7 @@ import type { SessionRecord, SessionUsage } from "./session-store.js";
 
 /**
  * The sessions one turn on a reopened state used: the ones this host run made, plus earlier sessions it resumed
- * (Page Studio keeps one fast-hands session per page), each with only the usage it added during the turn.
+ * (a page editor keeps one fast-hands session per page), each with only the usage it added during the turn.
  * `before` is every session's usage when the host opened the state.
  */
 export function turnSessions(
@@ -49,9 +49,9 @@ export interface RunLogsInput {
   error?: string;
   /** Skills the caller's manifest requires; the ones no session called land in skills_missing. */
   requiredSkills?: readonly string[];
-  /** Skills an engine loads into its own prompts (Page Studio): required ones it loads are not missing. */
+  /** Skills an engine loads into its own prompts (a page editor): required ones it loads are not missing. */
   loadedSkills?: readonly string[];
-  /** Skills an engine reports it put into this run's prompts (Page Studio's activity.skills): they count as used. */
+  /** Skills an engine reports it put into this run's prompts (an activity's skills): they count as used. */
   usedSkills?: readonly string[];
   launchIssues?: readonly string[];
   marshal?: Record<string, unknown>;

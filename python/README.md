@@ -13,20 +13,22 @@ marshal-sdk = { git = "https://github.com/marshal-runtime/marshal-sdk.git", bran
 ## Declare the host: marshal-sdk.json
 
 What a Marshal host loads is declared in one file the caller owns, `marshal-sdk.json` (format: `docs/onboarding.md`).
-The SDK hardwires no extension: Page Studio loads because the file lists it. agent-sandbox's, for example
+The SDK hardwires no extension and no agent: Page Studio loads because the file lists it, and its page agent runs
+every query because `agent` names it. agent-sandbox's, for example
 (`examples/zyg-agent-sandbox/marshal-sdk.json`):
 
 ```json
 {
   "version": 1,
+  "agent": "@zyg/page-studio",
   "model": "claude-opus-5-5",
   "reasoningEffort": "xhigh",
   "kit": ["brain", "memory", "sessions"],
   "brain": { "index": "zyg", "auth": "service", "person": "${env:MARSHAL_BRAIN_PERSON}" },
   "extensions": [
     {
-      "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.2.0.tgz",
-      "sha256": "603ebc8d5139401f2d775b18739dfd0cb8a64ec32d6aba69bf3f5f4c4c36e797",
+      "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.3.0.tgz",
+      "sha256": "22cf733f8235acf426177886599a7e583f3766950193a6282df39a78d0e955d0",
       "configuration": { "openaiApiKey": "${env:OPENAI_API_KEY}" }
     }
   ]
@@ -76,19 +78,26 @@ without the Brain and `init` logs one warning (logger `marshal_sdk`); it does no
   `~/.cache/marshal-sdk` (`MARSHAL_SDK_CACHE`).
 - **marshal-claude**, the bridge `query` runs the caller's own agent through, on that Node.
 
-## Page-agent builds and edits
+## Picking the agent
 
-A query whose `cwd` is an agent-sandbox page-agent workspace, on a host whose manifest lists `@zyg/page-studio`, is
-built (or, with `input/page/base-page/index.html`, edited) by Page Studio on Marshal's own system prompt
-(`page_studio.py`). With no manifest, or one that does not list Page Studio, the query runs the caller's own agent and
-its first message is a `SystemMessage` (subtype `marshal_sdk_notice`) saying why. The page names where its Marshal state is
-uploaded (`<output root>/agent/marshal-state`, agent-sandbox's run layout from `GCS_BUCKET`); an edit continues from that
-state, which is also what Marshal desktop's `sdksessions.pushToCloud` updates. `MARSHAL_SDK_ENGINE=claude` opts out; `MARSHAL_SDK_KIT` names kit parts over the manifest's `kit`.
+The manifest's `agent` (`@scope/name`, or `@scope/name:<id>` when an extension declares several) names the extension
+agent every `query()` runs on the Marshal host, through one generic route (`marshal-sdk agent-run`). Override it with
+`marshal_sdk.init(path, agent="@acme/hello")`, `$MARSHAL_SDK_AGENT`, or per query with
+`ClaudeAgentOptions(extra_args={"marshal-agent": "@acme/hello"})`; `"none"` runs the caller's own agent. With no agent
+named, the query runs the caller's own agent through the Marshal Claude bridge. What the agent reads in `cwd` and
+writes back is the extension's business (Page Studio's: agent-sandbox's page-agent layout, `out/index.html`).
+
+The run's state folder is `<cwd name>-logs/marshal-state` beside the working folder when the caller keeps one (uploaded
+with it, `<output root>/agent/marshal-state`), else `marshal-agent/state`. An agent that declares `resume` (a file and
+a meta tag naming the state) continues from that state on a later run: the SDK reloads it and tells the agent; when it
+cannot, the query runs the caller's own agent and says why in a `SystemMessage`. `MARSHAL_SDK_FAKE=1` runs the agent's
+dry answers instead of a model; `MARSHAL_SDK_KIT` names kit parts over the manifest's `kit`. Progress arrives as
+`SystemMessage(subtype="marshal_agent")`, the summary as `marshal_agent_summary`, then one `ResultMessage`.
 
 ## Deploy needs
 
-- The npm registry reachable when the image installs Python dependencies (else on the first page run).
-- A Chromium for Page Studio's renders: the Playwright Chromium already under `PLAYWRIGHT_BROWSERS_PATH` is used on
+- The npm registry reachable when the image installs Python dependencies (else on the first agent run).
+- A Chromium for an agent that declares the `browser` port (Page Studio's renders): the Playwright Chromium already under `PLAYWRIGHT_BROWSERS_PATH` is used on
   Linux, or set `MARSHAL_SDK_CHROME`.
 - `ANTHROPIC_API_KEY`, and whatever the manifest's `${env:…}` settings name (`OPENAI_API_KEY` for Page Studio's edit
   router in agent-sandbox's).

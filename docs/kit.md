@@ -188,7 +188,7 @@ searched by `session_search`). Nothing new on the Brain side; the host calls `se
   session ran and where its full state is. The Brain stores no tool output and has no "fetch the whole session" call, so a
   person who finds a session follows this line to the state folder (the GCS `agent/marshal-state/`) to open, watch or
   continue it.
-- `page-run` / `page-edit`: `--publish-sessions team|<emails>` and `--publish-context <text>` (or
+- `agent-run`: `--publish-sessions team|<emails>` and `--publish-context <text>` (or
   `MARSHAL_SDK_PUBLISH_SESSIONS` / `MARSHAL_SDK_PUBLISH_CONTEXT`) add the `brain` and `sessions` parts and turn it on.
 
 Proof (2026-11-16, production index, audience Omer only): a haiku session on a headless host was published after its

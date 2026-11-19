@@ -82,6 +82,7 @@ export {
   type ResolvedAgent,
   type ResolvedProfile,
 } from "./agent-entries.js";
+export { agentRunCommand, declaredAgents, dryQuery, findAgent, runAgent, type AgentRunInput, type AgentRunOptions, type AgentRunOutput, type AgentRunPoll, type FoundAgent } from "./agent-run.js";
 export {
   composePromptLayers,
   layerRef,

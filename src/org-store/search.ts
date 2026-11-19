@@ -12,7 +12,7 @@ export interface OrgSessionHit {
 
 export interface OrgSessionSearchOptions {
   objects: ObjectStore;
-  /** The org workspace whose sessions are searched: every implementation published under it (Marley, Page Studio runs, ...). */
+  /** The org workspace whose sessions are searched: every implementation published under it (Marley, page runs, ...). */
   workspace: string;
   /** How many of the newest sessions one search reads at most. Default 300. */
   maxSessions?: number;

@@ -26,6 +26,8 @@ const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 20_000;
 const ENV_REFERENCE = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/;
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+/** An agent an extension declares (contributes.agents): `@scope/name` (its only agent) or `@scope/name:id`. */
+export const AGENT_REF = /^@[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9._-]{0,63}(?::[a-z0-9][a-z0-9._-]{0,63})?$/;
 
 /** One extension in the manifest: exactly one of `path`, `archive`, `url` or `id`. */
 export interface ManifestExtension {
@@ -106,6 +108,11 @@ export interface SdkManifest {
   org?: ManifestOrg;
   defaults?: false | ManifestDefaults;
   extensions: ManifestExtension[];
+  /**
+   * The agent every query of this host runs: an agent one of the extensions declares (`contributes.agents`), as
+   * `@scope/name` or `@scope/name:id`. Absent: queries run the caller's own agent on the host.
+   */
+  agent?: string;
 }
 
 /** What a resolver hands back for one extension: an archive with the organization's hash, or an unpacked package. */
@@ -155,6 +162,8 @@ export interface OnboardingHostOptions {
   provider?: ProviderSelection;
   /** Identities that came from the built-in defaults (the start-up report marks them). */
   defaultExtensions: string[];
+  /** The manifest's `agent`, as written. */
+  agent?: string;
 }
 
 export class OnboardingError extends Error {
@@ -304,8 +313,12 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
     }
     brain = value as ManifestBrain;
   }
+  if (root.agent !== undefined && (typeof root.agent !== "string" || !AGENT_REF.test(root.agent))) {
+    throw new OnboardingError("manifest-invalid", `${file}: agent is "@scope/name" or "@scope/name:<agent id>", an agent one of its extensions declares.`);
+  }
   return {
     version: 1,
+    ...(typeof root.agent === "string" ? { agent: root.agent } : {}),
     ...(root.profile === "zyg" ? { profile: "zyg" as const } : {}),
     ...(brain ? { brain } : {}),
     ...(typeof root.model === "string" ? { model: root.model } : {}),
@@ -606,6 +619,7 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
     ...(manifest.model ? { model: manifest.model } : {}),
     ...(manifest.reasoningEffort ? { reasoningEffort: manifest.reasoningEffort } : {}),
     ...(manifest.provider ? { provider: manifest.provider } : {}),
+    ...(manifest.agent ? { agent: manifest.agent } : {}),
     defaults,
     defaultExtensions: defaults.map((extension) => extension.identity),
   };

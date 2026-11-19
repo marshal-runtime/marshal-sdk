@@ -1,11 +1,13 @@
-// Pages a run made with Page Studio. A host that runs Page Studio keeps them in its PAGE_STUDIO_DIR: pages/<id>.json
+// Pages a run made with a page editor extension. Its data folder holds pages/<id>.json
 // (the page record with its sections) and library/<brand>/{brand.json, pictures/} (the pictures pages show as
 // https://pagestudio.library/<brand>/<name>). The link exports one page with the pictures it shows, and
-// writePage() lays it out as a Page Studio data folder again, which pagestudio.page.import takes in.
+// writePage() lays it out as such a data folder again, which the editor's page import takes in.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+/** The export format of one page with its pictures. */
+export const PAGE_FORMAT = "marshal-page";
 export const PAGE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,160}$/;
 const SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
 const PICTURE_EXT = /\.(png|jpe?g|webp|avif|gif|svg)$/i;
@@ -45,13 +47,13 @@ export interface PagePicture {
 }
 
 export interface PageManifest {
-  format: "page-studio-page";
+  format: typeof PAGE_FORMAT;
   version: 1;
   page: Row;
   pictures: PagePicture[];
   /** Library pictures the page shows that this host does not have. */
   missing: string[];
-  /** Per brand: what Page Studio knows beyond the pictures (facts, design plan, offers, product). */
+  /** Per brand: what the editor knows beyond the pictures (facts, design plan, offers, product). */
   brands: Record<string, Row>;
 }
 
@@ -87,7 +89,7 @@ function libraryUrls(page: Row): string[] {
   return [...urls];
 }
 
-/** Page Studio's own rule (create.ts isPlumbing): a section of only styles and tokens, nothing a visitor reads or sees. */
+/** The editor's own rule (its create.ts isPlumbing): a section of only styles and tokens, nothing a visitor reads or sees. */
 function isPlumbing(section: Row): boolean {
   const body = String(section?.src ?? "").replace(/<(style|script)\b[\s\S]*?<\/\1\s*>/gi, "");
   const text = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
@@ -167,7 +169,7 @@ export class PageStore {
     return pages.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
-  /** One page with the pictures it shows: what a client needs to bring it into its own Page Studio. */
+  /** One page with the pictures it shows: what a client needs to bring it into its own editor. */
   manifest(id: string): PageManifest | undefined {
     const page = this.page(id);
     if (!page) return undefined;
@@ -196,7 +198,7 @@ export class PageStore {
       const { pictures: _pictures, ...rest } = lib;
       brands[brand] = rest;
     }
-    return { format: "page-studio-page", version: 1, page, pictures, missing, brands };
+    return { format: PAGE_FORMAT, version: 1, page, pictures, missing, brands };
   }
 
   /** A picture the page shows, with its content type; undefined when the page doesn't show it. */
@@ -222,7 +224,7 @@ function runOf(updatedAt: string, runs: readonly RunWindow[]): string | null {
 }
 
 /**
- * Lays a page out as a Page Studio data folder under `target` (pages/<id>.json, library/<brand>/pictures/<name>,
+ * Lays a page out as an editor data folder under `target` (pages/<id>.json, library/<brand>/pictures/<name>,
  * library/<brand>/brand.json with the records of those pictures), fetching each picture and checking its hash.
  */
 export async function writePage(
@@ -231,7 +233,7 @@ export async function writePage(
   fetchPicture: (picture: PagePicture) => Promise<Buffer>,
 ): Promise<{ dataDir: string; pageId: string; pictures: number; bytes: number }> {
   const id = String(manifest.page.id ?? "");
-  if (manifest.format !== "page-studio-page" || !PAGE_ID.test(id) || !isPage(manifest.page)) throw new Error("That is not a Page Studio page.");
+  if (manifest.format !== PAGE_FORMAT || !PAGE_ID.test(id) || !isPage(manifest.page)) throw new Error("That is not a page export.");
   let bytes = 0;
   const records = new Map<string, Row[]>();
   for (const picture of manifest.pictures) {

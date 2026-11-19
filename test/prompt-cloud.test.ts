@@ -16,13 +16,12 @@ const base = sdkBaseLayer({ browser: false, extensionGuidance: [], sections: [],
 
 test("the cloud run layer names the run, its contract and state, and drops what a sandbox does not have", () => {
   const layer = cloudRunLayer({
-    job: "page-run",
+    job: "@acme/pages:page",
     purpose: "build one landing page",
     runId: "812",
     startedBy: "omer@zyg.com",
     stateLocation: "gs://bucket/run-812/agent/marshal-state/",
     contract: ["out/index.html", "logs/summary.json"],
-    pageStudio: true,
     kit: { brain: true, memory: true, sessions: true, publishes: true },
   });
   const prompt = assembleHostPrompt(mergePromptLayers(base, layer)).content;
@@ -32,7 +31,7 @@ test("the cloud run layer names the run, its contract and state, and drops what 
   assert.match(prompt, /out\/index\.html; logs\/summary\.json/);
   assert.match(prompt, /gs:\/\/bucket\/run-812\/agent\/marshal-state\//);
   assert.match(prompt, /published to the team Brain's session index/);
-  assert.match(prompt, /## Page Studio on this host/);
+  assert.match(prompt, /`@acme\/pages:page`: build one landing page/);
   assert.match(prompt, /`marshal\.tool\.recall \{query\}`/);
   assert.match(prompt, /`marshal\.tool\.remember \{fact, category, home, appliesTo\?, replaces\?, links\?\}` writes a memory node into the Brain graph at once/);
   assert.match(prompt, /It has one of two homes; always name it/);
@@ -45,9 +44,9 @@ test("the cloud run layer names the run, its contract and state, and drops what 
   for (const tool of ["`Bash`", "`Read`", "`Write`", "`Edit`", "`WebSearch`", "`mcp__marshal__runtime_exec`"]) assert.ok(prompt.includes(tool), tool);
 });
 
-test("without Page Studio the layer adds no Page Studio section; memory is always the Brain graph", () => {
-  const prompt = assembleHostPrompt(mergePromptLayers(base, cloudRunLayer({ job: "page-edit" }))).content;
-  assert.doesNotMatch(prompt, /## Page Studio on this host/);
+test("the layer names no extension of its own; memory is always the Brain graph", () => {
+  const prompt = assembleHostPrompt(mergePromptLayers(base, cloudRunLayer({ job: "@acme/pages:page" }))).content;
+  assert.doesNotMatch(prompt, /pagestudio/);
   assert.doesNotMatch(prompt, /published to the team Brain/);
   assert.match(prompt, /You have a long-term memory that lasts across sessions/);
   assert.match(prompt, /Each memory is a node in the Brain's knowledge graph/);

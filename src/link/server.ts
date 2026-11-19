@@ -53,8 +53,8 @@ export interface LinkServerOptions {
   files?: Record<string, string>;
   /** Claude config dirs to look for conversation files in when a session's own config dir is not on this machine. */
   nativeRoots?: string[];
-  /** The host's Page Studio data folder (its PAGE_STUDIO_DIR): pages a run made, served for import elsewhere. */
-  pageStudioDir?: string;
+  /** A page editor's data folder (pages/ and library/): pages a run made, served for import elsewhere. */
+  pagesDir?: string;
   live?: LinkLivePort;
   maxFileBytes?: number;
   log?: (line: string) => void;
@@ -122,7 +122,7 @@ export async function startLinkServer(options: LinkServerOptions): Promise<LinkS
   const expected = digest(options.token);
   const reader = new StoreReader(options.sessionsRoot, options.nativeRoots ?? []);
   const files = new FileRoots(options.files ?? {});
-  const pages = options.pageStudioDir ? new PageStore(options.pageStudioDir) : undefined;
+  const pages = options.pagesDir ? new PageStore(options.pagesDir) : undefined;
   const live = options.live;
   const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const log = options.log ?? (() => undefined);
@@ -483,9 +483,9 @@ export async function startLinkServer(options: LinkServerOptions): Promise<LinkS
       if (!id) {
         const runId = query.get("runId");
         const all = pages?.list(reader.runs()) ?? [];
-        return { pageStudio: !!pages, pages: runId ? all.filter((page) => page.runId === runId) : all };
+        return { served: !!pages, pages: runId ? all.filter((page) => page.runId === runId) : all };
       }
-      if (!pages) throw new HttpError(404, "no-pages", "This host serves no Page Studio folder.");
+      if (!pages) throw new HttpError(404, "no-pages", "This host serves no pages folder.");
       if (!action) {
         const manifest = pages.manifest(id);
         if (!manifest) throw new HttpError(404, "not-found", `No page ${id} on this host.`);

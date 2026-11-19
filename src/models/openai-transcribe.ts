@@ -1,4 +1,4 @@
-// OpenAI speech to text (POST /v1/audio/transcriptions, gpt-4o-transcribe): the file path of Page Studio's voice
+// OpenAI speech to text (POST /v1/audio/transcriptions, gpt-4o-transcribe): the file path of a page editor's voice
 // dictation (src/extension/voice.ts), as a host model service so the key and provider come from the host.
 import { modelCredential, type ModelEnv } from "./credentials.js";
 

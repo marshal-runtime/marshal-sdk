@@ -1,0 +1,7 @@
+{
+  "name": "@fixture/pages",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "runtime.cjs"
+}

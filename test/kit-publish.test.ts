@@ -9,7 +9,7 @@ import type { InvocationContext } from "@marshal/runtime";
 import { createSessionsProvider, prepareKit, shareAccess, shareParts, sharePayload, type CapabilityCall } from "../src/kit/index.js";
 import type { SharedMessage } from "../src/kit/sessions.js";
 import { SessionPublisher } from "../src/kit/publisher.js";
-import { hostKit } from "../src/page-run.js";
+import { hostKit } from "../src/run-kit.js";
 import { FileSessionStore } from "../src/session-store.js";
 
 const context = { principal: { id: "test", kind: "agent" }, scope: { sessionId: "s", workspacePath: "/w" } } as unknown as InvocationContext;
@@ -124,13 +124,13 @@ test("SessionPublisher.close finishes what is scheduled and takes nothing after"
   assert.deepEqual(seen, ["a"]);
 });
 
-test("page-run's hostKit adds the Brain and sessions when the run publishes", () => {
+test("a run's hostKit adds the Brain and sessions when the run publishes", () => {
   assert.deepEqual(hostKit(undefined, undefined), {});
   assert.deepEqual(hostKit(["memory"], undefined), { kit: { parts: ["memory"] } });
   assert.deepEqual(hostKit(["memory"], { audience: "team" }), { kit: { parts: ["memory", "brain", "sessions"], sessions: { publish: { audience: "team" } } } });
 });
 
-test("page-run's hostKit names the Brain caller, so the host gets that person's memory home", () => {
+test("a run's hostKit names the Brain caller, so the host gets that person's memory home", () => {
   assert.deepEqual(hostKit(["memory"], undefined, "Omer@zyg.com "), { kit: { parts: ["memory"], brain: { callerEmail: "Omer@zyg.com" } } });
   assert.deepEqual(hostKit(undefined, { audience: "team" }, "omer@zyg.com"), {
     kit: { parts: ["brain", "sessions"], sessions: { publish: { audience: "team" } }, brain: { callerEmail: "omer@zyg.com" } },

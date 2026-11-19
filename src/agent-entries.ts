@@ -76,7 +76,22 @@ export interface AgentEntry {
   id: string;
   title: string;
   description: string;
+  /** A profile agent's profile (empty for a capability agent). */
   profile: DeclaredProfile;
+  /**
+   * A capability agent: the extension's own code runs the whole run. The host calls this capability with the run's
+   * input (cwd, prompt, model, effort, person, state, logs; see agent-run.ts AgentRunInput) and reads its result.
+   */
+  capability?: string;
+  /** With `capability`: answers the scripted backend of a dry run ({prompt} -> {text}), so a test spends nothing. */
+  fake?: string;
+  /** Where the caller's run id is in the working folder (a JSON file and a dotted field), for the run's state location. */
+  runId?: { file: string; field: string };
+  /**
+   * A file in the working folder that, when present, names in a `<meta name="…" content="…">` tag the state of an
+   * earlier run this one continues (the extension stamps it there with the run's state link).
+   */
+  resume?: { file: string; meta: string };
   input?: Record<string, unknown>;
   outputs: { kind: OutputKind }[];
   /** Host ports the agent needs (named by the host's own contract; the SDK only carries them). */
@@ -172,6 +187,7 @@ export function resolveAgent(
     const known = declared.agents.map((agent) => agent.id).join(", ") || "none";
     return fail(`${declared.identity} has no agent "${agentId}" (it declares: ${known}).`);
   }
+  if (entry.capability) fail(`${declared.identity}: agent "${agentId}" is a capability agent (${entry.capability}); run it with marshal-sdk agent-run.`);
   const declaredProfile = entry.profile;
   const extensions = [declared.identity, ...(declaredProfile.extensions ?? []).filter((id) => id !== declared.identity)];
   const own = declaredProfile.prompt === undefined ? undefined : readPackageFile(declared.packageRoot, declaredProfile.prompt, `${declared.identity}: agent "${entry.id}" prompt`);
@@ -321,8 +337,9 @@ function parseEntry(identity: string, root: string, value: unknown): AgentEntry 
   if (!ENTRY_ID.test(id)) fail(`${identity}: agent id "${id}" must be lowercase letters, digits, ".", "_" or "-".`);
   const where = `${identity}: agent "${id}"`;
   if ("modes" in raw || "mode" in raw) fail(`${where}: operating modes are not supported; an agent entry is one profile.`);
+  if (raw.capability !== undefined) return capabilityEntry(root, id, where, raw);
   const profileRaw = raw.profile;
-  if (!profileRaw || typeof profileRaw !== "object" || Array.isArray(profileRaw)) return fail(`${where} needs a profile.`);
+  if (!profileRaw || typeof profileRaw !== "object" || Array.isArray(profileRaw)) return fail(`${where} needs a profile or a capability.`);
   const p = profileRaw as Record<string, unknown>;
   const known = new Set(["prompt", "layers", "layerVars", "promptMode", "model", "effort", "extensions", "skills", "nativeTools", "mcpServers", "context", "limits"]);
   for (const key of Object.keys(p)) if (!known.has(key)) fail(`${where}: profile field "${key}" is unknown${key === "tools" ? ' (capabilities come from "extensions", built-ins from "nativeTools")' : ""}.`);
@@ -379,6 +396,48 @@ function parseEntry(identity: string, root: string, value: unknown): AgentEntry 
     ports,
     ...(routine ? { routine } : {}),
     ...(task ? { task } : {}),
+  };
+}
+
+const CAPABILITY_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const DOTTED_FIELD = /^[A-Za-z_][A-Za-z0-9_]{0,63}(\.[A-Za-z_][A-Za-z0-9_]{0,63}){0,7}$/;
+const META_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+
+/** An agent whose run is the extension's own code: one capability, with the run's own facts it declares. */
+function capabilityEntry(root: string, id: string, where: string, raw: Record<string, unknown>): AgentEntry {
+  if ("profile" in raw) fail(`${where}: an agent is a profile or a capability, not both.`);
+  const name = (key: string): string | undefined => {
+    const value = raw[key];
+    if (value === undefined) return undefined;
+    if (typeof value !== "string" || !CAPABILITY_NAME.test(value)) return fail(`${where}: ${key} must be a capability name.`);
+    return value;
+  };
+  const capability = name("capability")!;
+  const fake = name("fake");
+  const fileField = (key: string, second: string, pattern: RegExp): Record<string, string> | undefined => {
+    const value = raw[key];
+    if (value === undefined) return undefined;
+    const record = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+    if (!record || typeof record.file !== "string" || typeof record[second] !== "string" || !pattern.test(record[second] as string)) {
+      return fail(`${where}: ${key} is {"file": <path in the working folder>, "${second}": …}.`);
+    }
+    checkPackagePath(root, record.file, `${where} ${key}.file`);
+    return { file: record.file, [second]: record[second] as string };
+  };
+  const runId = fileField("runId", "field", DOTTED_FIELD);
+  const resume = fileField("resume", "meta", META_NAME);
+  const ports = list(raw.ports, SLOT_NAME, `${where}: ports`) ?? [];
+  return {
+    id,
+    title: typeof raw.title === "string" && raw.title.trim() ? raw.title.trim().slice(0, 200) : id,
+    description: typeof raw.description === "string" ? raw.description.slice(0, 2000) : "",
+    profile: {},
+    capability,
+    ...(fake ? { fake } : {}),
+    ...(runId ? { runId: runId as AgentEntry["runId"] & object } : {}),
+    ...(resume ? { resume: resume as AgentEntry["resume"] & object } : {}),
+    outputs: [],
+    ports,
   };
 }
 

@@ -179,7 +179,7 @@ export class LinkClient {
     return this.request("GET", `sessions/${encodeURIComponent(id)}/native`, {}, undefined, 120_000);
   }
 
-  /** Pages the host's Page Studio holds (runId: the ones that run made). */
+  /** Pages the host's page editor holds (runId: the ones that run made). */
   pages(runId?: string) {
     return this.request("GET", "pages", { runId });
   }

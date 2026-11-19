@@ -3,8 +3,8 @@
 The Python package carries all of it, so a caller needs nothing but the dependency line:
 
 - Node 24 comes from the ``nodejs-wheel-binaries`` wheel (a dependency).
-- The marshal-sdk npm package, with the Brain packed inside, ships as ``_bundle/marshal-sdk.tgz``; Page Studio and any
-  other extension come from the caller's marshal-sdk.json.
+- The marshal-sdk npm package, with the Brain packed inside, ships as ``_bundle/marshal-sdk.tgz``; every other
+  extension comes from the caller's marshal-sdk.json.
   Building the wheel installs it into ``_bundle/install`` (hatch_build.py); when that could not run (no registry at
   build time), the first query installs it into a per-user cache instead.
 - The bridge is a small shell script next to that install that runs ``marshal-claude`` on this Node.
@@ -34,7 +34,7 @@ BUILT_INSTALL = BUNDLE_DIR / "install"
 SDK_PACKAGE = Path("node_modules") / "@marshal" / "sdk"
 CLI = Path("dist") / "src" / "cli.js"
 BRIDGE = Path("dist") / "src" / "claude-bridge-cli.js"
-# Native binaries of runtimes Page Studio never starts (Codex alone is ~330 MB per platform).
+# Native binaries of runtimes an SDK host never starts (Codex alone is ~330 MB per platform).
 PRUNED = ("@openai/codex-*",)
 
 
@@ -156,7 +156,8 @@ def bridge() -> str:
 
 
 def chrome() -> str | None:
-    """A Playwright Chromium already on this machine (Linux), for Page Studio's renders: the newest revision under
+    """A Playwright Chromium already on this machine (Linux), for the renders of agents that
+    use a browser: the newest revision under
     $PLAYWRIGHT_BROWSERS_PATH or ~/.cache/ms-playwright. None elsewhere (marshal-sdk finds the Mac's Chrome itself)."""
     if os.environ.get(CHROME_ENV_VAR) or not sys.platform.startswith("linux"):
         return None
