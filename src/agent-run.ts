@@ -52,10 +52,23 @@ export interface AgentRunInput {
   /** The caller's own run id (the entry's `runId`). */
   runLabel?: string;
   startedBy?: string;
+  /**
+   * How long this call may take before answering. A host caps one capability call (the runtime: 5 minutes), so an
+   * agent not done by then answers {running: <handle>} and is called again with {poll: <handle>, waitMs} until done.
+   */
+  waitMs: number;
+}
+
+/** A later call for a run that answered {running}. */
+export interface AgentRunPoll {
+  poll: string;
+  waitMs: number;
 }
 
 /** What a capability agent returns. Usage and cost come from the host's sessions; `costUsd` is spend outside them. */
 export interface AgentRunOutput {
+  /** Not done yet: call again with {poll: running}. */
+  running?: string;
   /** The run's answer in words: the query's result text. */
   result?: string;
   /** Set when the run failed: the reason. */
@@ -112,6 +125,9 @@ export interface FoundAgent {
 }
 
 const DEFAULT_TIMEOUT_MINUTES = 6 * 60;
+/** One call's wait, and its timeout with room for the answer, under the runtime's 300 s cap on a capability call. */
+const WAIT_MS = 120_000;
+const CALL_TIMEOUT_MS = 240_000;
 const PROGRESS_FILE = "progress.log";
 
 /** The agent `ref` names among the loaded extensions: `@scope/name` (its only agent) or `@scope/name:id`. */
@@ -218,9 +234,15 @@ export async function runAgent(options: AgentRunOptions): Promise<RunSummaryJson
         ...(browser ? { browser } : {}),
         ...(options.runLabel ? { runLabel: options.runLabel } : {}),
         ...((options.startedBy ?? env.MARSHAL_SDK_STARTED_BY) ? { startedBy: options.startedBy ?? env.MARSHAL_SDK_STARTED_BY } : {}),
+        waitMs: WAIT_MS,
       };
       fs.writeFileSync(path.join(logs, "query", "options.json"), JSON.stringify({ agent: agent.ref, capability: agent.entry.capability, input }, null, 2));
-      output = asOutput(await host.invoke(agent.entry.capability, input, timeoutMs));
+      output = asOutput(await host.invoke(agent.entry.capability, input, CALL_TIMEOUT_MS));
+      while (output.running) {
+        if (Date.now() - started > timeoutMs) throw new Error(`${agent.ref} did not finish in ${DEFAULT_TIMEOUT_MINUTES} minutes`);
+        const poll: AgentRunPoll = { poll: output.running, waitMs: WAIT_MS };
+        output = asOutput(await host.invoke(agent.entry.capability, poll, CALL_TIMEOUT_MS));
+      }
     } else {
       const resolved = resolveAgent(
         agent.packageRoot,

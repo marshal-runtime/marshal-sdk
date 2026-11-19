@@ -82,6 +82,16 @@ test("--agent overrides the manifest's, and a run continues the state an earlier
   assert.equal(refused.error, "nothing to continue", "an agent's refusal is the run's error");
 });
 
+test("an agent that answers {running} is called again with {poll} until it is done (one call is capped at 300 s)", { timeout: 120_000 }, async () => {
+  const run = caller("@fixture/hello");
+  const summary = await runAgent({ cwd: run.cwd, prompt: "slow brief", state: path.join(run.root, "state"), logs: path.join(run.root, "logs"), manifest: run.manifest, fake: true, env: {} });
+  assert.equal(summary.error, "");
+  assert.equal(fs.readFileSync(path.join(run.cwd, "out", "hello.txt"), "utf8"), "hello from @fixture/hello: slow brief\n");
+  assert.equal(fs.readFileSync(path.join(run.root, "logs", "progress.log"), "utf8"), "still working\nwrote out/hello.txt\n");
+  const input = JSON.parse(fs.readFileSync(path.join(run.root, "logs", "query", "options.json"), "utf8")).input;
+  assert.ok(input.waitMs > 0 && input.waitMs < 300_000);
+});
+
 test("without a named agent there is nothing to run; an unknown agent names what the host has", async () => {
   const run = caller(undefined);
   await assert.rejects(runAgent({ cwd: run.cwd, state: path.join(run.root, "state"), logs: path.join(run.root, "logs"), manifest: run.manifest, env: {} }), /No agent to run/);
