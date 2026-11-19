@@ -1,6 +1,13 @@
 // A test fixture extension: @fixture/hello.
 const fs = require("fs");
 const path = require("path");
+// The runtime registers only closed output schemas.
+const OPEN = { type: "object", additionalProperties: true };
+const OUTPUT = {
+  type: "object",
+  additionalProperties: false,
+  properties: { running: { type: "string" }, result: { type: "string" }, error: { type: "string" }, outputs: { type: "array", items: { type: "string" } }, details: OPEN, text: { type: "string" } },
+};
 // A prompt starting "slow" answers {running} first, the way a long run hands back a handle to poll.
 const waiting = new Map();
 const capabilities = {
@@ -23,7 +30,7 @@ const capabilities = {
 };
 module.exports = {
   activate() {
-    const descriptors = Object.keys(capabilities).map((name) => ({ protocolVersion: "1.0.0", name, version: "0.1.0", title: name, description: name, inputSchema: { type: "object" }, permissions: [{ permission: name, risk: "low" }] }));
+    const descriptors = Object.keys(capabilities).map((name) => ({ protocolVersion: "1.0.0", name, version: "0.1.0", title: name, description: name, inputSchema: { type: "object" }, outputSchema: OUTPUT, permissions: [{ permission: name, risk: "low" }] }));
     return {
       capabilityProviders: [{
         id: "@fixture/hello",
