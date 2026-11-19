@@ -72,9 +72,16 @@ A service (agent-sandbox, Marley) pins each extension to a published archive:
   "configuration": { "openaiApiKey": "${env:OPENAI_API_KEY}" } }
 ```
 
-The host downloads it with its own credentials: `gs://` through the Cloud Storage API with the metadata server's token
-(a Cloud Run or GKE service account), else the application default credentials (`gcloud auth application-default
-login`, `GOOGLE_APPLICATION_CREDENTIALS`); `https://` with a plain GET. The bytes must match `sha256`, then unpack into
+The host downloads it with its own credentials. `gs://` goes through the Cloud Storage API (read-only scope), signed
+in with, in order:
+
+1. the service account key in `$GOOGLE_APPLICATION_CREDENTIALS_JSON` (inline JSON: agent-sandbox loads
+   e2b-production's key there from Secret Manager), else a `service_account` file at `$GOOGLE_APPLICATION_CREDENTIALS`
+   (the same lookup as the Brain's `service-key` mode), exchanged for a token as a signed JWT;
+2. the metadata server's token (a Cloud Run, GKE or GCE service account);
+3. the application default credentials (`gcloud auth application-default login`, `GOOGLE_ACCESS_TOKEN`).
+
+`https://` is a plain GET. The bytes must match `sha256`, then unpack into
 the cache (`$MARSHAL_SDK_CACHE`, default `.marshal-sdk/extensions` beside the manifest) under that hash, so a repeat
 start reads nothing over the network. `marshal-sdk extensions fetch` fills the cache while an image builds.
 

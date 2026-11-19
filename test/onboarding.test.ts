@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createVerify, generateKeyPairSync } from "node:crypto";
+import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,9 +16,11 @@ import {
   dependencyOrder,
   entryFromSpec,
   extractTgz,
+  googleStorageToken,
   parseManifest,
   readManifest,
   resolveManifest,
+  serviceAccountKeySource,
   unmetRequirements,
   writeManifest,
   type ExtensionResolver,
@@ -520,4 +523,49 @@ test("check passes a service Brain with no person, with one warning and no Brain
   assert.equal(named.brain?.reachable, false);
   const overridden = await checkManifest({ manifest: file, person: "omer@zyg.com", env: { ...env, MARSHAL_BRAIN_PERSON: "ops@zyg.com" } });
   assert.equal(overridden.brain?.person, "omer@zyg.com", "--person (user=) comes before brain.person");
+});
+
+test("a gs:// package is read with the host's service account key (inline, then the file), signed as a JWT bearer grant", async () => {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const seen: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      const form = new URLSearchParams(body);
+      const [header, claims, signature] = (form.get("assertion") ?? "").split(".");
+      const valid = createVerify("RSA-SHA256").update(`${header}.${claims}`).verify(publicKey, Buffer.from(signature ?? "", "base64url"));
+      const decoded = JSON.parse(Buffer.from(claims ?? "", "base64url").toString()) as Record<string, unknown>;
+      seen.push({ grant: form.get("grant_type"), valid, ...decoded });
+      response.writeHead(valid ? 200 : 401, { "content-type": "application/json" });
+      response.end(JSON.stringify(valid ? { access_token: `token-for-${String(decoded.iss)}`, expires_in: 3600 } : { error: "invalid_grant" }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const tokenUri = `http://127.0.0.1:${(server.address() as { port: number }).port}/token`;
+    const key = (email: string) => ({ type: "service_account", client_email: email, private_key: privateKey.export({ type: "pkcs8", format: "pem" }), token_uri: tokenUri });
+    const root = scratch();
+    const keyFile = path.join(root, "sa.json");
+    fs.writeFileSync(keyFile, JSON.stringify(key("file@zyg-ecom-prod.iam.gserviceaccount.com")));
+    const userCredentials = path.join(root, "adc.json");
+    fs.writeFileSync(userCredentials, JSON.stringify({ type: "authorized_user" }));
+
+    const inline = JSON.stringify(key("e2b-production@zyg-ecom-prod.iam.gserviceaccount.com"));
+    assert.equal(await googleStorageToken({ GOOGLE_APPLICATION_CREDENTIALS_JSON: inline, GOOGLE_APPLICATION_CREDENTIALS: keyFile }), "token-for-e2b-production@zyg-ecom-prod.iam.gserviceaccount.com");
+    assert.equal(await googleStorageToken({ GOOGLE_APPLICATION_CREDENTIALS: keyFile }), "token-for-file@zyg-ecom-prod.iam.gserviceaccount.com");
+    assert.deepEqual(
+      seen.map((claims) => [claims.grant, claims.valid, claims.scope, claims.aud]),
+      [
+        ["urn:ietf:params:oauth:grant-type:jwt-bearer", true, "https://www.googleapis.com/auth/devstorage.read_only", tokenUri],
+        ["urn:ietf:params:oauth:grant-type:jwt-bearer", true, "https://www.googleapis.com/auth/devstorage.read_only", tokenUri],
+      ],
+    );
+    // The same lookup the Brain's service-key mode uses; a person's ADC file is not a key.
+    assert.deepEqual(serviceAccountKeySource({ GOOGLE_APPLICATION_CREDENTIALS: userCredentials }), undefined);
+    assert.equal(brainKitOptions({ auth: "service" }, "m.json", { GOOGLE_APPLICATION_CREDENTIALS: keyFile }).callerMode, "service-key");
+    await assert.rejects(googleStorageToken({ GOOGLE_APPLICATION_CREDENTIALS_JSON: "{not json" }), /\$GOOGLE_APPLICATION_CREDENTIALS_JSON is not a service_account key/);
+  } finally {
+    server.close();
+  }
 });
