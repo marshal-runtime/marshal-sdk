@@ -123,6 +123,26 @@ def test_the_person_is_the_options_user_email_never_an_os_user(monkeypatch):
     assert marshal_sdk.on_marshal(ClaudeAgentOptions(user="omer@zyg.com")).user is None
 
 
+def test_the_host_gets_the_service_key_the_caller_blanked_for_its_tools_as_a_private_file(monkeypatch):
+    key = '{"type": "service_account", "client_email": "e2b-production@zyg-ecom-prod.iam.gserviceaccount.com"}'
+    monkeypatch.setenv(page_studio.SERVICE_KEY_JSON_ENV_VAR, key)
+    monkeypatch.delenv(page_studio.SERVICE_KEY_PATH_ENV_VAR, raising=False)
+    blanked = {"ANTHROPIC_API_KEY": "", page_studio.SERVICE_KEY_JSON_ENV_VAR: "", page_studio.SERVICE_KEY_PATH_ENV_VAR: ""}
+    env = page_studio.host_env(ClaudeAgentOptions(env=blanked))
+    folder = page_studio.hand_service_key(env)
+    try:
+        assert folder is not None
+        handed = Path(env[page_studio.SERVICE_KEY_FILE_ENV_VAR])
+        assert handed.parent == folder and handed.read_text(encoding="utf-8") == key
+        assert handed.stat().st_mode & 0o777 == 0o600
+        assert env[page_studio.SERVICE_KEY_JSON_ENV_VAR] == "" and env[page_studio.SERVICE_KEY_PATH_ENV_VAR] == ""
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+    kept = page_studio.host_env(ClaudeAgentOptions())
+    assert page_studio.hand_service_key(kept) is None and page_studio.SERVICE_KEY_FILE_ENV_VAR not in kept
+
+
 def test_state_key_is_stamped_once_and_read_back():
     html = "<!doctype html><html><head><title>x</title></head><body></body></html>"
     once = page_studio.stamp_state_key(html, "a1")

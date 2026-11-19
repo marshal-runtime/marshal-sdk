@@ -16,11 +16,13 @@ import {
   dependencyOrder,
   entryFromSpec,
   extractTgz,
+  forgetHandedServiceKey,
   googleStorageToken,
   parseManifest,
   readManifest,
   resolveManifest,
   serviceAccountKeySource,
+  SERVICE_KEY_FILE_ENV,
   unmetRequirements,
   writeManifest,
   type ExtensionResolver,
@@ -487,6 +489,26 @@ test("auth service signs with a service account key when the host has one (E2B),
   const configuration = brainConfiguration({ brain: { ...options, callerEmail: "omer@zyg.com" }, workspaceName: "ws", memoryWrites: false });
   assert.equal(configuration.cloudCallerMode, "service-key");
   assert.equal(configuration.cloudCredentialsFile, serviceKey);
+});
+
+test("a key file handed by marshal_sdk signs the Brain in when the caller blanked the key for its agent's tools", () => {
+  const root = scratch();
+  const file = path.join(root, "marshal-sdk.json");
+  const serviceKey = path.join(root, "service-key.json");
+  fs.writeFileSync(serviceKey, JSON.stringify({ type: "service_account", client_email: "e2b-production@zyg-ecom-prod.iam.gserviceaccount.com" }));
+  const blanked = { GOOGLE_APPLICATION_CREDENTIALS_JSON: "", GOOGLE_APPLICATION_CREDENTIALS: "", [SERVICE_KEY_FILE_ENV]: serviceKey };
+  assert.deepEqual(serviceAccountKeySource(blanked), { file: serviceKey });
+  const options = brainKitOptions({ auth: "service" }, file, blanked);
+  assert.deepEqual([options.callerMode, options.credentialsFile], ["service-key", serviceKey]);
+  const adc = path.join(root, "adc.json");
+  fs.writeFileSync(adc, JSON.stringify({ type: "authorized_user" }));
+  assert.equal(brainKitOptions({ auth: "service" }, file, { [SERVICE_KEY_FILE_ENV]: adc }).callerMode, "delegated", "only a service_account key");
+  const inline = brainKitOptions({ auth: "service" }, file, { ...blanked, GOOGLE_APPLICATION_CREDENTIALS_JSON: '{"type":"service_account"}' });
+  assert.deepEqual([inline.callerMode, inline.credentialsFile], ["service-key", undefined], "an inline key the caller left wins");
+
+  const env: Record<string, string | undefined> = { ...blanked };
+  forgetHandedServiceKey(env, undefined);
+  assert.equal(SERVICE_KEY_FILE_ENV in env, false);
 });
 
 test("brain.person is the fallback person: an email or ${env:NAME}; unset means none, never an error", async () => {

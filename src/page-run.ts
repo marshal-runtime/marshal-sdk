@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import type { QueryFn } from "./agent-port.js";
 import type { KitOptions, KitSelection, SessionsPublishOptions } from "./kit/index.js";
 import { manifestPath } from "./onboarding-cli.js";
-import { MANIFEST_FILE, resolveManifest } from "./onboarding.js";
+import { forgetHandedServiceKey, MANIFEST_FILE, resolveManifest } from "./onboarding.js";
 import { cloudRunLayer } from "./prompt-cloud.js";
 import { desktopSurface } from "./prompt-desktop.js";
 import { turnSessions, writeRunLogs, type RunSummaryJson } from "./run-contract.js";
@@ -1066,6 +1066,7 @@ export async function pageHost(
     );
   }
   const resolved = await resolveManifest(file, { env });
+  forgetHandedServiceKey(env, process.env);
   if (!resolved.extensions.some((extension) => extension.identity === PAGE_STUDIO)) {
     throw new Error(`${file} does not list ${PAGE_STUDIO}, so this host cannot build pages; add it to its extensions.`);
   }
