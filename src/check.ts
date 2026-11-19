@@ -28,6 +28,8 @@ export interface CheckReport {
   model?: string;
   effort?: string;
   problems: string[];
+  /** What the host will run without (a service Brain sign-in with no person); the manifest still passes. */
+  warnings: string[];
 }
 
 export interface CheckOptions {
@@ -43,7 +45,7 @@ export interface CheckOptions {
 export async function checkManifest(options: CheckOptions = {}): Promise<CheckReport> {
   const env = options.env ?? process.env;
   const log = options.log ?? (() => undefined);
-  const report: CheckReport = { ok: false, extensions: [], problems: [] };
+  const report: CheckReport = { ok: false, extensions: [], problems: [], warnings: [] };
   const file = manifestPath(options.manifest, env);
   if (!file) {
     report.problems.push("No marshal-sdk.json: pass --manifest <file> or set MARSHAL_SDK_MANIFEST.");
@@ -83,7 +85,9 @@ export async function checkManifest(options: CheckOptions = {}): Promise<CheckRe
     const mode = kit?.brain?.callerMode ?? "desktop";
     report.brain = { index: "zyg", auth: mode === "desktop" ? "person" : "service", mode };
   }
-  if (report.brain && person) report.brain.person = person;
+  // The person: --person or $MARSHAL_SDK_BRAIN_CALLER, else the manifest's brain.person.
+  const effectivePerson = kit?.brain?.callerEmail;
+  if (report.brain && effectivePerson) report.brain.person = effectivePerson;
 
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-check-"));
   const { createMarshalHost } = await import("./host.js");
@@ -105,7 +109,9 @@ export async function checkManifest(options: CheckOptions = {}): Promise<CheckRe
       log,
     });
     log(`host started: ${host.extensions.map((extension) => `${extension.identity}@${extension.version}`).join(", ")}`);
-    if (brainOn && options.pingBrain !== false && report.brain) {
+    report.warnings.push(...host.warnings);
+    // A host running without the Brain (no person for a service sign-in) has nothing to ask it.
+    if (brainOn && !host.warnings.length && options.pingBrain !== false && report.brain) {
       try {
         await host.invoke("knowledge.search", { query: "marshal-sdk check", limit: 1 });
         report.brain.reachable = true;

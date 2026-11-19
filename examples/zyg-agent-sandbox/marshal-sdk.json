@@ -3,7 +3,7 @@
   "model": "claude-opus-5-5",
   "reasoningEffort": "xhigh",
   "kit": ["brain", "memory", "sessions"],
-  "brain": { "index": "zyg", "auth": "service" },
+  "brain": { "index": "zyg", "auth": "service", "person": "${env:MARSHAL_BRAIN_PERSON}" },
   "extensions": [
     {
       "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.2.0.tgz",

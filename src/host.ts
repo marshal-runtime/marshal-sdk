@@ -302,6 +302,8 @@ export interface MarshalHostBrowser {
 
 export interface MarshalHost {
   readonly runId: string;
+  /** What this host runs without that it was asked for (a service Brain sign-in with no person), one line each. */
+  readonly warnings: readonly string[];
   readonly sessions: SessionStore;
   readonly agents: ClaudeAgentPort;
   /** Forks of this host's sessions: fork, list, message; each fork reports to its parent when it goes idle. */
@@ -389,7 +391,10 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     return brainInvoke(capability, input);
   };
   const kitSelection = normalizeKit(options.kit);
-  const kitMemory = kitSelection?.parts.includes("memory") === true;
+  const kit = kitSelection ? prepareKit({ kit: kitSelection, sessions, workspacePath, workspaceName }) : undefined;
+  const warnings: string[] = kit?.warning ? [kit.warning] : [];
+  for (const warning of warnings) log(`WARNING ${warning}`);
+  const kitMemory = kit?.parts.has("memory") === true;
   const kitStores = companyBrainStores(brainCall, {
     workspace: workspaceName,
     personEmail: options.memory?.personEmail ?? kitSelection?.brain?.callerEmail,
@@ -402,8 +407,6 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     sessions,
   );
   const runRecordsPublisher = options.runRecords ? new RunRecordsPublisher({ log, ...options.runRecords, store: sessions }) : undefined;
-  const kitOptions = normalizeKit(options.kit);
-  const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath, workspaceName }) : undefined;
   // Fails before anything starts when a listed package is missing or is not an extension, naming it; then names every
   // dependency or required setting the extensions declare and this host does not give, in one error.
   const extensions = dependencyOrder([...(kit?.extensions ?? []), ...(options.extensions ?? [])]);
@@ -833,6 +836,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   telemetry("host.started", { runId, extensions: extensionStates.length, provider: provider?.id ?? "test", runtimeRoot: runtimeRoot !== undefined });
   return {
     runId,
+    warnings,
     sessions,
     agents,
     forks,

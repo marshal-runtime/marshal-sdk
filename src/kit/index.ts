@@ -72,6 +72,8 @@ export interface PreparedKit {
   promptSection?: { id: string; text: string };
   /** The host shares each session to the Brain's session index after every finished turn (`kit.sessions.publish`). */
   publishes: boolean;
+  /** Why the kit runs without a part it was asked for (a service sign-in with no person): the host logs it once. */
+  warning?: string;
   /** Hand the kit the runtime's kernel once it exists; kit capabilities call the Brain through it. */
   bind(kernel: KernelLike): void;
 }
@@ -94,13 +96,19 @@ export function prepareKit(input: {
   env?: NodeJS.ProcessEnv;
 }): PreparedKit {
   const { kit } = input;
-  const requested = new Set(kit.parts);
+  const brain = kit.brain ?? {};
+  // A service signs in as itself and the Brain answers for the person each run names; with no person every Brain call
+  // is refused, so the run goes on without the Brain's parts. The package still loads: extensions may depend on it.
+  const signsAsService = brain.callerMode === "delegated" || brain.callerMode === "service-key";
+  const asked = new Set(kit.parts);
+  const personless = signsAsService && !brain.callerEmail?.trim() && (asked.has("brain") || asked.has("memory"));
+  const requested = personless ? new Set([...asked].filter((part) => part !== "brain" && part !== "memory")) : asked;
   // Memory lives in the Brain's graph; it cannot exist without the Brain.
   const brainOn = requested.has("brain") || requested.has("memory");
+  const brainLoaded = brainOn || personless;
   const parts = new Set<KitPart>([...requested, ...(brainOn ? (["brain"] as const) : [])]);
   if (parts.has("knowledge") && !kit.knowledge) throw new Error("The kit part knowledge needs kit.knowledge: { provider, scope }.");
   if (parts.has("knowledge") && brainOn) throw new Error("The kit parts knowledge and brain/memory both serve knowledge.search; choose one.");
-  const brain = kit.brain ?? {};
   // Any session writes memory nodes at once when the kit carries memory: nobody approves them (Omer, 2026-11-17).
   const memoryWrites = parts.has("memory");
   const publishes = parts.has("sessions") && brainOn && publishOptions(kit.sessions) !== undefined;
@@ -110,7 +118,7 @@ export function prepareKit(input: {
   let kernel: KernelLike | undefined;
   const call = brainOn ? kernelCall(() => kernel) : undefined;
 
-  const extensions = brainOn
+  const extensions = brainLoaded
     ? [
         {
           packageRoot: brainPackageRoot(brain, input.env),
@@ -134,6 +142,7 @@ export function prepareKit(input: {
   }
 
   const denied = new Set<string>([
+    ...(personless ? PERSONLESS_DENIED : []),
     ...(memoryWrites ? [] : BRAIN_WRITE_CAPABILITIES.memory),
     ...(ingest ? [] : [...BRAIN_WRITE_CAPABILITIES.sessions, "sessions.share"]),
     ...(feedback ? [] : BRAIN_WRITE_CAPABILITIES.feedback),
@@ -147,18 +156,29 @@ export function prepareKit(input: {
   return {
     parts,
     extensions,
-    codeIntelligence: brainOn,
+    codeIntelligence: brainLoaded,
     claims,
     providerSources,
     permissionBroker: kitPermissionBroker(denied),
     denied,
     promptSection: kitPrompt(parts, { memoryWrites, ingest, publishes }),
     publishes,
+    ...(personless
+      ? {
+          warning: `the Brain signs in as the service (${brain.callerMode}) and this run names no person (user=, $MARSHAL_SDK_BRAIN_CALLER or the manifest's brain.person), so it runs without the Brain: no knowledge, memory or published sessions.`,
+        }
+      : {}),
     bind(next) {
       kernel = next;
     },
   };
 }
+
+/**
+ * The Brain's own calls, refused on a host that runs without the Brain (entries ending in "." are prefixes). Not
+ * `sessions.`: the kit's local session search answers there; the Brain's session writes are refused below already.
+ */
+const PERSONLESS_DENIED = ["knowledge.", "memory.", "graph."];
 
 /**
  * An unattended host has nobody to approve, so everything installed is allowed except the writes the kit
@@ -168,6 +188,13 @@ export function kitPermissionBroker(denied: ReadonlySet<string>, inner: Permissi
   return {
     decide(check) {
       const name = check.capability.name;
+      if ([...denied].some((entry) => entry.endsWith(".") && name.startsWith(entry))) {
+        return {
+          decision: "deny",
+          code: "kit_no_person",
+          reason: `${name}: this run names no person for the Brain (user=, $MARSHAL_SDK_BRAIN_CALLER or the manifest's brain.person), so it runs without the Brain.`,
+        };
+      }
       if (denied.has(name)) {
         return {
           decision: "deny",

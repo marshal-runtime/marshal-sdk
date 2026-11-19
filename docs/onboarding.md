@@ -101,7 +101,7 @@ Extensions load in dependency order.
 ## The Brain: `brain`
 
 ```json
-"brain": { "index": "zyg", "auth": "service" }
+"brain": { "index": "zyg", "auth": "service", "person": "${env:MARSHAL_BRAIN_PERSON}" }
 ```
 
 - `index` names the Brain (default `zyg`, ZyG's company Brain). The SDK maps a name to its address (`BRAIN_INDEXES`
@@ -116,6 +116,12 @@ Extensions load in dependency order.
   - otherwise the metadata server's identity (Cloud Run, GKE, a GCE VM): `delegated` mode.
 
   `check` reports the mode it chose (`brain.mode`). The Brain front must allow the service account.
+- `person` (auth `"service"`): the person a run works for when it names none, an email or `"${env:NAME}"`. The run's
+  own person comes first: Python's `user=` (`--person`), then `$MARSHAL_SDK_BRAIN_CALLER`, then `brain.person`. An
+  unset variable means no person. A service sign-in with no person runs without the Brain: the `@marshal/brain`
+  package still loads (extensions may depend on it), its `knowledge.`, `memory.` and `graph.` calls are refused
+  (`kit_no_person`), memory and session publishing are off, and the host says so once (a `WARNING` log line, the
+  run summary's `warnings`, `check`'s `warnings`; `check` and `init` still pass).
 - A `brain` block turns the kit's Brain on. The old knobs (`MARSHAL_SDK_BRAIN_URL` and friends, a kit object's
   `brain` options) still override it.
 
@@ -133,7 +139,7 @@ any problem:
 { "ok": true, "manifest": "/srv/marshal-sdk.json",
   "extensions": [{ "identity": "@zyg/page-studio", "version": "0.2.0", "source": "url", "from": "gs://…", "origin": "listed" }],
   "brain": { "index": "zyg", "url": "https://…", "auth": "service", "reachable": true },
-  "model": "claude-opus-5-5", "effort": "xhigh", "problems": [] }
+  "model": "claude-opus-5-5", "effort": "xhigh", "problems": [], "warnings": [] }
 ```
 
 Python's `marshal_sdk.init(path)` runs it once at a service's start and raises `MarshalInitError` with the problems.

@@ -275,3 +275,32 @@ test("a host with kit ['sessions'] serves sessions.search and tells sessions abo
     await host.dispose();
   }
 });
+
+test("a service sign-in with no person runs without the Brain: the package stays for its dependents, its calls are refused, one warning", async () => {
+  const { root, store } = tempStore();
+  const packageRoot = brainPackage(root);
+  for (const callerMode of ["delegated", "service-key"] as const) {
+    const kit = prepareKit({
+      kit: { parts: ["brain", "memory", "sessions"], brain: { packageRoot, callerMode }, sessions: { publish: true } },
+      sessions: store,
+      workspacePath: "/w/zyg",
+    });
+    assert.deepEqual([...kit.parts], ["sessions"], callerMode);
+    assert.equal(kit.extensions[0]!.packageRoot, packageRoot, "Page Studio depends on @marshal/brain: it still loads");
+    assert.equal(kit.extensions[0]!.configuration.memoryRoute, undefined, "no memory writes");
+    assert.equal(kit.publishes, false);
+    assert.deepEqual(kit.claims, {});
+    assert.match(kit.warning ?? "", /names no person \(user=, \$MARSHAL_SDK_BRAIN_CALLER or the manifest's brain\.person\), so it runs without the Brain/);
+    const decide = (name: string) => kit.permissionBroker.decide({ capability: { name }, request: {}, context, requirements: [] } as never);
+    for (const name of ["knowledge.search", "memory.search", "graph.query"]) {
+      const decision = await decide(name);
+      assert.deepEqual([decision.decision, (decision as { code?: string }).code], ["deny", "kit_no_person"], name);
+    }
+    assert.equal((await decide("sessions.search")).decision, "allow", "the host's own session search stays");
+  }
+  const named = prepareKit({ kit: { parts: ["brain", "memory"], brain: { packageRoot, callerMode: "service-key", callerEmail: "Omer@zyg.com" } }, sessions: store, workspacePath: "/w/zyg" });
+  assert.deepEqual([...named.parts].sort(), ["brain", "memory"]);
+  assert.equal(named.warning, undefined);
+  const desktop = prepareKit({ kit: { parts: ["brain"], brain: { packageRoot } }, sessions: store, workspacePath: "/w/zyg" });
+  assert.equal(desktop.warning, undefined, "a person's own sign-in names the person itself");
+});

@@ -22,7 +22,7 @@ The SDK hardwires no extension: Page Studio loads because the file lists it. age
   "model": "claude-opus-5-5",
   "reasoningEffort": "xhigh",
   "kit": ["brain", "memory", "sessions"],
-  "brain": { "index": "zyg", "auth": "service" },
+  "brain": { "index": "zyg", "auth": "service", "person": "${env:MARSHAL_BRAIN_PERSON}" },
   "extensions": [
     {
       "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.2.0.tgz",
@@ -61,7 +61,8 @@ mode the Brain's caller), lower-cased, never taken from model input. With `"auth
 the sandbox's service account key (`$GOOGLE_APPLICATION_CREDENTIALS_JSON` or the file `$GOOGLE_APPLICATION_CREDENTIALS`
 names), else the metadata server. `claude_agent_sdk` spawns its CLI as the OS user
 `user` names, so marshal_sdk clears an email there before spawning; a plain OS user name passes through unchanged.
-`MARSHAL_SDK_BRAIN_CALLER` is the fallback when no email is given.
+`MARSHAL_SDK_BRAIN_CALLER` comes next, then the manifest's `brain.person`. With no person, a service sign-in runs
+without the Brain and `init` logs one warning (logger `marshal_sdk`); it does not fail.
 
 ## What the package carries
 

@@ -66,7 +66,7 @@ def test_page_studio_answers_only_when_the_manifest_lists_it_and_claude_opts_out
     assert not page_studio.routes(ClaudeAgentOptions())
 
 
-def test_init_proves_the_manifest_once_and_names_every_problem(tmp_path, monkeypatch):
+def test_init_proves_the_manifest_once_and_names_every_problem(tmp_path, monkeypatch, caplog):
     import subprocess
 
     declared = tmp_path / "marshal-sdk.json"
@@ -89,6 +89,12 @@ def test_init_proves_the_manifest_once_and_names_every_problem(tmp_path, monkeyp
     assert manifest.find() == declared.resolve()
     # Routing reads the checked report: no second check.
     assert manifest.lists(declared.resolve(), manifest.PAGE_STUDIO) and len(calls) == 1
+
+    manifest.reset()
+    answer.update(warnings=["the Brain signs in as the service (service-key) and this run names no person"])
+    with caplog.at_level("WARNING", logger="marshal_sdk"):
+        assert marshal_sdk.init(declared)["ok"]
+    assert [record.getMessage() for record in caplog.records] == ["marshal-sdk: the Brain signs in as the service (service-key) and this run names no person"]
 
     manifest.reset()
     answer.update(ok=False, problems=["@zyg/page-studio@0.2.0 needs the extension @marshal/brain", "environment variable OPENAI_API_KEY is not set"])
