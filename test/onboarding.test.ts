@@ -439,7 +439,7 @@ test("the sample agent-sandbox manifest is valid and names no Brain address", ()
   const file = path.join(import.meta.dirname, "..", "..", "examples", "zyg-agent-sandbox", "marshal-sdk.json");
   const sample = fs.existsSync(file) ? file : path.join(import.meta.dirname, "..", "examples", "zyg-agent-sandbox", "marshal-sdk.json");
   const manifest = readManifest(sample);
-  assert.deepEqual(manifest.brain, { index: "zyg", auth: "service" });
+  assert.deepEqual(manifest.brain, { index: "zyg", auth: "service", person: "${env:MARSHAL_BRAIN_PERSON}" });
   assert.match(manifest.extensions[0]!.url ?? "", /^gs:\/\/shop-builder-local-runs\/marshal-extensions\/@zyg\/page-studio\/\d+\.\d+\.\d+\.tgz$/);
   assert.equal(brainKitOptions(manifest.brain!, sample, {}).callerMode, "delegated");
   assert.equal(brainKitOptions(manifest.brain!, sample, { GOOGLE_APPLICATION_CREDENTIALS_JSON: '{"type":"service_account"}' }).callerMode, "service-key");
@@ -484,4 +484,40 @@ test("auth service signs with a service account key when the host has one (E2B),
   const configuration = brainConfiguration({ brain: { ...options, callerEmail: "omer@zyg.com" }, workspaceName: "ws", memoryWrites: false });
   assert.equal(configuration.cloudCallerMode, "service-key");
   assert.equal(configuration.cloudCredentialsFile, serviceKey);
+});
+
+test("brain.person is the fallback person: an email or ${env:NAME}; unset means none, never an error", async () => {
+  const root = scratch();
+  const file = path.join(root, "marshal-sdk.json");
+  const service = { auth: "service" as const };
+  assert.equal(brainKitOptions({ ...service, person: "Ops@Zyg.com" }, file, {}).callerEmail, "ops@zyg.com");
+  assert.equal(brainKitOptions({ ...service, person: "${env:MARSHAL_BRAIN_PERSON}" }, file, { MARSHAL_BRAIN_PERSON: " Bar@zyg.com " }).callerEmail, "bar@zyg.com");
+  assert.equal(brainKitOptions({ ...service, person: "${env:MARSHAL_BRAIN_PERSON}" }, file, {}).callerEmail, undefined);
+  assert.throws(() => parseManifest({ version: 1, brain: { auth: "service", person: "not an email" } }, file), /person/);
+  const brain = fixture(root, "@marshal/brain", "0.4.0");
+  writeManifest(file, { version: 1, defaults: false, kit: ["brain"], brain: { auth: "service", person: "${env:MARSHAL_BRAIN_PERSON}" }, extensions: [] });
+  const resolved = await resolveManifest(file, { env: { MARSHAL_SDK_BRAIN_PACKAGE: brain } });
+  assert.equal((resolved.kit as { brain: { callerEmail?: string } }).brain.callerEmail, undefined, "an unset variable is no person, not a missing setting");
+});
+
+test("check passes a service Brain with no person, with one warning and no Brain call; with a person it asks the Brain", async () => {
+  const root = scratch();
+  const brain = fixture(root, "@marshal/brain", "0.4.0");
+  const file = path.join(root, "marshal-sdk.json");
+  writeManifest(file, { version: 1, defaults: false, kit: ["brain", "memory"], brain: { auth: "service", person: "${env:MARSHAL_BRAIN_PERSON}" }, extensions: [] });
+  const env = { MARSHAL_SDK_BRAIN_PACKAGE: brain, GOOGLE_APPLICATION_CREDENTIALS_JSON: '{"type":"service_account"}' };
+  const personless = await checkManifest({ manifest: file, env });
+  assert.deepEqual(personless.problems, []);
+  assert.equal(personless.ok, true);
+  assert.equal(personless.warnings.length, 1);
+  assert.match(personless.warnings[0]!, /service-key\) and this run names no person/);
+  assert.equal(personless.brain?.reachable, undefined, "nothing to ask the Brain");
+  assert.equal(personless.brain?.mode, "service-key");
+  // The fixture Brain has no knowledge.search: asking it is a problem, which shows the call is made with a person.
+  const named = await checkManifest({ manifest: file, env: { ...env, MARSHAL_BRAIN_PERSON: "Ops@zyg.com" } });
+  assert.deepEqual(named.warnings, []);
+  assert.equal(named.brain?.person, "ops@zyg.com");
+  assert.equal(named.brain?.reachable, false);
+  const overridden = await checkManifest({ manifest: file, person: "omer@zyg.com", env: { ...env, MARSHAL_BRAIN_PERSON: "ops@zyg.com" } });
+  assert.equal(overridden.brain?.person, "omer@zyg.com", "--person (user=) comes before brain.person");
 });

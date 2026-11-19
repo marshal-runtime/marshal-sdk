@@ -14,6 +14,7 @@ process's working folder, else beside the agent's working folder.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -27,6 +28,7 @@ MANIFEST_FILE = "marshal-sdk.json"
 MANIFEST_ENV_VAR = "MARSHAL_SDK_MANIFEST"
 PAGE_STUDIO = "@zyg/page-studio"
 CHECK_TIMEOUT_S = 600
+LOG = logging.getLogger("marshal_sdk")
 
 _state: dict[str, Any] = {"manifest": None, "reports": {}}
 
@@ -86,6 +88,9 @@ def check(path: Path, *, ping_brain: bool, person: str | None = None) -> dict[st
         raise MarshalInitError([f"marshal-sdk check exited with {done.returncode} and no report: {' | '.join(tail)}"]) from None
     if done.returncode != 0 or not report.get("ok"):
         raise MarshalInitError([str(problem) for problem in report.get("problems") or ["marshal-sdk check failed"]], report)
+    # What the host runs without (a service Brain sign-in with no person): said once per file version.
+    for warning in report.get("warnings") or []:
+        LOG.warning("marshal-sdk: %s", warning)
     _state["reports"][key] = report
     return report
 

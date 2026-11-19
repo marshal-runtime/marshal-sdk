@@ -25,6 +25,7 @@ const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]{1,64})?$/;
 const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 20_000;
 const ENV_REFERENCE = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 /** One extension in the manifest: exactly one of `path`, `archive`, `url` or `id`. */
 export interface ManifestExtension {
@@ -83,6 +84,11 @@ export interface ManifestBrain {
   audience?: string;
   /** auth "service": the service account key file (relative to the manifest); default: the environment's key, else the metadata server. */
   credentialsFile?: string;
+  /**
+   * The person a run works for when it names none (Python `user=`, `--person`, $MARSHAL_SDK_BRAIN_CALLER all come
+   * first): an email or `${env:NAME}`. An unset variable means no person; a service sign-in then runs without the Brain.
+   */
+  person?: string;
 }
 
 export interface SdkManifest {
@@ -280,7 +286,7 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
   let brain: ManifestBrain | undefined;
   if (root.brain !== undefined) {
     const value = record(root.brain);
-    const fields = ["index", "auth", "url", "audience", "credentialsFile"];
+    const fields = ["index", "auth", "url", "audience", "credentialsFile", "person"];
     if (
       !value ||
       Object.keys(value).some((key) => !fields.includes(key)) ||
@@ -288,11 +294,12 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
       (value.auth !== undefined && value.auth !== "person" && value.auth !== "service") ||
       (value.url !== undefined && (typeof value.url !== "string" || !value.url.startsWith("https://"))) ||
       (value.audience !== undefined && typeof value.audience !== "string") ||
-      (value.credentialsFile !== undefined && (typeof value.credentialsFile !== "string" || value.auth !== "service"))
+      (value.credentialsFile !== undefined && (typeof value.credentialsFile !== "string" || value.auth !== "service")) ||
+      (value.person !== undefined && (typeof value.person !== "string" || !(ENV_REFERENCE.test(value.person) || EMAIL.test(value.person.trim()))))
     ) {
       throw new OnboardingError(
         "manifest-invalid",
-        `${file}: brain is {"index"?: "zyg" | <brain name>, "auth"?: "person" | "service", "url"?: "https://…", "audience"?: string, "credentialsFile"?: <key file, with auth "service">}.`,
+        `${file}: brain is {"index"?: "zyg" | <brain name>, "auth"?: "person" | "service", "url"?: "https://…", "audience"?: string, "credentialsFile"?: <key file, with auth "service">, "person"?: <email> | "\${env:NAME}"}.`,
       );
     }
     brain = value as ManifestBrain;
@@ -728,7 +735,8 @@ export function brainKitOptions(brain: ManifestBrain, file = MANIFEST_FILE, env:
       `${file}: no Brain named "${index}" (known: ${Object.keys(BRAIN_INDEXES).join(", ")}); give its address as brain.url.`,
     );
   }
-  const options = { cloudUrl: url, cloudAudience: brain.audience ?? url };
+  const person = manifestPerson(brain.person, env);
+  const options = { cloudUrl: url, cloudAudience: brain.audience ?? url, ...(person ? { callerEmail: person } : {}) };
   if (brain.auth !== "service") return { ...options, callerMode: "desktop" };
   if (brain.credentialsFile) {
     const keyFile = path.resolve(path.dirname(path.resolve(file)), brain.credentialsFile);
@@ -737,6 +745,14 @@ export function brainKitOptions(brain: ManifestBrain, file = MANIFEST_FILE, env:
   }
   const environmentKey = Boolean(env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim()) || (env.GOOGLE_APPLICATION_CREDENTIALS ? isServiceAccountKey(env.GOOGLE_APPLICATION_CREDENTIALS) : false);
   return { ...options, callerMode: environmentKey ? "service-key" : "delegated" };
+}
+
+/** brain.person with its ${env:NAME} read; an unset variable or a value that is not an email is no person. */
+function manifestPerson(value: string | undefined, env: Record<string, string | undefined>): string | undefined {
+  if (!value) return undefined;
+  const match = ENV_REFERENCE.exec(value);
+  const person = (match ? env[match[1]!] : value)?.trim().toLowerCase();
+  return person && EMAIL.test(person) ? person : undefined;
 }
 
 function isServiceAccountKey(file: string): boolean {

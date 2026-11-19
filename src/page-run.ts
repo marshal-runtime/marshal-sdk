@@ -268,7 +268,8 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
       reply,
       sections: finished?.sections ?? [],
       assets: finished?.assets.length ?? 0,
-      warnings,
+      // The host's own warnings (it logged them at start) lead the run's.
+      warnings: [...host.warnings, ...warnings],
       shots,
     },
   });
@@ -442,7 +443,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
     error: failure,
     requiredSkills: [],
     usedSkills,
-    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, profiles, request: options.request, route, reply, skills: usedSkills, sections: finished?.sections ?? [], shots, ...(editWarnings.length || shotsError ? { warnings: [...editWarnings, ...(shotsError ? [shotsError] : [])] } : {}) },
+    marshal: { runId: host.runId, engine: "page-studio", job: "edit", pageId, pageStudio: build, profiles, request: options.request, route, reply, skills: usedSkills, sections: finished?.sections ?? [], shots, ...(host.warnings.length || editWarnings.length || shotsError ? { warnings: [...host.warnings, ...editWarnings, ...(shotsError ? [shotsError] : [])] } : {}) },
   });
   if (record) {
     writePageRunRecord(state, { ...record, edits: [...(record.edits ?? []), { at: new Date().toISOString(), request: options.request, runId: host.runId, ...(failure ? { error: failure } : {}) }] });

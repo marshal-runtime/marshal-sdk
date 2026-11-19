@@ -448,3 +448,19 @@ test("a page host is what marshal-sdk.json declares: Page Studio only when liste
   assert.equal(declared.kit?.brain?.callerMode, "delegated");
   assert.equal(declared.kit?.brain?.callerEmail, "omer@zyg.com");
 });
+
+test("the run's person: --person (Python user=) first, then $MARSHAL_SDK_BRAIN_CALLER, then the manifest's brain.person", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "page-person-"));
+  const manifest = path.join(root, "marshal-sdk.json");
+  const studio = extensionPackage("@zyg/page-studio", "0.2.0");
+  fs.writeFileSync(
+    manifest,
+    JSON.stringify({ version: 1, defaults: false, kit: ["brain"], brain: { auth: "service", person: "${env:MARSHAL_BRAIN_PERSON}" }, extensions: [{ path: studio }] }),
+  );
+  const env = { MARSHAL_SDK_BRAIN_PACKAGE: BRAIN_STUB, MARSHAL_BRAIN_PERSON: "Fallback@zyg.com" };
+  const person = async (given: { person?: string; env: Record<string, string | undefined> }) => (await pageHost({ manifest, ...given })).kit?.brain?.callerEmail;
+  assert.equal(await person({ env }), "fallback@zyg.com");
+  assert.equal(await person({ env: { ...env, MARSHAL_SDK_BRAIN_CALLER: "Caller@zyg.com" } }), "caller@zyg.com");
+  assert.equal(await person({ person: "User@zyg.com", env: { ...env, MARSHAL_SDK_BRAIN_CALLER: "caller@zyg.com" } }), "user@zyg.com");
+  assert.equal(await person({ env: { MARSHAL_SDK_BRAIN_PACKAGE: BRAIN_STUB } }), undefined, "none: the host runs without the Brain and warns");
+});
