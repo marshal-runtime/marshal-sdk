@@ -21,7 +21,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import type { MarshalHost } from "./host.js";
 import { withManifest } from "./onboarding-cli.js";
-import { hostKit, kitArgument, pageKit, publishArgument } from "./page-run.js";
+import { hostKit, kitArgument, publishArgument, runKit } from "./run-kit.js";
 
 export const REAL_CLI_ENV = "MARSHAL_SDK_CLAUDE_CLI";
 export const STATE_ENV = "MARSHAL_SDK_STATE";
@@ -145,7 +145,7 @@ export async function runClaudeBridge(args: readonly string[], env: NodeJS.Proce
     },
     {},
   );
-  const kit = pageKit(declared.kit, undefined, undefined, person);
+  const kit = runKit(declared.kit, undefined, undefined, person);
   const host: MarshalHost = await createMarshalHost({ ...declared, ...(kit ? { kit } : {}) });
   const model = flag(args, "--model");
   const session = host.sessions.create({

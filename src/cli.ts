@@ -17,8 +17,9 @@ const USAGE = `marshal-sdk <command> [options]
               --capability <name> [--input <json | @file>]
   agent     Start one Marshal session with a task and print its last message.
               --task <text | @file> [--name <title>]
-  page-run  One Page Studio page from an agent-sandbox page-agent input folder, in its run contract.
-              --input <dir> --out <dir> --logs <dir> --state <dir> [--fake] (page-run --help for the rest)
+  agent-run One run of an agent an extension declares (contributes.agents), from a working folder.
+              --cwd <dir> --state <dir> --logs <dir> [--agent @scope/name[:id]] [--prompt <text | @file>] [--fake]
+              (agent-run --help for the rest)
   sessions  List or search the sessions a host wrote.
               --state <dir> [--search <words>] [--run <id>] [--transcript <session id>]
   serve     Serve a host over the link (docs/link.md) so another Marshal can watch and drive it.
@@ -26,7 +27,7 @@ const USAGE = `marshal-sdk <command> [options]
               Store-only (a finished run, no runtime): --store <state dir> [--native-root <claude dir>]...
               --token-file <file> or $MARSHAL_SDK_LINK_TOKEN (required, 16+ chars)
               [--bind <address>] (default 127.0.0.1) [--port <n>] (default 7781) [--files name=<dir>]...
-              [--page-studio-dir <dir>] serves the pages a run made there (default: $PAGE_STUDIO_DIR on a live host)
+              [--pages-dir <dir>] serves the pages a run's page editor made there (its data folder)
 
 ${ONBOARDING_USAGE}${CHECK_USAGE}
 Host options (exec, agent, serve):
@@ -133,14 +134,9 @@ function kitSelection(args: Arguments): KitOptions | undefined {
 async function main(): Promise<void> {
   // A manifest that names an org reaches it as the person who started the run (their token: MARSHAL_ORG_TOKEN_FILE).
   useExtensionResolver(personOrgResolver());
-  if (process.argv[2] === "page-edit") {
-    const { pageEditCommand } = await import("./page-run.js");
-    process.exitCode = await pageEditCommand(process.argv.slice(3));
-    return;
-  }
-  if (process.argv[2] === "page-run") {
-    const { pageRunCommand } = await import("./page-run.js");
-    process.exitCode = await pageRunCommand(process.argv.slice(3));
+  if (process.argv[2] === "agent-run") {
+    const { agentRunCommand } = await import("./agent-run.js");
+    process.exitCode = await agentRunCommand(process.argv.slice(3));
     return;
   }
   if (process.argv[2] === "check") {
@@ -246,7 +242,7 @@ async function serve(args: Arguments): Promise<void> {
       host: { id: one(args, "host-id") ?? "marshal-sdk", kind: one(args, "host-kind") ?? "local" },
       files: namedFolders(args),
       nativeRoots,
-      ...(one(args, "page-studio-dir") ? { pageStudioDir: path.resolve(one(args, "page-studio-dir")!) } : {}),
+      ...(one(args, "pages-dir") ? { pagesDir: path.resolve(one(args, "pages-dir")!) } : {}),
       log,
     });
     log(`store-only link serving ${sessionsRoot} on ${server.url}`);
@@ -255,10 +251,10 @@ async function serve(args: Arguments): Promise<void> {
     const options = await withManifest(hostOptions(args), manifestFlags(args));
     // Loaded only for a live host: store-only serving needs no runtime or model SDK installed.
     const { createMarshalHost } = await import("./host.js");
-    const pageStudioDir = one(args, "page-studio-dir");
+    const pagesDir = one(args, "pages-dir");
     const host = await createMarshalHost({
       ...options,
-      link: { token, bind, port, files: namedFolders(args), nativeRoots, ...(pageStudioDir ? { pageStudioDir: path.resolve(pageStudioDir) } : {}) },
+      link: { token, bind, port, files: namedFolders(args), nativeRoots, ...(pagesDir ? { pagesDir: path.resolve(pagesDir) } : {}) },
     });
     const task = one(args, "task");
     if (task) {

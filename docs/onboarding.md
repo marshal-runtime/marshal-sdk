@@ -1,9 +1,9 @@
 # Onboarding: the extensions a host needs, in one file
 
 `marshal-sdk.json` lists what every host started from that folder loads: extensions, the kit, the Brain, the model.
-The SDK hardwires no extension: `page-run`, `page-edit`, `marshal-claude` and the Python package load Page Studio only
-because the manifest lists it. Write it once with the CLI; `exec`, `agent`, `serve`, `page-run`, `page-edit` and
-`check` pick it up from `--manifest`, `$MARSHAL_SDK_MANIFEST`, or the current folder.
+The SDK hardwires no extension and no agent: an extension declares its agents, and the manifest's `agent` names the one
+every run starts (see "Agents" below). Write it once with the CLI; `exec`, `agent`, `serve`, `agent-run` and `check` pick
+it up from `--manifest`, `$MARSHAL_SDK_MANIFEST`, or the current folder.
 
 ```sh
 marshal-sdk init --model claude-opus-5-5 --effort high --kit memory,sessions \
@@ -48,6 +48,39 @@ const host = await createMarshalHost(await withManifest({ workspacePath, stateRo
 ```
 
 or `resolveManifest(file)` (`src/onboarding.ts`) for the resolved packages alone.
+
+## Agents
+
+An extension declares the agents it brings in its `runtime-extension.json`, and a caller picks one by name:
+
+```json
+"contributes": {
+  "capabilities": ["acme.agent.run"],
+  "agents": [{ "id": "page", "title": "Page agent", "description": "…", "capability": "acme.agent.run",
+               "fake": "acme.agent.fake", "ports": ["browser"],
+               "runId": { "file": "input/brief.json", "field": "source.run_id" },
+               "resume": { "file": "input/base/index.html", "meta": "marshal-page-state" } }]
+}
+```
+
+```json
+{ "version": 1, "agent": "@acme/pages", "extensions": [{ "path": "vendor/pages" }] }
+```
+
+- **`agent`** in `marshal-sdk.json`: `@scope/name` (its only agent) or `@scope/name:<id>`. `marshal_sdk.init(path,
+  agent=…)` overrides it, `$MARSHAL_SDK_AGENT` overrides that, and a query's `extra_args={"marshal-agent": …}` overrides
+  all; `"none"` runs the caller's own agent. With no agent named, `query()` runs the Marshal Claude bridge as before.
+- **One route:** `marshal-sdk agent-run --cwd <dir> --state <dir> --logs <dir> [--agent …] [--prompt …]` starts the host,
+  calls the agent's `capability` with `{cwd, prompt, model, effort, person, fake, state: {folder, link, location,
+  resumed}, logs, progressFile, browser, runLabel, startedBy}`, tails `progressFile` as its progress, and writes
+  `logs/summary.json` (usage and cost from the host's sessions; `marshal.outputs` lists what it wrote). The capability
+  answers `{result, error?, outputs, model, effort, costUsd?, warnings, skills, details}`. What it reads in `cwd` and
+  writes back is its own business.
+- **Optional fields:** `fake` (a capability answering `{prompt}` with `{text}`: `MARSHAL_SDK_FAKE=1` / `--fake` runs the
+  agent with no model), `ports: ["browser"]` (the host finds a Chrome and passes it), `runId` (where the caller's run id
+  is), `resume` (the file whose `<meta name=…>` names an earlier run's state: the SDK reloads it and passes
+  `state.resumed`). An entry with a `profile` instead of a `capability` is a Marshal agent profile, launched as a session.
+- `marshal-sdk check` lists the agents the manifest's extensions declare and fails when `agent` names none of them.
 
 ## Rules
 

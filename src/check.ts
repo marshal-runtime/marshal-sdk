@@ -9,7 +9,8 @@ import { inspect } from "node:util";
 
 import { brainKitOptions, readManifest, resolveManifest, type ResolvedExtension } from "./onboarding.js";
 import { manifestPath } from "./onboarding-cli.js";
-import { pageKit } from "./page-run.js";
+import { declaredAgents, findAgent } from "./agent-run.js";
+import { runKit } from "./run-kit.js";
 
 export interface CheckReport {
   ok: boolean;
@@ -27,13 +28,31 @@ export interface CheckReport {
   };
   model?: string;
   effort?: string;
+  /** Every agent the extensions declare (contributes.agents), by reference. */
+  agents: CheckedAgent[];
+  /** The agent every query runs: the manifest's `agent`, or the one --agent names. */
+  agent?: CheckedAgent;
   problems: string[];
   /** What the host will run without (a service Brain sign-in with no person); the manifest still passes. */
   warnings: string[];
 }
 
+/** One declared agent as the report lists it. */
+export interface CheckedAgent {
+  ref: string;
+  kind: "capability" | "profile";
+  description: string;
+  capability?: string;
+  fake?: string;
+  runId?: { file: string; field: string };
+  resume?: { file: string; meta: string };
+  ports: string[];
+}
+
 export interface CheckOptions {
   manifest?: string;
+  /** The agent queries run, over the manifest's (`none`: the caller's own agent). */
+  agent?: string;
   env?: Record<string, string | undefined>;
   /** Ask the Brain one question (default true when the kit carries the Brain). */
   pingBrain?: boolean;
@@ -45,7 +64,7 @@ export interface CheckOptions {
 export async function checkManifest(options: CheckOptions = {}): Promise<CheckReport> {
   const env = options.env ?? process.env;
   const log = options.log ?? (() => undefined);
-  const report: CheckReport = { ok: false, extensions: [], problems: [], warnings: [] };
+  const report: CheckReport = { ok: false, extensions: [], agents: [], problems: [], warnings: [] };
   const file = manifestPath(options.manifest, env);
   if (!file) {
     report.problems.push("No marshal-sdk.json: pass --manifest <file> or set MARSHAL_SDK_MANIFEST.");
@@ -76,10 +95,29 @@ export async function checkManifest(options: CheckOptions = {}): Promise<CheckRe
     from: extension.entry,
     origin: extension.origin,
   }));
+  report.agents = declaredAgents(resolved.extensions).map(({ ref, kind, description, entry }) => ({
+    ref,
+    kind,
+    description,
+    ...(entry.capability ? { capability: entry.capability } : {}),
+    ...(entry.fake ? { fake: entry.fake } : {}),
+    ...(entry.runId ? { runId: entry.runId } : {}),
+    ...(entry.resume ? { resume: entry.resume } : {}),
+    ports: entry.ports,
+  }));
+  const chosen = options.agent ?? resolved.agent;
+  if (chosen && chosen !== "none") {
+    try {
+      const found = findAgent(chosen, resolved.extensions);
+      report.agent = report.agents.find((agent) => agent.ref === found.ref);
+    } catch (error) {
+      report.problems.push(error instanceof Error ? error.message : String(error));
+    }
+  }
   if (resolved.model) report.model = resolved.model;
   if (resolved.reasoningEffort) report.effort = resolved.reasoningEffort;
   const person = (options.person ?? env.MARSHAL_SDK_BRAIN_CALLER)?.trim().toLowerCase() || undefined;
-  const kit = pageKit(resolved.kit, undefined, undefined, person);
+  const kit = runKit(resolved.kit, undefined, undefined, person);
   const brainOn = Boolean(kit?.parts.includes("brain") || kit?.parts.includes("memory"));
   if (brainOn && !report.brain) {
     const mode = kit?.brain?.callerMode ?? "desktop";
@@ -141,7 +179,7 @@ function problemLines(error: unknown): string[] {
 
 export const CHECK_USAGE = `  check       Prove the manifest can start a host: resolve and fetch its extensions, check what each declares
               it needs, start them, and ask the Brain one question. Prints a JSON report; exit 1 on a problem.
-                [--manifest <file>] [--person <email>] [--no-brain-ping]
+                [--manifest <file>] [--agent <@scope/name[:id] | none>] [--person <email>] [--no-brain-ping]
 `;
 
 export async function checkCommand(argv: readonly string[]): Promise<number> {
@@ -159,6 +197,7 @@ export async function checkCommand(argv: readonly string[]): Promise<number> {
     report = await checkManifest({
       ...(value("manifest") ? { manifest: value("manifest")! } : {}),
       ...(value("person") ? { person: value("person")! } : {}),
+      ...(value("agent") ? { agent: value("agent")! } : {}),
       pingBrain: !argv.includes("--no-brain-ping"),
       log: (line) => process.stderr.write(`[marshal-sdk check] ${line}\n`),
     });

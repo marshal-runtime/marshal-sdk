@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "identity": "@fixture/pages",
+  "version": "0.1.0",
+  "displayName": "Fake page agent",
+  "entrypoint": "dist/index.cjs",
+  "moduleFormat": "commonjs-bundle-v1",
+  "contributes": {
+    "capabilities": [
+      "pages.agent.run",
+      "pages.agent.fake"
+    ],
+    "agents": [
+      {
+        "id": "page",
+        "capability": "pages.agent.run",
+        "fake": "pages.agent.fake",
+        "title": "Page",
+        "description": "Builds out/index.html from input/page/brief.json, or edits the page it continues.",
+        "runId": {
+          "file": "input/page/brief.json",
+          "field": "source.page_generation_run_id"
+        },
+        "resume": {
+          "file": "input/page/base-page/index.html",
+          "meta": "marshal-page-state"
+        }
+      }
+    ]
+  }
+}

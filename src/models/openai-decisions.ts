@@ -1,6 +1,6 @@
 // OpenAI Decisions API (POST /v1/decisions): named choice questions answered with a probability per option, the
-// endpoint Page Studio's instant-edit router, zyg-agents' search judge and zygstinct's channel-gateway emoji picker call.
-// Same request and answer shape as Page Studio's src/extension/decisions.ts.
+// endpoint a page editor's instant-edit router, zyg-agents' search judge and zygstinct's channel-gateway emoji picker call.
+// Same request and answer shape as that page editor's own decisions client.
 import type { JevAnswer, JevAskRequest, JevAskResult, JevQuestion } from "./jev/api.js";
 import { abortedError, badRequestError, invalidKeyError, invalidResponseError, notConnectedError, rateLimitedError, unavailableError } from "./jev/errors.js";
 import { openAiErrorMessage } from "./jev/openai.js";

@@ -182,7 +182,7 @@ type DecideCall = (
 ) => Promise<{ choice: unknown }>;
 
 /**
- * Query planning on the host's decide service: it reads the whole message (a Page Studio brief names its brand only in
+ * Query planning on the host's decide service: it reads the whole message (a page brief names its brand only in
  * the input data, ~44k characters in) and answers whether it gives a task, the task in one sentence, and 0 to 3 queries.
  * `gives_task` comes first: asked for queries alone, the model returned none for a task it called one.
  */

@@ -1,11 +1,14 @@
-"""The caller's marshal-sdk.json: which extensions its Marshal host loads, their configuration, the Brain and the model.
+"""The caller's marshal-sdk.json: which extensions its Marshal host loads, their configuration, the Brain, the model and
+the agent every query runs.
 
-    marshal_sdk.init("marshal-sdk.json")   # once at the service's start; raises MarshalInitError naming what is missing
+    marshal_sdk.init("marshal-sdk.json")                         # once at the service's start
+    marshal_sdk.init("marshal-sdk.json", agent="@scope/name")    # the same, with another agent than the manifest's
 
 ``init`` resolves the manifest with the marshal-sdk CLI (``marshal-sdk check``): pinned packages are downloaded and
 checked against their sha256, ``${env:NAME}`` settings are read from the environment, every extension's declared
 dependencies and required settings are checked, a host is started with exactly those extensions, and the Brain is
-asked one question. The report says what loaded and from where. A second call with the same file is free.
+asked one question. The agent the manifest (or ``agent=``) names must be one the extensions declare. The report says
+what loaded and from where, every agent the extensions declare and the one queries run. A second call is free.
 
 Without ``init``, the manifest is found at the first query: $MARSHAL_SDK_MANIFEST, else marshal-sdk.json in the
 process's working folder, else beside the agent's working folder.
@@ -26,11 +29,10 @@ from marshal_sdk import _node
 
 MANIFEST_FILE = "marshal-sdk.json"
 MANIFEST_ENV_VAR = "MARSHAL_SDK_MANIFEST"
-PAGE_STUDIO = "@zyg/page-studio"
 CHECK_TIMEOUT_S = 600
 LOG = logging.getLogger("marshal_sdk")
 
-_state: dict[str, Any] = {"manifest": None, "reports": {}}
+_state: dict[str, Any] = {"manifest": None, "agent": None, "reports": {}}
 
 
 class MarshalInitError(RuntimeError):
@@ -55,14 +57,22 @@ def find(options: ClaudeAgentOptions | None = None) -> Path | None:
     return next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
 
 
-def init(manifest: str | os.PathLike[str] | None = None, *, ping_brain: bool = True, person: str | None = None) -> dict[str, Any]:
-    """Load and prove the manifest once; returns the report (extensions with their source, Brain, model).
+def init(
+    manifest: str | os.PathLike[str] | None = None,
+    *,
+    agent: str | None = None,
+    ping_brain: bool = True,
+    person: str | None = None,
+) -> dict[str, Any]:
+    """Load and prove the manifest once; returns the report (extensions with their source, agents, Brain, model).
 
-    Raises MarshalInitError with every missing setting, environment variable, extension or Brain access by name.
+    ``agent`` (``@scope/name``, ``@scope/name:id`` or ``none``) is the agent every query runs, over the manifest's.
+    Raises MarshalInitError with every missing setting, environment variable, extension, agent or Brain access by name.
     """
     path = Path(manifest).resolve() if manifest is not None else find()
     if path is None or not path.is_file():
         raise MarshalInitError([f"No {MANIFEST_FILE}: pass its path to marshal_sdk.init() or set {MANIFEST_ENV_VAR}."])
+    _state["agent"] = agent
     report = check(path, ping_brain=ping_brain, person=person)
     _state["manifest"] = str(path)
     return report
@@ -71,14 +81,20 @@ def init(manifest: str | os.PathLike[str] | None = None, *, ping_brain: bool = T
 def check(path: Path, *, ping_brain: bool, person: str | None = None) -> dict[str, Any]:
     """`marshal-sdk check` for this file, cached per file version: raises MarshalInitError when it cannot start a host."""
     stat = path.stat()
-    key = (str(path), stat.st_mtime_ns, stat.st_size, ping_brain, person or "")
+    agent = _state["agent"]
+    key = (str(path), stat.st_mtime_ns, stat.st_size, ping_brain, person or "", agent or "")
     cached = _state["reports"].get(key)
     if cached is not None:
         return cached
-    # Imported here: page_studio imports this module for find().
-    from marshal_sdk.page_studio import cli
+    # Imported here: agent imports this module for find().
+    from marshal_sdk.agent import cli
 
-    command = [*cli(), "check", "--manifest", str(path), *(["--person", person] if person else []), *([] if ping_brain else ["--no-brain-ping"])]
+    command = [
+        *cli(), "check", "--manifest", str(path),
+        *(["--agent", agent] if agent else []),
+        *(["--person", person] if person else []),
+        *([] if ping_brain else ["--no-brain-ping"]),
+    ]
     env = {**os.environ, **_node.tool_env()}
     done = subprocess.run(command, env=env, cwd=str(path.parent), capture_output=True, text=True, timeout=CHECK_TIMEOUT_S, check=False)
     try:
@@ -95,20 +111,24 @@ def check(path: Path, *, ping_brain: bool, person: str | None = None) -> dict[st
     return report
 
 
-def lists(path: Path, identity: str) -> bool:
-    """Whether the manifest loads this extension: from its checked report, so path, archive and url entries count too."""
+def report(path: Path) -> dict[str, Any]:
+    """The manifest's checked report (init's, else a check without the Brain ping, once per file version)."""
     stat = path.stat()
     version = (str(path), stat.st_mtime_ns, stat.st_size)
-    report = next((value for key, value in _state["reports"].items() if key[:3] == version), None)
-    if report is None:
-        report = check(path, ping_brain=False)
-    return any(extension.get("identity") == identity for extension in report.get("extensions") or [])
+    found = next((value for key, value in _state["reports"].items() if key[:3] == version and key[5] == (_state["agent"] or "")), None)
+    return found if found is not None else check(path, ping_brain=False)
+
+
+def lists(path: Path, identity: str) -> bool:
+    """Whether the manifest loads this extension: from its checked report, so path, archive and url entries count too."""
+    return any(extension.get("identity") == identity for extension in report(path).get("extensions") or [])
 
 
 def reset() -> None:
     """Forget init() and the cached reports (tests)."""
     _state["manifest"] = None
+    _state["agent"] = None
     _state["reports"].clear()
 
 
-__all__ = ["MANIFEST_ENV_VAR", "MANIFEST_FILE", "MarshalInitError", "check", "find", "init", "lists", "reset"]
+__all__ = ["MANIFEST_ENV_VAR", "MANIFEST_FILE", "MarshalInitError", "check", "find", "init", "lists", "report", "reset"]

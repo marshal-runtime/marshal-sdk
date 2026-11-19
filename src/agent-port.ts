@@ -130,7 +130,7 @@ export interface AgentSummary {
   sessionId?: string;
   /**
    * Backend events this host recorded for the session, and when the latest came: a caller waiting on a long turn
-   * (Page Studio's big edit) tells a working agent (thinking, tool calls) from a silent one by these.
+   * (an extension's long edit) tells a working agent (thinking, tool calls) from a silent one by these.
    */
   eventCount?: number;
   lastEventAt?: string;

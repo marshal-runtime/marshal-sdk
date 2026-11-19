@@ -49,7 +49,7 @@ function pageRun() {
 
 test("a host serves the pages its runs made, each with the pictures it shows, and they land as a Page Studio folder", async () => {
   const run = pageRun();
-  const server = await startLinkServer({ token: TOKEN, sessionsRoot: run.store.root, host: { id: "e2b-7", kind: "e2b" }, pageStudioDir: run.data });
+  const server = await startLinkServer({ token: TOKEN, sessionsRoot: run.store.root, host: { id: "e2b-7", kind: "e2b" }, pagesDir: run.data });
   const client = new LinkClient({ url: server.url, token: TOKEN });
   try {
     assert.equal((await client.info()).pages, true);
@@ -62,7 +62,7 @@ test("a host serves the pages its runs made, each with the pictures it shows, an
     assert.deepEqual((await client.pages("run-7")).pages.map((page: any) => page.id), ["rawdog--headless-quick-6dqua"]);
 
     const manifest = (await client.page(made.id)) as PageManifest;
-    assert.equal(manifest.format, "page-studio-page");
+    assert.equal(manifest.format, "marshal-page");
     assert.deepEqual(manifest.pictures.map((picture) => [picture.name, picture.bytes, picture.record?.key]), [["A01-jar.png", PNG.length, "A01"], ["A02-face.jpg", JPG.length, "A02"]]);
     assert.deepEqual(manifest.missing, ["https://pagestudio.library/1617/A09-gone.png"]);
     assert.match(String(manifest.brands["1617"]?.facts), /90-day/);
@@ -106,7 +106,7 @@ test("a host without a Page Studio folder answers with no pages", async () => {
   const client = new LinkClient({ url: server.url, token: TOKEN });
   try {
     assert.equal((await client.info()).pages, false);
-    assert.deepEqual(await client.pages(), { pageStudio: false, pages: [] });
+    assert.deepEqual(await client.pages(), { served: false, pages: [] });
     await assert.rejects(client.page("rawdog--base"), (error: unknown) => error instanceof LinkError && error.code === "no-pages");
   } finally {
     await server.close();
