@@ -15,7 +15,16 @@ export interface CheckReport {
   ok: boolean;
   manifest?: string;
   extensions: { identity: string; version: string; source: ResolvedExtension["source"]; from: string; origin: ResolvedExtension["origin"] }[];
-  brain?: { index?: string; url?: string; auth: "person" | "service"; person?: string; reachable?: boolean; error?: string };
+  brain?: {
+    index?: string;
+    url?: string;
+    auth: "person" | "service";
+    /** How the host signs in: desktop (the person's credentials), delegated (metadata server) or service-key. */
+    mode?: string;
+    person?: string;
+    reachable?: boolean;
+    error?: string;
+  };
   model?: string;
   effort?: string;
   problems: string[];
@@ -45,8 +54,13 @@ export async function checkManifest(options: CheckOptions = {}): Promise<CheckRe
   try {
     const manifest = readManifest(file);
     if (manifest.brain) {
-      const brain = brainKitOptions(manifest.brain, file);
-      report.brain = { ...(manifest.brain.index ? { index: manifest.brain.index } : { index: "zyg" }), url: String(brain.cloudUrl), auth: manifest.brain.auth ?? "person" };
+      const brain = brainKitOptions(manifest.brain, file, env);
+      report.brain = {
+        index: manifest.brain.index ?? "zyg",
+        url: String(brain.cloudUrl),
+        auth: manifest.brain.auth ?? "person",
+        ...(brain.callerMode ? { mode: brain.callerMode } : {}),
+      };
     }
     resolved = await resolveManifest(file, { env });
   } catch (error) {
@@ -65,7 +79,10 @@ export async function checkManifest(options: CheckOptions = {}): Promise<CheckRe
   const person = (options.person ?? env.MARSHAL_SDK_BRAIN_CALLER)?.trim().toLowerCase() || undefined;
   const kit = pageKit(resolved.kit, undefined, undefined, person);
   const brainOn = Boolean(kit?.parts.includes("brain") || kit?.parts.includes("memory"));
-  if (brainOn && !report.brain) report.brain = { index: "zyg", auth: kit?.brain?.callerMode === "delegated" ? "service" : "person" };
+  if (brainOn && !report.brain) {
+    const mode = kit?.brain?.callerMode ?? "desktop";
+    report.brain = { index: "zyg", auth: mode === "desktop" ? "person" : "service", mode };
+  }
   if (report.brain && person) report.brain.person = person;
 
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-check-"));

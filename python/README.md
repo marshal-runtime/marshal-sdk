@@ -57,7 +57,9 @@ ClaudeAgentOptions(cwd=workspace, user="requester@zyg.com")
 ```
 
 An email in `user` is the run's person: the Brain answers as them (their personal memories, in `"auth": "service"`
-mode the Brain's caller), lower-cased, never taken from model input. `claude_agent_sdk` spawns its CLI as the OS user
+mode the Brain's caller), lower-cased, never taken from model input. With `"auth": "service"` the host signs in with
+the sandbox's service account key (`$GOOGLE_APPLICATION_CREDENTIALS_JSON` or the file `$GOOGLE_APPLICATION_CREDENTIALS`
+names), else the metadata server. `claude_agent_sdk` spawns its CLI as the OS user
 `user` names, so marshal_sdk clears an email there before spawning; a plain OS user name passes through unchanged.
 `MARSHAL_SDK_BRAIN_CALLER` is the fallback when no email is given.
 

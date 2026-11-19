@@ -51,6 +51,9 @@ the kit turns it on). The configuration is the cloud-only surface (`brainConfigu
     person.
   - `delegated`: a service on Google Cloud signs with its metadata-server ID token, and the person comes from the
     host principal's `callerEmail` claim (`kit.brain.callerEmail`, with access labels from `kit.brain.access`).
+  - `service-key`: the same, signed with a service account key (`kit.brain.credentialsFile`, else
+    `$GOOGLE_APPLICATION_CREDENTIALS_JSON`, else the file `$GOOGLE_APPLICATION_CREDENTIALS` names), for a service with
+    no metadata server (an E2B sandbox). Needs @marshal/brain 0.2.1 or later.
 - When the kit carries `memory`: a `brainRoutes` entry with `memory: true` for the workspace (its own Brain,
   `kit.brain.cloudUrl`), a `zyg` entry for the company Brain, and `memoryRoute: "zyg"`, so personal memories (the
   `personal` home, scope `person:email=<kit.brain.callerEmail>`) live in the company Brain and workspace memories in the

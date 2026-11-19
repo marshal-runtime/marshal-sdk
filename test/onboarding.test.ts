@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import { checkManifest } from "../src/check.js";
 import { createMarshalHost } from "../src/host.js";
+import { brainConfiguration } from "../src/kit/brain.js";
 import { withManifest } from "../src/onboarding-cli.js";
 import {
   brainKitOptions,
@@ -440,7 +441,8 @@ test("the sample agent-sandbox manifest is valid and names no Brain address", ()
   const manifest = readManifest(sample);
   assert.deepEqual(manifest.brain, { index: "zyg", auth: "service" });
   assert.match(manifest.extensions[0]!.url ?? "", /^gs:\/\/shop-builder-local-runs\/marshal-extensions\/@zyg\/page-studio\/\d+\.\d+\.\d+\.tgz$/);
-  assert.equal(brainKitOptions(manifest.brain!).callerMode, "delegated");
+  assert.equal(brainKitOptions(manifest.brain!, sample, {}).callerMode, "delegated");
+  assert.equal(brainKitOptions(manifest.brain!, sample, { GOOGLE_APPLICATION_CREDENTIALS_JSON: '{"type":"service_account"}' }).callerMode, "service-key");
 });
 
 test("check proves a manifest by starting its host: a report of what loaded and from where, or every problem", async () => {
@@ -457,4 +459,29 @@ test("check proves a manifest by starting its host: a report of what loaded and 
   assert.equal(failed.ok, false);
   assert.deepEqual(failed.problems, [`${path.relative(root, packageRoot)} configuration: environment variable CHECK_KEY is not set.`]);
   assert.match((await checkManifest({ env: {} })).problems[0] ?? "", /No marshal-sdk\.json/);
+});
+
+test("auth service signs with a service account key when the host has one (E2B), else with the metadata server", () => {
+  const root = scratch();
+  const file = path.join(root, "marshal-sdk.json");
+  const serviceKey = path.join(root, "sa.json");
+  fs.writeFileSync(serviceKey, JSON.stringify({ type: "service_account", client_email: "e2b-production@zyg-ecom-prod.iam.gserviceaccount.com" }));
+  const userCredentials = path.join(root, "adc.json");
+  fs.writeFileSync(userCredentials, JSON.stringify({ type: "authorized_user" }));
+  const service = { auth: "service" as const };
+  assert.equal(brainKitOptions(service, file, {}).callerMode, "delegated", "Cloud Run, GKE, a GCE VM: the metadata server");
+  assert.equal(brainKitOptions(service, file, { GOOGLE_APPLICATION_CREDENTIALS_JSON: '{"type":"service_account"}' }).callerMode, "service-key", "E2B carries the key inline");
+  assert.equal(brainKitOptions(service, file, { GOOGLE_APPLICATION_CREDENTIALS: serviceKey }).callerMode, "service-key");
+  assert.equal(brainKitOptions(service, file, { GOOGLE_APPLICATION_CREDENTIALS: userCredentials }).callerMode, "delegated", "a person's ADC file is not a service key");
+  assert.equal(brainKitOptions({ auth: "person" }, file, { GOOGLE_APPLICATION_CREDENTIALS_JSON: "{}" }).callerMode, "desktop");
+
+  const declared = parseManifest({ version: 1, brain: { auth: "service", credentialsFile: "sa.json" } }, file).brain!;
+  const options = brainKitOptions(declared, file, {});
+  assert.deepEqual([options.callerMode, options.credentialsFile], ["service-key", serviceKey]);
+  assert.throws(() => brainKitOptions({ auth: "service", credentialsFile: "adc.json" }, file, {}), /is not a service_account key file/);
+  assert.throws(() => parseManifest({ version: 1, brain: { auth: "person", credentialsFile: "sa.json" } }, file), /credentialsFile/);
+
+  const configuration = brainConfiguration({ brain: { ...options, callerEmail: "omer@zyg.com" }, workspaceName: "ws", memoryWrites: false });
+  assert.equal(configuration.cloudCallerMode, "service-key");
+  assert.equal(configuration.cloudCredentialsFile, serviceKey);
 });
