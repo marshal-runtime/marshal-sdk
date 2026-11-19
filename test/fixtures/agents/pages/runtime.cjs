@@ -1,6 +1,6 @@
 // A test fixture extension: @fixture/pages.
-const fs = require("node:fs");
-const path = require("node:path");
+const fs = require("fs");
+const path = require("path");
 const capabilities = {
   "pages.agent.run": async (input) => {
     const brief = JSON.parse(fs.readFileSync(path.join(input.cwd, "input", "page", "brief.json"), "utf8"));

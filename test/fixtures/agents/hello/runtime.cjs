@@ -1,6 +1,6 @@
 // A test fixture extension: @fixture/hello.
-const fs = require("node:fs");
-const path = require("node:path");
+const fs = require("fs");
+const path = require("path");
 // A prompt starting "slow" answers {running} first, the way a long run hands back a handle to poll.
 const waiting = new Map();
 const capabilities = {
