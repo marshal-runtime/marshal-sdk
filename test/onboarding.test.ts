@@ -116,7 +116,7 @@ test("a manifest lists extensions by folder, archive and organization id, and is
   const file = path.join(root, "marshal-sdk.json");
   writeManifest(file, manifest);
   assert.deepEqual(readManifest(file), manifest);
-  assert.throws(() => parseManifest({ version: 1, extensions: [{ path: "a", id: "@x/y" }] }), /exactly one of path, archive or id/);
+  assert.throws(() => parseManifest({ version: 1, extensions: [{ path: "a", id: "@x/y" }] }), /exactly one of path, archive, url or id/);
   assert.throws(() => parseManifest({ version: 1, extensions: [{ id: "page-studio" }] }), /not an extension identity/);
   assert.throws(() => parseManifest({ version: 2, extensions: [] }), /"version": 1/);
 });
