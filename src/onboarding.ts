@@ -8,7 +8,7 @@
  * hands back an archive with the hash the organization announced, or a package folder; this module checks the hash,
  * unpacks safely and caches.
  */
-import { createHash } from "node:crypto";
+import { createHash, createSign } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -513,7 +513,7 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
       else {
         let bytes: Buffer;
         try {
-          bytes = Buffer.from(await (options.fetchUrl ?? fetchUrl)(entry.url));
+          bytes = Buffer.from(await (options.fetchUrl ?? ((url: string) => fetchUrl(url, env)))(entry.url));
         } catch (error) {
           throw new OnboardingError("url-unreachable", `${label}: could not download it (${error instanceof Error ? error.message : String(error)}).`);
         }
@@ -745,8 +745,7 @@ export function brainKitOptions(brain: ManifestBrain, file = MANIFEST_FILE, env:
     if (!isServiceAccountKey(keyFile)) throw new OnboardingError("brain-key", `${file}: brain.credentialsFile ${keyFile} is not a service_account key file.`);
     return { ...options, callerMode: "service-key", credentialsFile: keyFile };
   }
-  const environmentKey = Boolean(env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim()) || (env.GOOGLE_APPLICATION_CREDENTIALS ? isServiceAccountKey(env.GOOGLE_APPLICATION_CREDENTIALS) : false);
-  return { ...options, callerMode: environmentKey ? "service-key" : "delegated" };
+  return { ...options, callerMode: serviceAccountKeySource(env) ? "service-key" : "delegated" };
 }
 
 /** brain.person with its ${env:NAME} read; an unset variable or a value that is not an email is no person. */
@@ -777,13 +776,13 @@ function withBrainOptions(kit: KitSelection | undefined, brain: NonNullable<KitO
 }
 
 /** A `url` entry's bytes: gs:// through the GCS JSON API with the host's Google credentials, https:// with fetch. */
-async function fetchUrl(url: string): Promise<Uint8Array> {
+async function fetchUrl(url: string, env: Record<string, string | undefined>): Promise<Uint8Array> {
   let target = url;
   const headers: Record<string, string> = {};
   if (url.startsWith("gs://")) {
     const [bucket, ...rest] = url.slice("gs://".length).split("/");
     target = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket!)}/o/${encodeURIComponent(rest.join("/"))}?alt=media`;
-    headers.authorization = `Bearer ${await googleStorageToken()}`;
+    headers.authorization = `Bearer ${await googleStorageToken(env)}`;
   }
   const response = await fetch(target, { headers, signal: AbortSignal.timeout(120_000) });
   if (!response.ok) throw new Error(`HTTP ${response.status} from ${url.startsWith("gs://") ? "Cloud Storage" : new URL(url).host}`);
@@ -791,11 +790,74 @@ async function fetchUrl(url: string): Promise<Uint8Array> {
 }
 
 /**
- * A Google access token for Cloud Storage: the metadata server's (a service on Google Cloud signs as its own service
- * account), else the person's or the image's application default credentials (GOOGLE_ACCESS_TOKEN, google-auth-library,
- * gcloud).
+ * Where the host's service account key is, found as the Brain's service-key mode finds it: the key inline in
+ * $GOOGLE_APPLICATION_CREDENTIALS_JSON (what an E2B sandbox carries, from Secret Manager), else a `service_account`
+ * file at $GOOGLE_APPLICATION_CREDENTIALS. A person's application default credentials there are not a key.
  */
-async function googleStorageToken(): Promise<string> {
+export function serviceAccountKeySource(env: Record<string, string | undefined>): { inline: string } | { file: string } | undefined {
+  const inline = env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim();
+  if (inline) return { inline };
+  const file = env.GOOGLE_APPLICATION_CREDENTIALS;
+  return file && isServiceAccountKey(file) ? { file } : undefined;
+}
+
+interface ServiceAccountKey {
+  client_email: string;
+  private_key: string;
+  private_key_id?: string;
+  token_uri?: string;
+}
+
+function readServiceAccountKey(source: { inline: string } | { file: string }): ServiceAccountKey {
+  const where = "inline" in source ? "$GOOGLE_APPLICATION_CREDENTIALS_JSON" : source.file;
+  let parsed: Record<string, unknown> | undefined;
+  try {
+    parsed = record(JSON.parse("inline" in source ? source.inline : fs.readFileSync(source.file, "utf8")) as unknown);
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed?.type !== "service_account" || typeof parsed.client_email !== "string" || typeof parsed.private_key !== "string") {
+    throw new OnboardingError("key-invalid", `${where} is not a service_account key (type, client_email, private_key).`);
+  }
+  return parsed as unknown as ServiceAccountKey;
+}
+
+const STORAGE_READ_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only";
+
+/** An OAuth access token for a service account key: a signed JWT exchanged at the key's token_uri (JWT bearer grant). */
+async function serviceAccountAccessToken(key: ServiceAccountKey, scope: string): Promise<string> {
+  const tokenUri = key.token_uri ?? "https://oauth2.googleapis.com/token";
+  const now = Math.floor(Date.now() / 1000);
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const unsigned = `${encode({ alg: "RS256", typ: "JWT", ...(key.private_key_id ? { kid: key.private_key_id } : {}) })}.${encode({
+    iss: key.client_email,
+    scope,
+    aud: tokenUri,
+    iat: now,
+    exp: now + 3600,
+  })}`;
+  const signature = createSign("RSA-SHA256").update(unsigned).sign(key.private_key).toString("base64url");
+  const response = await fetch(tokenUri, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${unsigned}.${signature}` }).toString(),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = (await response.json().catch(() => ({}))) as { access_token?: unknown; error?: unknown; error_description?: unknown };
+  if (!response.ok || typeof body.access_token !== "string") {
+    throw new Error(`${key.client_email} could not sign in (HTTP ${response.status}${body.error ? `: ${String(body.error)}` : ""}${body.error_description ? `, ${String(body.error_description)}` : ""})`);
+  }
+  return body.access_token;
+}
+
+/**
+ * A Google access token for Cloud Storage: the host's service account key when it has one (see
+ * serviceAccountKeySource), else the metadata server's (a service on Google Cloud signs as its own service account),
+ * else the application default credentials (GOOGLE_ACCESS_TOKEN, google-auth-library, gcloud).
+ */
+export async function googleStorageToken(env: Record<string, string | undefined> = process.env): Promise<string> {
+  const source = serviceAccountKeySource(env);
+  if (source) return serviceAccountAccessToken(readServiceAccountKey(source), STORAGE_READ_SCOPE);
   try {
     const response = await fetch("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token", {
       headers: { "Metadata-Flavor": "Google" },
