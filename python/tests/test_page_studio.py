@@ -1,6 +1,7 @@
 """marshal_sdk's Page Studio route: which queries it takes, the page's state key, the edit request, and a dry build."""
 
 import asyncio
+import base64
 import json
 import os
 from pathlib import Path
@@ -155,6 +156,31 @@ def test_result_message_sums_usage_and_cost():
     assert page_studio.result_message({"error": "boom"}, 1).is_error
 
 
+PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
+def sandbox_pack(root: Path) -> Path:
+    """A page-agent input folder the way agent-sandbox writes it, cut down to what a run reads."""
+    files: dict[str, str | bytes] = {
+        "README.md": "# Input: Acme / Night Balm\n",
+        "brand/brand.json": json.dumps({"brand_id": 7, "name": "Acme", "existing_website": "https://www.acme.example"}),
+        "page/brief.json": json.dumps(
+            {"brand_id": "7", "product_id": "321", "brand_name": "Acme", "product_name": "NIGHT BALM", "positioning": {"brief_markdown": "## Positioning\n\nSleep better."}}
+        ),
+        "page/operator-request.md": "A page for tired parents.\n",
+        "products/321/product.json": json.dumps({"core": {"product_id": 321, "name": "NIGHT BALM", "product_handle": "night-balm"}}),
+        "products/321/offers.json": json.dumps({"domain": "acme.example", "offers": [{"price": 30}]}),
+        "products/321/facts.md": "- F1 (input): Night Balm costs $30.\n",
+        "products/321/pictures.json": json.dumps([{"key": "A01", "file": "pictures/jar.png", "description": "The jar on a white table.", "scope": "product"}]),
+        "products/321/pictures/jar.png": PNG,
+    }
+    for name, body in files.items():
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(body) if isinstance(body, bytes) else target.write_text(body)
+    return root
+
+
 @pytest.mark.skipif(
     not (PACKAGE_ROOT / "dist" / "src" / "cli.js").is_file() or not os.environ.get("MARSHAL_SDK_PAGE_STUDIO"),
     reason="needs a built marshal-sdk and MARSHAL_SDK_PAGE_STUDIO",
@@ -163,10 +189,11 @@ def test_dry_build_then_edit_through_query(tmp_path, monkeypatch):
     """A page-agent query builds a page on Page Studio's scripted backend, then an edit of it finds its state."""
     import marshal_sdk
 
-    pack = Path(os.environ.get("MARSHAL_SDK_TEST_PACK", ""))
+    # A real agent-sandbox input pack when given, else the cut-down one test/page-run.test.ts builds.
+    given = os.environ.get("MARSHAL_SDK_TEST_PACK")
+    pack = Path(given) if given else sandbox_pack(tmp_path / "pack")
     if not pack.is_dir():
-        pytest.skip("MARSHAL_SDK_TEST_PACK names no agent-sandbox input pack")
-    import shutil
+        pytest.skip(f"MARSHAL_SDK_TEST_PACK={given} is not a folder")
 
     monkeypatch.setenv(page_studio.FAKE_ENV_VAR, "1")
     monkeypatch.setenv(page_studio.STATE_ROOT_ENV_VAR, str(tmp_path / "states"))
