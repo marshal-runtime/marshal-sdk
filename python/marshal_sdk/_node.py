@@ -3,7 +3,8 @@
 The Python package carries all of it, so a caller needs nothing but the dependency line:
 
 - Node 24 comes from the ``nodejs-wheel-binaries`` wheel (a dependency).
-- The marshal-sdk npm package, with Page Studio and the Brain packed inside, ships as ``_bundle/marshal-sdk.tgz``.
+- The marshal-sdk npm package, with the Brain packed inside, ships as ``_bundle/marshal-sdk.tgz``; Page Studio and any
+  other extension come from the caller's marshal-sdk.json.
   Building the wheel installs it into ``_bundle/install`` (hatch_build.py); when that could not run (no registry at
   build time), the first query installs it into a per-user cache instead.
 - The bridge is a small shell script next to that install that runs ``marshal-claude`` on this Node.

@@ -20,12 +20,14 @@ import { createInterface } from "node:readline";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import type { MarshalHost } from "./host.js";
-import { hostKit, kitArgument, publishArgument } from "./page-run.js";
+import { withManifest } from "./onboarding-cli.js";
+import { hostKit, kitArgument, pageKit, publishArgument } from "./page-run.js";
 
 export const REAL_CLI_ENV = "MARSHAL_SDK_CLAUDE_CLI";
 export const STATE_ENV = "MARSHAL_SDK_STATE";
 export const TITLE_ENV = "MARSHAL_SDK_SESSION_TITLE";
 export const PROMPT_ENV = "MARSHAL_SDK_PROMPT";
+export const BRAIN_CALLER_ENV = "MARSHAL_SDK_BRAIN_CALLER";
 const SERVER_NAME = "marshal";
 const MCP_CONFIG_FLAG = "--mcp-config";
 const APPEND_PROMPT_FLAG = "--append-system-prompt";
@@ -126,15 +128,25 @@ export async function runClaudeBridge(args: readonly string[], env: NodeJS.Proce
   fs.mkdirSync(stateRoot, { recursive: true });
 
   const { createMarshalHost } = await import("./host.js");
-  const host: MarshalHost = await createMarshalHost({
-    workspacePath: cwd,
-    stateRoot,
-    runId,
-    browser: false,
-    labels: { job: "claude-agent-sdk" },
-    ...hostKit(kitArgument(undefined), publishArgument(undefined, undefined).publish),
-    log,
-  });
+  // The host the caller's marshal-sdk.json declares ($MARSHAL_SDK_MANIFEST, else one in the working folder): its
+  // extensions, kit, Brain and model; without one, the kit $MARSHAL_SDK_KIT names. The run's person
+  // ($MARSHAL_SDK_BRAIN_CALLER, set by marshal_sdk from the options' user) is the Brain's caller either way.
+  const person = env[BRAIN_CALLER_ENV]?.trim().toLowerCase() || undefined;
+  const declared = await withManifest(
+    {
+      workspacePath: cwd,
+      stateRoot,
+      runId,
+      browser: false,
+      labels: { job: "claude-agent-sdk" },
+      env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+      ...hostKit(kitArgument(undefined), publishArgument(undefined, undefined).publish, person),
+      log,
+    },
+    {},
+  );
+  const kit = pageKit(declared.kit, undefined, undefined, person);
+  const host: MarshalHost = await createMarshalHost({ ...declared, ...(kit ? { kit } : {}) });
   const model = flag(args, "--model");
   const session = host.sessions.create({
     title: env[TITLE_ENV] || DEFAULT_TITLE,

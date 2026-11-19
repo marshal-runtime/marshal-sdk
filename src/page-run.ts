@@ -11,7 +11,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { QueryFn } from "./agent-port.js";
-import type { KitOptions, SessionsPublishOptions } from "./kit/index.js";
+import type { KitOptions, KitSelection, SessionsPublishOptions } from "./kit/index.js";
+import { manifestPath } from "./onboarding-cli.js";
+import { MANIFEST_FILE, resolveManifest } from "./onboarding.js";
 import { cloudRunLayer } from "./prompt-cloud.js";
 import { desktopSurface } from "./prompt-desktop.js";
 import { turnSessions, writeRunLogs, type RunSummaryJson } from "./run-contract.js";
@@ -31,9 +33,16 @@ export interface PageRunOptions {
   state: string;
   /** The sessions' working folder. Default: the folder holding input/. */
   workspace?: string;
-  /** Page Studio's built package. Default: $MARSHAL_SDK_PAGE_STUDIO, else extensions/page-studio in this package. */
+  /**
+   * The marshal-sdk.json that declares the host: its extensions (Page Studio among them), their configuration, the
+   * kit, the Brain and the model. Default: $MARSHAL_SDK_MANIFEST, else marshal-sdk.json in the current folder.
+   */
+  manifest?: string;
+  /** The person this run works for (their email): the Brain answers with their memories. Default: $MARSHAL_SDK_BRAIN_CALLER. */
+  person?: string;
+  /** A Page Studio package folder instead of a manifest, for developing Page Studio. Default: $MARSHAL_SDK_PAGE_STUDIO. */
   extension?: string;
-  /** More extensions next to Page Studio (a brand-data provider). Default: $MARSHAL_SDK_EXTENSIONS, else the ones this package bundles. */
+  /** With `extension`: more extensions next to it (a brand-data provider). Default: $MARSHAL_SDK_EXTENSIONS. */
   extensions?: readonly string[];
   depth?: PageDepth;
   /** Page Studio agent profile: an id ("marshal" by default, "page-studio", or one in its data folder), or an id per role. */
@@ -97,8 +106,7 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   for (const directory of [path.join(out, "shots"), path.join(logs, "query"), path.join(state, "host"), studioDir]) {
     fs.mkdirSync(directory, { recursive: true });
   }
-  const extension = path.resolve(options.extension ?? process.env.MARSHAL_SDK_PAGE_STUDIO ?? path.join(PACKAGE_ROOT, "extensions", "page-studio"));
-  if (!fs.existsSync(path.join(extension, "runtime-extension.json"))) throw new Error(`No Page Studio package at ${extension} (pass --extension).`);
+  const declared = await pageHost(options, log);
   const input = readSandboxInput(inputDir);
   const idea = (options.idea ?? input.idea).slice(0, IDEA_LIMIT);
 
@@ -132,10 +140,10 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
   const host = await createMarshalHost({
     workspacePath: path.resolve(options.workspace ?? path.dirname(inputDir)),
     stateRoot: path.join(state, "host"),
-    extensions: [{ packageRoot: extension }, ...extraExtensions(options.extensions).map((packageRoot) => ({ packageRoot }))],
+    extensions: declared.extensions,
     host: options.host ?? { id: "marshal-sdk", kind: "local" },
     labels: { job: "page-run", depth, profile: profileLabel(options.profile), ...options.labels },
-    prompt: runPrompt("page-run", options, {
+    prompt: runPrompt("page-run", { ...options, kitOptions: declared.kit }, {
       purpose: `build one landing page from this run's input pack (depth ${depth})`,
       contract: [
         "out/index.html (the page, every section tagged data-zyg-section), out/assets/, out/shots/ and out/notes.md",
@@ -143,9 +151,8 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
       ],
     }),
     env,
-    ...(options.model ? { model: options.model } : {}),
-    ...(options.effort ? { reasoningEffort: options.effort } : {}),
-    ...hostKit(options.kit, options.publish),
+    ...declaredHostOptions(declared),
+    ...(declared.kit ? { kit: declared.kit } : {}),
     ...(options.fake ? { query: fakeQuery, browser: false } : {}),
     log,
   });
@@ -168,7 +175,8 @@ export async function runPage(options: PageRunOptions): Promise<RunSummaryJson> 
     const gate = browserGate({ depth, noLook: Boolean(options.noLook), usable: browserUsable, fake: Boolean(options.fake) });
     if (gate) throw new Error(gate);
     if (options.noLook) warnings.push("built without look rounds (--no-look): no critic looked at the rendered page");
-    if (options.model || options.effort || options.quickModel) await call("pagestudio.settings", pinnedSettings(options));
+    const pinned = pinnedSettings({ ...options, model: declared.model, effort: declared.effort });
+    if (Object.keys(pinned).length) await call("pagestudio.settings", pinned);
     settings = (await call("pagestudio.settings", {})) ?? {};
     build = await pageStudioBuild(call, options.env, log);
     if (build.drift) warnings.push(build.drift);
@@ -315,8 +323,10 @@ export interface PageEditOptions {
   /** The page to change. Default: the page the run made (page-run.json in the state folder). */
   pageId?: string;
   workspace?: string;
+  /** As page-run's: the marshal-sdk.json that declares the host. */
+  manifest?: string;
+  person?: string;
   extension?: string;
-  /** More extensions next to Page Studio (a brand-data provider). Default: $MARSHAL_SDK_EXTENSIONS, else the ones this package bundles. */
   extensions?: readonly string[];
   model?: string;
   effort?: string;
@@ -348,7 +358,7 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   for (const directory of [path.join(out, "shots"), path.join(logs, "query"), path.join(state, "host"), studioDir]) {
     fs.mkdirSync(directory, { recursive: true });
   }
-  const extension = path.resolve(options.extension ?? process.env.MARSHAL_SDK_PAGE_STUDIO ?? path.join(PACKAGE_ROOT, "extensions", "page-studio"));
+  const declared = await pageHost(options, log);
   const env: Record<string, string> = {
     ...(options.env ??
       Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined))),
@@ -362,17 +372,16 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   const host = await createMarshalHost({
     workspacePath: path.resolve(options.workspace ?? path.dirname(out)),
     stateRoot: path.join(state, "host"),
-    extensions: [{ packageRoot: extension }, ...extraExtensions(options.extensions).map((packageRoot) => ({ packageRoot }))],
+    extensions: declared.extensions,
     host: options.host ?? { id: "marshal-sdk", kind: "local" },
     labels: { job: "page-edit" },
-    prompt: runPrompt("page-edit", options, {
+    prompt: runPrompt("page-edit", { ...options, kitOptions: declared.kit }, {
       purpose: "one edit turn on the page an earlier run made, asked in plain words",
       contract: ["out/index.html and out/shots/ (the edited page)", "logs/summary.json and logs/run.jsonl for this turn"],
     }),
     env,
-    ...(options.model ? { model: options.model } : {}),
-    ...(options.effort ? { reasoningEffort: options.effort } : {}),
-    ...hostKit(options.kit, options.publish),
+    ...declaredHostOptions(declared),
+    ...(declared.kit ? { kit: declared.kit } : {}),
     ...(options.fake ? { query: fakeQuery, browser: false } : {}),
     log,
   });
@@ -392,7 +401,8 @@ export async function runPageEdit(options: PageEditOptions): Promise<RunSummaryJ
   let build: PageStudioBuild = {};
   try {
     if (!pageId) throw new Error(`No page to edit: ${state} has no ${PAGE_RUN_RECORD} and no --page-id was given.`);
-    if (options.model || options.effort || options.quickModel) await call("pagestudio.settings", pinnedSettings(options));
+    const pinned = pinnedSettings({ ...options, model: declared.model, effort: declared.effort });
+    if (Object.keys(pinned).length) await call("pagestudio.settings", pinned);
     // The dry path has no OpenAI key: route by the fast model instead of the Decisions API.
     if (options.fake) await call("pagestudio.settings", { useDecisions: false });
     settings = (await call("pagestudio.settings", {})) ?? {};
@@ -875,12 +885,16 @@ const USAGE = `marshal-sdk page-run: one Page Studio page from an agent-sandbox 
   --out <dir>        where index.html, assets/, shots/ and notes.md go (their page-agent/out)       (required)
   --logs <dir>       where run.jsonl, summary.json and query/ go (their page-agent-logs)            (required)
   --state <dir>      host-private folder outside the work folder                                    (required)
-  --extension <dir>  Page Studio's built package (default: $MARSHAL_SDK_PAGE_STUDIO, else the bundled one)
+  --manifest <file>  the marshal-sdk.json declaring the host: extensions (it must list @zyg/page-studio), their
+                     configuration, kit, Brain and model (default: $MARSHAL_SDK_MANIFEST, else ./marshal-sdk.json)
+  --person <email>   who the run works for: the Brain answers with their memories (default: $MARSHAL_SDK_BRAIN_CALLER)
+  --extension <dir>  a Page Studio package folder instead of a manifest, for developing Page Studio
+                     (default when no --manifest: $MARSHAL_SDK_PAGE_STUDIO)
   --depth <quick|single|deep>  (default single)   --rounds <1-4>   --idea <text | @file>
   --profile <id | role=id,…>  (default marshal: the host's own prompt and tools; page-studio, or one of Page Studio's data folder; roles: planner writer reviewer critic fixer picture-look default)
   --model <id>  --effort <low|medium|high|xhigh|max>   --quick-model <id>   --required-skill <name> (repeatable)
-  --kit <brain,memory,sessions>  kit parts on the host (default: $MARSHAL_SDK_KIT, else none); the Brain answers for
-                     $MARSHAL_SDK_BRAIN_CALLER when set, so that person's always-on memories reach the sessions
+  --kit <brain,memory,sessions>  kit parts on the host, over the manifest's (default: the manifest's kit; with
+                     --extension, $MARSHAL_SDK_KIT, else none)
   --publish-sessions <team|email,...>  publish the run's sessions to the team Brain's session index, for the team or
                      those people (default: $MARSHAL_SDK_PUBLISH_SESSIONS, else off); adds the Brain and sessions kit
   --publish-context <text>  one line in front of each published session's first prompt, e.g. the run id and the
@@ -940,12 +954,14 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
     env,
     ...(profileArgument(one("profile")) ? { profile: profileArgument(one("profile"))! } : {}),
     ...(one("workspace") ? { workspace: one("workspace")! } : {}),
+    ...(one("manifest") ? { manifest: one("manifest")! } : {}),
+    ...(one("person") ? { person: one("person")! } : {}),
     ...(one("extension") ? { extension: one("extension")! } : {}),
     ...(one("model") ? { model: one("model")! } : {}),
     ...(one("effort") ? { effort: one("effort")! } : {}),
     ...(one("rounds") ? { rounds: Number(one("rounds")) } : {}),
     ...(one("quick-model") ? { quickModel: one("quick-model")! } : {}),
-    ...(kitArgument(one("kit")) ? { kit: kitArgument(one("kit"))! } : {}),
+    ...(one("kit") ? { kit: kitArgument(one("kit"))! } : {}),
     ...publishArgument(one("publish-sessions"), one("publish-context")),
     ...(one("started-by") ? { startedBy: one("started-by")! } : {}),
     ...(one("state-location") ? { stateLocation: one("state-location")! } : {}),
@@ -978,10 +994,10 @@ export async function pageRunCommand(argv: readonly string[]): Promise<number> {
  */
 function runPrompt(
   job: string,
-  options: { kit?: readonly KitPartName[]; publish?: SessionsPublishOptions; startedBy?: string; stateLocation?: string; runLabel?: string; model?: string; effort?: string },
+  options: { kit?: readonly KitPartName[]; kitOptions?: KitOptions; publish?: SessionsPublishOptions; startedBy?: string; stateLocation?: string; runLabel?: string; model?: string; effort?: string },
   run: { purpose: string; contract: string[] },
 ) {
-  const parts = new Set(hostKit(options.kit, options.publish).kit?.parts ?? []);
+  const parts = new Set<string>(options.kitOptions?.parts ?? hostKit(options.kit, options.publish).kit?.parts ?? []);
   const startedBy = options.startedBy ?? process.env.MARSHAL_SDK_STARTED_BY;
   const stateLocation = options.stateLocation ?? process.env.MARSHAL_SDK_STATE_LOCATION;
   // The desktop's own prompt words (the `marshal` profile renders what a desktop agent gets), with this run's host facts on top.
@@ -994,6 +1010,105 @@ function runPrompt(
     ...(startedBy ? { startedBy } : {}),
     ...(stateLocation ? { stateLocation } : {}),
   }), surface: desktopSurface() };
+}
+
+export const PAGE_STUDIO = "@zyg/page-studio";
+
+/** What a page run's host loads, as its marshal-sdk.json declares it (or a Page Studio development build). */
+export interface DeclaredPageHost {
+  extensions: { packageRoot: string; configuration?: unknown }[];
+  kit?: KitOptions;
+  model?: string;
+  effort?: string;
+  /** The manifest it came from; absent for a development build given by --extension. */
+  manifest?: string;
+}
+
+/**
+ * The page host's extensions, kit and model from its manifest. Page Studio loads because the manifest lists it, with
+ * the configuration the manifest gives it; nothing is taken from inside this package. `extension` (or
+ * $MARSHAL_SDK_PAGE_STUDIO, when no manifest is named) runs a Page Studio package folder instead, for developing it.
+ */
+export async function pageHost(
+  options: {
+    manifest?: string;
+    extension?: string;
+    extensions?: readonly string[];
+    kit?: readonly KitPartName[];
+    publish?: SessionsPublishOptions;
+    person?: string;
+    model?: string;
+    effort?: string;
+    env?: Record<string, string | undefined>;
+  },
+  log: (line: string) => void = () => undefined,
+): Promise<DeclaredPageHost> {
+  const env = options.env ?? process.env;
+  const person = (options.person ?? env.MARSHAL_SDK_BRAIN_CALLER)?.trim().toLowerCase() || undefined;
+  const development = options.extension ?? (options.manifest ? undefined : env.MARSHAL_SDK_PAGE_STUDIO);
+  if (development) {
+    const packageRoot = path.resolve(development);
+    if (!fs.existsSync(path.join(packageRoot, "runtime-extension.json"))) throw new Error(`No Page Studio package at ${packageRoot}.`);
+    log(`Page Studio development build ${packageRoot} (no manifest)`);
+    const kit = hostKit(options.kit ?? kitArgument(undefined), options.publish, person).kit;
+    return {
+      extensions: [{ packageRoot }, ...extraExtensions(options.extensions, env).map((extra) => ({ packageRoot: extra }))],
+      ...(kit ? { kit } : {}),
+      ...(options.model ? { model: options.model } : {}),
+      ...(options.effort ? { effort: options.effort } : {}),
+    };
+  }
+  const file = manifestPath(options.manifest, env);
+  if (!file) {
+    throw new Error(
+      `A page run needs a ${MANIFEST_FILE} that lists ${PAGE_STUDIO}: pass --manifest <file> or set MARSHAL_SDK_MANIFEST (or --extension <package folder> for a Page Studio development build).`,
+    );
+  }
+  const resolved = await resolveManifest(file, { env });
+  if (!resolved.extensions.some((extension) => extension.identity === PAGE_STUDIO)) {
+    throw new Error(`${file} does not list ${PAGE_STUDIO}, so this host cannot build pages; add it to its extensions.`);
+  }
+  log(`manifest ${file}: ${resolved.extensions.map((extension) => `${extension.identity}@${extension.version} (${extension.source})`).join(", ")}`);
+  const kit = pageKit(resolved.kit, options.kit, options.publish, person);
+  const model = options.model ?? resolved.model;
+  const effort = options.effort ?? resolved.reasoningEffort;
+  return {
+    extensions: resolved.extensions.map((extension) => ({
+      packageRoot: extension.packageRoot,
+      ...(extension.configuration !== undefined ? { configuration: extension.configuration } : {}),
+    })),
+    ...(kit ? { kit } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    manifest: file,
+  };
+}
+
+function declaredHostOptions(declared: DeclaredPageHost): { model?: string; reasoningEffort?: string } {
+  return { ...(declared.model ? { model: declared.model } : {}), ...(declared.effort ? { reasoningEffort: declared.effort } : {}) };
+}
+
+/**
+ * The manifest's kit for one run: its parts (or the ones --kit names), the Brain and sessions when the run publishes
+ * its sessions, and the person the run works for as the Brain's caller, never taken from model input.
+ */
+export function pageKit(
+  declared: KitSelection | undefined,
+  parts: readonly KitPartName[] | undefined,
+  publish: SessionsPublishOptions | undefined,
+  person: string | undefined,
+): KitOptions | undefined {
+  const base: KitOptions | undefined = !declared ? undefined : Array.isArray(declared) ? { parts: [...declared] as KitOptions["parts"] } : { ...(declared as KitOptions) };
+  let chosen = (parts?.length ? [...parts] : [...(base?.parts ?? [])]) as KitOptions["parts"];
+  if (publish) chosen = [...new Set([...chosen, "brain", "sessions"])] as KitOptions["parts"];
+  if (!chosen.length) return undefined;
+  const brain = { ...base?.brain, ...(person ? { callerEmail: person } : {}) };
+  return {
+    ...base,
+    parts: chosen,
+    ...(Object.keys(brain).length ? { brain } : {}),
+    ...(publish ? { sessions: { ...base?.sessions, publish } } : {}),
+  };
 }
 
 /**
@@ -1035,6 +1150,7 @@ const EDIT_USAGE = `marshal-sdk page-edit: one edit turn on a page a page-run ma
   --logs <dir>       where run.jsonl, summary.json and query/ for this turn go                        (required)
   --request <text | @file>  the change in plain words                                                  (required)
   --page-id <id>     default: the page the run made
+  --manifest <file>  --person <email>   (as page-run)   --extension <dir>  a Page Studio development build
   --model <id>  --effort <level>  --quick-model <id>  --kit <brain,memory,sessions>  --fake
   --publish-sessions <team|email,...>  --publish-context <text>   (as page-run)
   --started-by <email>  --state-location <gs://…>  --run-label <id>   (as page-run)
@@ -1073,7 +1189,7 @@ export async function pageEditCommand(argv: readonly string[]): Promise<number> 
     delete env.ANTHROPIC_API_KEY;
   }
   const request = required("request");
-  const kit = kitArgument(values.get("kit"));
+  const kit = values.get("kit") ? kitArgument(values.get("kit")) : undefined;
   const summary = await runPageEdit({
     state: required("state"),
     out: required("out"),
@@ -1081,6 +1197,8 @@ export async function pageEditCommand(argv: readonly string[]): Promise<number> 
     request: request.startsWith("@") ? fs.readFileSync(request.slice(1), "utf8") : request,
     env,
     ...(values.get("page-id") ? { pageId: values.get("page-id")! } : {}),
+    ...(values.get("manifest") ? { manifest: values.get("manifest")! } : {}),
+    ...(values.get("person") ? { person: values.get("person")! } : {}),
     ...(values.get("extension") ? { extension: values.get("extension")! } : {}),
     ...(values.get("model") ? { model: values.get("model")! } : {}),
     ...(values.get("effort") ? { effort: values.get("effort")! } : {}),

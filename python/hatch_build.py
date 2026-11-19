@@ -1,6 +1,6 @@
 """Building the wheel installs the marshal-sdk npm package it carries, so the installed package runs with no npm step.
 
-marshal_sdk/_bundle/marshal-sdk.tgz (image/pack.mjs: marshal-sdk with its runtime packs, Page Studio and the Brain) is
+marshal_sdk/_bundle/marshal-sdk.tgz (image/pack.mjs: marshal-sdk with its runtime packs and the Brain) is
 installed with the Node of the nodejs-wheel-binaries build requirement into marshal_sdk/_bundle/install. That needs
 the npm registry for the packs' third-party dependencies and makes the wheel platform-specific. When the install
 cannot run (no registry), the wheel is built without it and the first query installs the tarball into a per-user

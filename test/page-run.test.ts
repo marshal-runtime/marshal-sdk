@@ -4,12 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activityProfiles, profileArgument, profileLabel, activitySkills, activityWarnings, browserEnv, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
+import { activityProfiles, profileArgument, profileLabel, activitySkills, activityWarnings, browserEnv, browserGate, chromeFlags, chromeWrapper, extraExtensions, fakeAnswer, followActivity, pageShots, finishPage, markSections, pageHost, readPageRunRecord, readSandboxInput, runPage, runPageEdit } from "../src/page-run.js";
 import { turnSessions, writeRunLogs } from "../src/run-contract.js";
 import { FileSessionStore } from "../src/session-store.js";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const PAGE_STUDIO = process.env.MARSHAL_SDK_PAGE_STUDIO ?? "/Users/omer/marshal-tracking/page-studio/out/package";
+
+/** An empty @marshal/brain package: Page Studio declares it needs the Brain, and the dry path never calls it. */
+function extensionPackage(identity: string, version: string, fields: Record<string, unknown> = {}): string {
+  const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "page-run-ext-")), "package");
+  fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(root, "runtime-extension.json"), JSON.stringify({ schemaVersion: 1, identity, version, entrypoint: "dist/index.cjs", moduleFormat: "commonjs-bundle-v1", contributes: {}, ...fields }));
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: identity, version, type: "commonjs", main: "dist/index.cjs" }));
+  fs.writeFileSync(path.join(root, "dist", "index.cjs"), "module.exports = { activate() { return {}; } };");
+  return root;
+}
+const BRAIN_STUB = extensionPackage("@marshal/brain", "0.0.0-stub");
 
 /** A page-agent input folder the way agent-sandbox's workspace writes it, cut down to what a run reads. */
 function inputFolder(): string {
@@ -329,7 +340,9 @@ test("page-run's dry path writes the whole run contract from an input folder, wi
   const root = path.dirname(work);
   const out = path.join(work, "out");
   const logs = path.join(root, "page-agent-logs");
-  const summary = await runPage({ input, out, logs, state: path.join(root, "state"), extension: PAGE_STUDIO, fake: true, offline: true, requiredSkills: ["lp-design"] });
+  const manifest = path.join(root, "marshal-sdk.json");
+  fs.writeFileSync(manifest, JSON.stringify({ version: 1, defaults: false, extensions: [{ path: PAGE_STUDIO }, { path: BRAIN_STUB }] }));
+  const summary = await runPage({ input, out, logs, state: path.join(root, "state"), manifest, fake: true, offline: true, requiredSkills: ["lp-design"] });
   assert.equal(summary.error, "", summary.error);
   const html = fs.readFileSync(path.join(out, "index.html"), "utf8");
   assert.match(html, /A page written without a model/);
@@ -357,7 +370,7 @@ test("page-edit reopens a finished run's state and edits its page through Page S
   const work = path.dirname(input);
   const root = path.dirname(work);
   const state = path.join(root, "state");
-  const built = await runPage({ input, out: path.join(work, "out"), logs: path.join(root, "page-agent-logs"), state, extension: PAGE_STUDIO, fake: true, offline: true, quickModel: "haiku" });
+  const built = await runPage({ input, out: path.join(work, "out"), logs: path.join(root, "page-agent-logs"), state, extension: PAGE_STUDIO, extensions: [BRAIN_STUB], fake: true, offline: true, quickModel: "haiku" });
   assert.equal(built.error, "", built.error);
   const record = readPageRunRecord(state);
   assert.ok(record?.pageId, "page-run keeps the page it made in the state folder");
@@ -365,7 +378,7 @@ test("page-edit reopens a finished run's state and edits its page through Page S
   const editOut = path.join(root, "edit-1", "out");
   const editLogs = path.join(root, "edit-1", "logs");
   const env = { ...(process.env as Record<string, string>), MARSHAL_PAGE_STUDIO_HASH: "0".repeat(64) };
-  const edited = await runPageEdit({ state, out: editOut, logs: editLogs, request: "Make the hero title shorter.", extension: PAGE_STUDIO, fake: true, env });
+  const edited = await runPageEdit({ state, out: editOut, logs: editLogs, request: "Make the hero title shorter.", extension: PAGE_STUDIO, extensions: [BRAIN_STUB], fake: true, env });
   assert.equal(edited.error, "", edited.error);
   assert.match((edited.marshal as { pageStudio: { drift?: string } }).pageStudio.drift ?? "", /Page Studio drift: .*continuing/, "a different build only warns");
   assert.match(fs.readFileSync(path.join(editOut, "index.html"), "utf8"), /A page written without a model/);
@@ -393,7 +406,7 @@ test("a dry run records its profile and every agent's fingerprint in the summary
     const input = inputFolder();
     const work = path.dirname(input);
     const root = path.dirname(work);
-    const summary = await runPage({ input, out: path.join(work, "out"), logs: path.join(root, "page-agent-logs"), state: path.join(root, "state"), extension: PAGE_STUDIO, fake: true, offline: true, ...(profile ? { profile } : {}) });
+    const summary = await runPage({ input, out: path.join(work, "out"), logs: path.join(root, "page-agent-logs"), state: path.join(root, "state"), extension: PAGE_STUDIO, extensions: [BRAIN_STUB], fake: true, offline: true, ...(profile ? { profile } : {}) });
     assert.equal(summary.error, "", summary.error);
     return summary.marshal as { profile: string; profiles: { role: string; profile: string; prompt: string; sha: string }[] };
   };
@@ -404,4 +417,34 @@ test("a dry run records its profile and every agent's fingerprint in the summary
   assert.equal(named.profile, "page-studio");
   assert.ok(named.profiles.every((p) => p.profile === "page-studio" && p.prompt !== "host-default"));
   assert.notEqual(plain.profiles[0].sha, named.profiles[0].sha);
+});
+
+test("a page host is what marshal-sdk.json declares: Page Studio only when listed, its configuration, the model and the person", async () => {
+  await assert.rejects(pageHost({ env: {} }), /needs a marshal-sdk\.json that lists @zyg\/page-studio/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "page-host-"));
+  const manifest = path.join(root, "marshal-sdk.json");
+  fs.writeFileSync(manifest, JSON.stringify({ version: 1, defaults: false, extensions: [{ path: BRAIN_STUB }] }));
+  await assert.rejects(pageHost({ manifest, env: {} }), /does not list @zyg\/page-studio/);
+  const studio = extensionPackage("@zyg/page-studio", "0.2.0", { dependencies: { extensions: [{ id: "@marshal/brain" }] } });
+  fs.writeFileSync(
+    manifest,
+    JSON.stringify({
+      version: 1,
+      defaults: false,
+      model: "claude-opus-5-5",
+      reasoningEffort: "xhigh",
+      kit: ["brain", "memory"],
+      brain: { index: "zyg", auth: "service" },
+      extensions: [{ path: studio, configuration: { openaiApiKey: "${env:OPENAI_API_KEY}" } }],
+    }),
+  );
+  await assert.rejects(pageHost({ manifest, env: { MARSHAL_SDK_BRAIN_PACKAGE: BRAIN_STUB } }), /environment variable OPENAI_API_KEY is not set/);
+  const declared = await pageHost({ manifest, person: "Omer@Zyg.com", env: { OPENAI_API_KEY: "sk-test", MARSHAL_SDK_BRAIN_PACKAGE: BRAIN_STUB, MARSHAL_SDK_PAGE_STUDIO: "/ignored/when/a/manifest/is/named" } });
+  assert.deepEqual(declared.extensions, [{ packageRoot: studio, configuration: { openaiApiKey: "sk-test" } }]);
+  assert.equal(declared.model, "claude-opus-5-5");
+  assert.equal(declared.effort, "xhigh");
+  assert.equal(declared.manifest, manifest);
+  assert.deepEqual(declared.kit?.parts, ["brain", "memory"]);
+  assert.equal(declared.kit?.brain?.callerMode, "delegated");
+  assert.equal(declared.kit?.brain?.callerEmail, "omer@zyg.com");
 });

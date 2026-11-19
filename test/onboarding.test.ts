@@ -9,11 +9,14 @@ import { test } from "node:test";
 import { createMarshalHost } from "../src/host.js";
 import { withManifest } from "../src/onboarding-cli.js";
 import {
+  brainKitOptions,
+  dependencyOrder,
   entryFromSpec,
   extractTgz,
   parseManifest,
   readManifest,
   resolveManifest,
+  unmetRequirements,
   writeManifest,
   type ExtensionResolver,
   type ManifestOrg,
@@ -48,6 +51,13 @@ function fixture(root: string, identity = "@test/onboard", version = "1.0.0"): s
   write("package.json", JSON.stringify({ name: identity, version, type: "commonjs", main: "dist/index.cjs" }));
   write("dist/index.cjs", "module.exports = { activate() { return {}; } };");
   write("skills/brief-check/SKILL.md", SKILL);
+  return packageRoot;
+}
+
+/** The fixture with more fields in its runtime-extension.json (dependencies, configuration). */
+function declaring(packageRoot: string, fields: Record<string, unknown>): string {
+  const file = path.join(packageRoot, "runtime-extension.json");
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), ...fields }));
   return packageRoot;
 }
 
@@ -326,4 +336,108 @@ test("one manifest gives a host its extensions, defaults, kit and model; the rep
     createMarshalHost({ workspacePath: path.join(root, "ws"), stateRoot: path.join(root, "state2"), browser: false, env: {}, extensions: [{ packageRoot: path.join(root, "gone") }] }),
     /gone: no runtime-extension\.json in .*gone \(is it a built extension package\?\)/,
   );
+});
+
+test("a url entry is downloaded once with the host's credentials, pinned by sha256 and cached by it", async () => {
+  const root = scratch();
+  const bytes = pack(fixture(root, "@test/remote", "0.2.0"), path.join(root, "remote.tgz"));
+  const url = "gs://dev-bucket/marshal-extensions/@test/remote/0.2.0.tgz";
+  const file = path.join(root, "marshal-sdk.json");
+  writeManifest(file, { version: 1, defaults: false, extensions: [{ url, sha256: sha256(bytes) }] });
+  assert.deepEqual(readManifest(file).extensions, [{ url, sha256: sha256(bytes) }]);
+  const fetched: string[] = [];
+  const fetchUrl = async (asked: string) => {
+    fetched.push(asked);
+    return bytes;
+  };
+  const cacheDir = path.join(root, "cache");
+  const first = await resolveManifest(file, { env: {}, cacheDir, fetchUrl });
+  assert.deepEqual(first.extensions.map((extension) => [extension.identity, extension.version, extension.source]), [["@test/remote", "0.2.0", "url"]]);
+  const second = await resolveManifest(file, { env: {}, cacheDir, fetchUrl });
+  assert.equal(second.extensions[0]!.packageRoot, first.extensions[0]!.packageRoot);
+  assert.deepEqual(fetched, [url], "the second start reads the cache");
+
+  writeManifest(file, { version: 1, defaults: false, extensions: [{ url, sha256: "1".repeat(64) }] });
+  await assert.rejects(resolveManifest(file, { env: {}, cacheDir, fetchUrl }), /sha256 is [0-9a-f]{64}, the manifest expects 1{64}/);
+  await assert.rejects(
+    resolveManifest(file, { env: {}, cacheDir: path.join(root, "cache2"), fetchUrl: async () => Promise.reject(new Error("HTTP 403 from Cloud Storage")) }),
+    /could not download it \(HTTP 403 from Cloud Storage\)/,
+  );
+  assert.throws(() => parseManifest({ version: 1, extensions: [{ url }] }, file), /sha256/);
+  assert.throws(() => parseManifest({ version: 1, extensions: [{ url: "http://plain.example.com/x.tgz", sha256: sha256(bytes) }] }, file), /url is gs:\/\/bucket\/object or https:/);
+  assert.throws(() => parseManifest({ version: 1, extensions: [{ url, path: "x", sha256: sha256(bytes) }] }, file), /exactly one/);
+});
+
+test("what extensions declare they need is checked before a host starts, and every gap is named at once", async () => {
+  const root = scratch();
+  const brain = fixture(root, "@marshal/brain", "0.4.0");
+  const studio = declaring(fixture(root, "@test/studio", "0.2.0"), {
+    dependencies: { extensions: [{ id: "@marshal/brain" }, { id: "@test/helper", version: "2.0.0" }] },
+    configuration: { schema: { type: "object", properties: { apiKey: { type: "string" }, region: { type: "string" } }, required: ["apiKey", "region"] }, defaults: { region: "us" } },
+  });
+  const helper = fixture(root, "@test/helper", "1.0.0");
+  const file = path.join(root, "marshal-sdk.json");
+  writeManifest(file, {
+    version: 1,
+    defaults: false,
+    extensions: [{ path: path.relative(root, studio), configuration: { token: "${env:STUDIO_TOKEN}" } }, { path: path.relative(root, helper) }],
+  });
+  const failure = await resolveManifest(file, { env: {} }).then(
+    () => assert.fail("resolved"),
+    (error: Error) => error.message,
+  );
+  assert.match(failure, /cannot start a host:/);
+  assert.match(failure, /environment variable STUDIO_TOKEN is not set/);
+  assert.match(failure, /@test\/studio@0\.2\.0 needs the extension @marshal\/brain, which this host does not load\./);
+  assert.match(failure, /@test\/studio@0\.2\.0 needs @test\/helper@2\.0\.0; this host loads 1\.0\.0\./);
+  assert.match(failure, /needs the setting "apiKey" in its configuration/);
+  assert.doesNotMatch(failure, /"region"/, "a default counts as given");
+
+  // The kit's Brain satisfies the dependency; a configured key satisfies the setting.
+  declaring(studio, { dependencies: { extensions: [{ id: "@marshal/brain" }] } });
+  writeManifest(file, {
+    version: 1,
+    defaults: false,
+    kit: ["brain"],
+    extensions: [{ path: path.relative(root, studio), configuration: { apiKey: "${env:STUDIO_TOKEN}" } }],
+  });
+  const resolved = await resolveManifest(file, { env: { STUDIO_TOKEN: "t", MARSHAL_SDK_BRAIN_PACKAGE: brain } });
+  assert.deepEqual(resolved.extensions.map((extension) => extension.identity), ["@test/studio"]);
+
+  // The host checks the same, for extensions given to it directly, and loads dependencies first.
+  assert.deepEqual(unmetRequirements([{ packageRoot: studio, configuration: { apiKey: "k" } }]), [
+    "@test/studio@0.2.0 needs the extension @marshal/brain, which this host does not load.",
+  ]);
+  assert.deepEqual(dependencyOrder([{ packageRoot: studio }, { packageRoot: brain }]).map((subject) => subject.packageRoot), [brain, studio]);
+  fs.mkdirSync(path.join(root, "ws"));
+  await assert.rejects(
+    createMarshalHost({ workspacePath: path.join(root, "ws"), stateRoot: path.join(root, "state"), browser: false, env: {}, extensions: [{ packageRoot: studio, configuration: { apiKey: "k" } }] }),
+    /This host cannot start; its extensions need:\n  - @test\/studio@0\.2\.0 needs the extension @marshal\/brain/,
+  );
+});
+
+test("a brain block names the Brain by index and the sign-in; the kit carries it, with no address in the file", async () => {
+  const root = scratch();
+  const brain = fixture(root, "@marshal/brain", "0.4.0");
+  const file = path.join(root, "marshal-sdk.json");
+  writeManifest(file, { version: 1, defaults: false, kit: ["memory"], brain: { index: "zyg", auth: "service" }, extensions: [] });
+  assert.deepEqual(readManifest(file).brain, { index: "zyg", auth: "service" });
+  const resolved = await resolveManifest(file, { env: { MARSHAL_SDK_BRAIN_PACKAGE: brain } });
+  const kit = resolved.kit as { parts: string[]; brain: { cloudUrl: string; callerMode: string } };
+  assert.deepEqual(kit.parts, ["brain", "memory"]);
+  assert.equal(kit.brain.callerMode, "delegated");
+  assert.match(kit.brain.cloudUrl, /^https:\/\/zyg-agents-front-/);
+  assert.equal(brainKitOptions({ auth: "person" }).callerMode, "desktop");
+  assert.equal(brainKitOptions({ index: "team-x", url: "https://brain.example.com" }).cloudUrl, "https://brain.example.com");
+  assert.throws(() => brainKitOptions({ index: "team-x" }, file), /no Brain named "team-x" \(known: zyg\); give its address as brain\.url/);
+  assert.throws(() => parseManifest({ version: 1, brain: { auth: "robot" } }, file), /auth/);
+});
+
+test("the sample agent-sandbox manifest is valid and names no Brain address", () => {
+  const file = path.join(import.meta.dirname, "..", "..", "examples", "zyg-agent-sandbox", "marshal-sdk.json");
+  const sample = fs.existsSync(file) ? file : path.join(import.meta.dirname, "..", "examples", "zyg-agent-sandbox", "marshal-sdk.json");
+  const manifest = readManifest(sample);
+  assert.deepEqual(manifest.brain, { index: "zyg", auth: "service" });
+  assert.match(manifest.extensions[0]!.url ?? "", /^gs:\/\/shop-builder-local-runs\/marshal-extensions\/@zyg\/page-studio\/\d+\.\d+\.\d+\.tgz$/);
+  assert.equal(brainKitOptions(manifest.brain!).callerMode, "delegated");
 });

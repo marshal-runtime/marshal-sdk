@@ -6,6 +6,12 @@ import { fileURLToPath } from "node:url";
 export const BRAIN_CLOUD_URL = "https://zyg-agents-front-559219955260.us-central1.run.app";
 /** The service account the desktop mints its ID token for (the person's own credentials sign the request). */
 export const BRAIN_CALLER_SERVICE_ACCOUNT = "brain-portal@zyg-ecom-meetings.iam.gserviceaccount.com";
+/**
+ * Brains by the name a manifest gives them (`"brain": {"index": "zyg"}`): the company Brain is the only one the SDK
+ * knows by name today; another Brain is named by its address (brain.url) until a discovery list serves the names.
+ */
+export const BRAIN_INDEXES: Readonly<Record<string, string>> = { zyg: BRAIN_CLOUD_URL };
+export const DEFAULT_BRAIN_INDEX = "zyg";
 export const BRAIN_IDENTITY = "@marshal/brain";
 /** Where to find a built @marshal/brain package when the kit is not given one. */
 export const BRAIN_PACKAGE_ENV = "MARSHAL_SDK_BRAIN_PACKAGE";

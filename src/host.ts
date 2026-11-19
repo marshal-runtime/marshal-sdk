@@ -43,7 +43,7 @@ import { OrgStore, type OrgStoreOptions, type OrgTranscriptOptions } from "./org
 import { OrgSessionSearch, type OrgSessionSearchOptions } from "./org-store/search.js";
 import { companyBrainStores, createMemoryToolsProvider, decideQueries, decideRelevance, HostMemory, type MemoryOptions } from "./memory.js";
 import { RunRecordsPublisher, type RunRecordsOptions } from "./run-records.js";
-import { ORG_EXTENSION, readPackageManifest } from "./onboarding.js";
+import { ORG_EXTENSION, dependencyOrder, readPackageManifest, unmetRequirements } from "./onboarding.js";
 import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
 import { createLinkCallProvider } from "./link/call-provider.js";
 import { linkPersonRoute } from "./link/decisions.js";
@@ -404,9 +404,12 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const runRecordsPublisher = options.runRecords ? new RunRecordsPublisher({ log, ...options.runRecords, store: sessions }) : undefined;
   const kitOptions = normalizeKit(options.kit);
   const kit = kitOptions ? prepareKit({ kit: kitOptions, sessions, workspacePath, workspaceName }) : undefined;
-  const extensions = [...(kit?.extensions ?? []), ...(options.extensions ?? [])];
-  // Fails before anything starts when a listed package is missing or is not an extension, naming it.
+  // Fails before anything starts when a listed package is missing or is not an extension, naming it; then names every
+  // dependency or required setting the extensions declare and this host does not give, in one error.
+  const extensions = dependencyOrder([...(kit?.extensions ?? []), ...(options.extensions ?? [])]);
   const packages = extensions.map((extension) => readPackageManifest(extension.packageRoot));
+  const unmet = unmetRequirements(extensions);
+  if (unmet.length) throw new Error(`This host cannot start; its extensions need:\n${unmet.map((problem) => `  - ${problem}`).join("\n")}`);
   const extensionSkills = extensions.flatMap((extension) => readExtensionSkills(extension.packageRoot));
   // Runtime packs that read `skill:` catalog contributions list these skills themselves.
   const runtimeReadsSkills = "readRuntimeExtensionSkills" in runtimeExtensions;
