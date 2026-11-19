@@ -46,6 +46,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 import uuid
 from collections.abc import AsyncIterator
@@ -70,6 +71,12 @@ FAKE_ENV_VAR = "MARSHAL_SDK_PAGE_FAKE"
 # The host, not the agent's tools, calls the Decisions API that routes Page Studio's edits; the caller's agent env
 # blanks this key for its tools, so the host takes it from the process.
 HOST_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+# The host signs in to the Brain and Cloud Storage with the process's service account key. agent-sandbox blanks the
+# key for its agent's tools, so the host gets it as a private file this variable names, never back in the tools' env.
+SERVICE_KEY_FILE_ENV_VAR = "MARSHAL_SDK_SERVICE_KEY_FILE"
+SERVICE_KEY_JSON_ENV_VAR = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
+SERVICE_KEY_PATH_ENV_VAR = "GOOGLE_APPLICATION_CREDENTIALS"
+SERVICE_KEY_FILENAME = "service-key.json"
 STATE_META = "marshal-page-state"
 RUN_DIRNAME = "marshal-page-studio"
 LOG_PREFIX = "[marshal-sdk page-"
@@ -273,6 +280,24 @@ def host_env(options: ClaudeAgentOptions) -> dict[str, str]:
     return env
 
 
+def hand_service_key(env: dict[str, str]) -> Path | None:
+    """When the caller blanked the service account key for its agent's tools, hand it to the host as a 0600 file in a
+    fresh private folder and name it in env; returns that folder for the caller to delete when the run ends."""
+    if env.get(SERVICE_KEY_JSON_ENV_VAR, "").strip() or env.get(SERVICE_KEY_PATH_ENV_VAR):
+        return None
+    inline = os.environ.get(SERVICE_KEY_JSON_ENV_VAR, "").strip()
+    if not inline:
+        if os.environ.get(SERVICE_KEY_PATH_ENV_VAR):
+            env[SERVICE_KEY_FILE_ENV_VAR] = os.environ[SERVICE_KEY_PATH_ENV_VAR]
+        return None
+    folder = Path(tempfile.mkdtemp(prefix="marshal-sdk-key-"))
+    key = folder / SERVICE_KEY_FILENAME
+    with os.fdopen(os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
+        handle.write(inline)
+    env[SERVICE_KEY_FILE_ENV_VAR] = str(key)
+    return folder
+
+
 def load_base_state(link: str | None, root: StateRoot | None, state: Path) -> bool:
     """The base page's Marshal state into the edit's state folder: from the location the page names, else by key."""
     if link is None:
@@ -330,18 +355,23 @@ async def run(options: ClaudeAgentOptions) -> AsyncIterator[Message]:
             "page-run", "--input", str(cwd / "input"), "--out", str(out), "--logs", str(logs), "--state", str(state),
             "--depth", os.environ.get(DEPTH_ENV_VAR, "single"),
         ]
-    process = await asyncio.create_subprocess_exec(
-        *cli(), *args, *common, env=env, cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024,
-    )
-    assert process.stderr is not None and process.stdout is not None
-    stdout_task = asyncio.create_task(process.stdout.read())
-    async for raw in process.stderr:
-        line = raw.decode("utf-8", "replace").rstrip()
-        if line:
-            yield SystemMessage(subtype=PROGRESS_SUBTYPE, data={"line": line})
-    code = await process.wait()
-    await stdout_task
+    key_folder = hand_service_key(env)
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cli(), *args, *common, env=env, cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024,
+        )
+        assert process.stderr is not None and process.stdout is not None
+        stdout_task = asyncio.create_task(process.stdout.read())
+        async for raw in process.stderr:
+            line = raw.decode("utf-8", "replace").rstrip()
+            if line:
+                yield SystemMessage(subtype=PROGRESS_SUBTYPE, data={"line": line})
+        code = await process.wait()
+        await stdout_task
+    finally:
+        if key_folder is not None:
+            shutil.rmtree(key_folder, ignore_errors=True)
     summary_file = logs / "summary.json"
     summary: dict[str, Any] = json.loads(summary_file.read_text(encoding="utf-8")) if summary_file.is_file() else {}
     index = out / "index.html"

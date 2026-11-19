@@ -745,7 +745,23 @@ export function brainKitOptions(brain: ManifestBrain, file = MANIFEST_FILE, env:
     if (!isServiceAccountKey(keyFile)) throw new OnboardingError("brain-key", `${file}: brain.credentialsFile ${keyFile} is not a service_account key file.`);
     return { ...options, callerMode: "service-key", credentialsFile: keyFile };
   }
-  return { ...options, callerMode: serviceAccountKeySource(env) ? "service-key" : "delegated" };
+  const source = serviceAccountKeySource(env);
+  // The Brain extension looks for a key only in $GOOGLE_APPLICATION_CREDENTIALS[_JSON], so a handed file is named to it.
+  if (source && "file" in source && source.file === env[SERVICE_KEY_FILE_ENV]) {
+    return { ...options, callerMode: "service-key", credentialsFile: source.file };
+  }
+  return { ...options, callerMode: source ? "service-key" : "delegated" };
+}
+
+/**
+ * The host's service account key as a file, from marshal_sdk (Python) when its caller blanked
+ * $GOOGLE_APPLICATION_CREDENTIALS[_JSON] for its agent's tools, as agent-sandbox does. Once the host has resolved its
+ * manifest it drops the variable (forgetHandedServiceKey), so the agent's tools do not find the key's path either.
+ */
+export const SERVICE_KEY_FILE_ENV = "MARSHAL_SDK_SERVICE_KEY_FILE";
+
+export function forgetHandedServiceKey(...envs: (Record<string, string | undefined> | undefined)[]): void {
+  for (const env of envs) if (env) delete env[SERVICE_KEY_FILE_ENV];
 }
 
 /** brain.person with its ${env:NAME} read; an unset variable or a value that is not an email is no person. */
@@ -792,11 +808,14 @@ async function fetchUrl(url: string, env: Record<string, string | undefined>): P
 /**
  * Where the host's service account key is, found as the Brain's service-key mode finds it: the key inline in
  * $GOOGLE_APPLICATION_CREDENTIALS_JSON (what an E2B sandbox carries, from Secret Manager), else a `service_account`
- * file at $GOOGLE_APPLICATION_CREDENTIALS. A person's application default credentials there are not a key.
+ * file at $MARSHAL_SDK_SERVICE_KEY_FILE or $GOOGLE_APPLICATION_CREDENTIALS. A person's application default
+ * credentials there are not a key.
  */
 export function serviceAccountKeySource(env: Record<string, string | undefined>): { inline: string } | { file: string } | undefined {
   const inline = env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim();
   if (inline) return { inline };
+  const handed = env[SERVICE_KEY_FILE_ENV];
+  if (handed && isServiceAccountKey(handed)) return { file: handed };
   const file = env.GOOGLE_APPLICATION_CREDENTIALS;
   return file && isServiceAccountKey(file) ? { file } : undefined;
 }
