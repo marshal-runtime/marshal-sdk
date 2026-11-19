@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
+import { BRAIN_INDEXES, DEFAULT_BRAIN_INDEX } from "./kit/brain.js";
 import type { KitOptions, KitSelection } from "./kit/index.js";
 import type { ModelsConfig } from "./models/index.js";
 import { PROVIDER_IDS, type ProviderSelection } from "./provider-selection.js";
@@ -25,13 +26,18 @@ const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 20_000;
 const ENV_REFERENCE = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
-/** One extension in the manifest: exactly one of `path`, `archive` or `id`. */
+/** One extension in the manifest: exactly one of `path`, `archive`, `url` or `id`. */
 export interface ManifestExtension {
   /** A built package folder (holding runtime-extension.json), relative to the manifest. */
   path?: string;
   /** A packed extension (.tgz), relative to the manifest. */
   archive?: string;
-  /** Expected sha256 of `archive`; checked when given. */
+  /**
+   * A packed extension (.tgz) at gs://bucket/object or https://…, fetched with the host's own credentials (Google
+   * credentials for gs://) and cached by its sha256. `sha256` is required with it.
+   */
+  url?: string;
+  /** Expected sha256 of `archive` (checked when given) or `url` (required). */
   sha256?: string;
   /** An extension the organization admits, by identity; `version` pins it, else the organization's current one. */
   id?: string;
@@ -64,6 +70,19 @@ export interface ManifestDefaults {
   zygTools?: boolean;
 }
 
+/**
+ * Which Brain the host's kit uses and how it signs in. Turns the kit's Brain on. `index` names the Brain (the company
+ * Brain is "zyg"); `auth` is "person" (the person's own Google credentials: a laptop, a Coder workspace) or "service"
+ * (a service on Google Cloud signs as itself and names the person each run works for). `url` and `audience` override
+ * the index's address for a Brain the SDK does not know by name yet.
+ */
+export interface ManifestBrain {
+  index?: string;
+  auth?: "person" | "service";
+  url?: string;
+  audience?: string;
+}
+
 export interface SdkManifest {
   version: 1;
   /** `zyg` marks a Zyg host: Zyg's tools join the defaults. */
@@ -73,6 +92,7 @@ export interface SdkManifest {
   /** The model provider of this host's sessions and its credentials (docs/providers.md). */
   provider?: ProviderSelection;
   kit?: KitSelection;
+  brain?: ManifestBrain;
   /** Which provider answers decide / embed / speech on this host (docs/models.md). */
   models?: ModelsConfig;
   org?: ManifestOrg;
@@ -97,7 +117,7 @@ export interface ResolvedExtension {
   configuration?: unknown;
   identity: string;
   version: string;
-  source: "path" | "archive" | "org";
+  source: "path" | "archive" | "url" | "org";
   /** Listed in the manifest, admitted by the organization's profile, or one of the built-in defaults. */
   origin: "listed" | "org-profile" | "default";
   /** The manifest entry or default, as written (for messages). */
@@ -107,6 +127,8 @@ export interface ResolvedExtension {
 export interface ResolveOptions {
   /** Where unpacked archives are kept. Default: $MARSHAL_SDK_CACHE, else <manifest dir>/.marshal-sdk/extensions. */
   cacheDir?: string;
+  /** Downloads a `url` entry's bytes. Default: gs:// through the GCS JSON API with a Google access token, https:// with fetch. */
+  fetchUrl?: (url: string) => Promise<Uint8Array>;
   /** Environment for `${env:...}` references and the default packages' variables. Default: process.env. */
   env?: Record<string, string | undefined>;
   /** Reaches the organization; needed for `id` entries and `org`. Default: the one registered with useExtensionResolver. */
@@ -191,8 +213,16 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
     const entry = record(item);
     const where = `${file}: extensions[${index}]`;
     if (!entry) throw new OnboardingError("manifest-invalid", `${where} must be an object.`);
-    const sources = ["path", "archive", "id"].filter((key) => typeof entry[key] === "string" && entry[key]);
-    if (sources.length !== 1) throw new OnboardingError("manifest-invalid", `${where} needs exactly one of path, archive or id.`);
+    const sources = ["path", "archive", "url", "id"].filter((key) => typeof entry[key] === "string" && entry[key]);
+    if (sources.length !== 1) throw new OnboardingError("manifest-invalid", `${where} needs exactly one of path, archive, url or id.`);
+    if (typeof entry.url === "string") {
+      if (!/^(gs:\/\/[a-z0-9][a-z0-9._-]{1,220}\/.+|https:\/\/.+)$/.test(entry.url)) {
+        throw new OnboardingError("manifest-invalid", `${where}: url is gs://bucket/object or https://….`);
+      }
+      if (typeof entry.sha256 !== "string" || !/^[0-9a-fA-F]{64}$/.test(entry.sha256)) {
+        throw new OnboardingError("manifest-invalid", `${where}: a url entry needs its sha256 (64 hex characters).`);
+      }
+    }
     if (typeof entry.id === "string" && !EXTENSION_ID.test(entry.id)) throw new OnboardingError("manifest-invalid", `${where}: "${entry.id}" is not an extension identity (@scope/name).`);
     if (entry.version !== undefined && (typeof entry.version !== "string" || !VERSION.test(entry.version))) {
       throw new OnboardingError("manifest-invalid", `${where}: version must look like 1.2.3.`);
@@ -201,6 +231,7 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
     return {
       ...(typeof entry.path === "string" ? { path: entry.path } : {}),
       ...(typeof entry.archive === "string" ? { archive: entry.archive } : {}),
+      ...(typeof entry.url === "string" ? { url: entry.url } : {}),
       ...(typeof entry.sha256 === "string" ? { sha256: entry.sha256.toLowerCase() } : {}),
       ...(typeof entry.id === "string" ? { id: entry.id } : {}),
       ...(typeof entry.version === "string" ? { version: entry.version } : {}),
@@ -244,9 +275,26 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
       throw new OnboardingError("manifest-invalid", `${file}: provider is {"id": "${PROVIDER_IDS.join("\" | \"")}", "account"?, "apiKeyEnv"?, "home"?, "engine"?: string}.`);
     }
   }
+  let brain: ManifestBrain | undefined;
+  if (root.brain !== undefined) {
+    const value = record(root.brain);
+    const fields = ["index", "auth", "url", "audience"];
+    if (
+      !value ||
+      Object.keys(value).some((key) => !fields.includes(key)) ||
+      (value.index !== undefined && (typeof value.index !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(value.index))) ||
+      (value.auth !== undefined && value.auth !== "person" && value.auth !== "service") ||
+      (value.url !== undefined && (typeof value.url !== "string" || !value.url.startsWith("https://"))) ||
+      (value.audience !== undefined && typeof value.audience !== "string")
+    ) {
+      throw new OnboardingError("manifest-invalid", `${file}: brain is {"index"?: "zyg" | <brain name>, "auth"?: "person" | "service", "url"?: "https://…", "audience"?: string}.`);
+    }
+    brain = value as ManifestBrain;
+  }
   return {
     version: 1,
     ...(root.profile === "zyg" ? { profile: "zyg" as const } : {}),
+    ...(brain ? { brain } : {}),
     ...(typeof root.model === "string" ? { model: root.model } : {}),
     ...(typeof root.reasoningEffort === "string" ? { reasoningEffort: root.reasoningEffort } : {}),
     ...(provider ? { provider: provider as unknown as ProviderSelection } : {}),
@@ -270,6 +318,7 @@ export function writeManifest(file: string, manifest: SdkManifest): void {
 export function describeEntry(entry: ManifestExtension): string {
   if (entry.path) return entry.path;
   if (entry.archive) return entry.archive;
+  if (entry.url) return entry.url;
   return entry.version ? `${entry.id}@${entry.version}` : entry.id!;
 }
 
@@ -311,6 +360,12 @@ export interface PackageSummary {
   version: string;
   capabilities: string[];
   skills: string[];
+  /** Extensions it needs on the same host (runtime-extension.json dependencies.extensions). */
+  dependencies: { id: string; version?: string }[];
+  /** Configuration keys its schema requires (configuration.schema.required). */
+  requiredConfiguration: string[];
+  /** Keys its own configuration defaults fill (configuration.defaults). */
+  configurationDefaults: string[];
 }
 
 /** The identity, version, capabilities and declared skills of a built package; throws a clear error when it is not one. */
@@ -334,7 +389,72 @@ export function readPackageManifest(packageRoot: string, label = packageRoot): P
   const skills = (Array.isArray(contributes.catalog) ? contributes.catalog : [])
     .filter((item): item is string => typeof item === "string" && item.startsWith("skill:") && !item.startsWith("skill://"))
     .map((item) => path.basename(item.slice("skill:".length)));
-  return { identity: raw.identity, version: raw.version, capabilities, skills };
+  const declaredDependencies = record(raw.dependencies)?.extensions;
+  const dependencies = (Array.isArray(declaredDependencies) ? declaredDependencies : [])
+    .map(record)
+    .filter((item): item is Record<string, unknown> => typeof item?.id === "string")
+    .map((item) => ({ id: item.id as string, ...(typeof item.version === "string" ? { version: item.version } : {}) }));
+  const configuration = record(raw.configuration);
+  const required = record(configuration?.schema)?.required;
+  return {
+    identity: raw.identity,
+    version: raw.version,
+    capabilities,
+    skills,
+    dependencies,
+    requiredConfiguration: Array.isArray(required) ? required.filter((key): key is string => typeof key === "string") : [],
+    configurationDefaults: Object.keys(record(configuration?.defaults) ?? {}),
+  };
+}
+
+/** One extension as the requirement check sees it: what it declares, and the configuration the host gives it. */
+export interface RequirementSubject {
+  packageRoot: string;
+  configuration?: unknown;
+}
+
+/**
+ * Every unmet requirement of the extensions a host is about to load, in one list: a dependency that is not among them
+ * (or not at the version asked for), and a required configuration key that neither the host's configuration nor the
+ * extension's own defaults give. Empty when the host can start.
+ */
+export function unmetRequirements(subjects: readonly RequirementSubject[]): string[] {
+  const summaries = subjects.map((subject) => ({ subject, summary: readPackageManifest(subject.packageRoot) }));
+  const loaded = new Map(summaries.map(({ summary }) => [summary.identity, summary.version]));
+  const problems: string[] = [];
+  for (const { subject, summary } of summaries) {
+    const name = `${summary.identity}@${summary.version}`;
+    for (const dependency of summary.dependencies) {
+      const version = loaded.get(dependency.id);
+      if (version === undefined) problems.push(`${name} needs the extension ${dependency.id}${dependency.version ? `@${dependency.version}` : ""}, which this host does not load.`);
+      else if (dependency.version && dependency.version !== version) problems.push(`${name} needs ${dependency.id}@${dependency.version}; this host loads ${version}.`);
+    }
+    const given = record(subject.configuration) ?? {};
+    for (const key of summary.requiredConfiguration) {
+      if (!(key in given) && !summary.configurationDefaults.includes(key)) problems.push(`${name} needs the setting "${key}" in its configuration.`);
+    }
+  }
+  return problems;
+}
+
+/** Load order where every dependency comes before what needs it (otherwise the order given). */
+export function dependencyOrder<T extends RequirementSubject>(subjects: readonly T[]): T[] {
+  const identities = subjects.map((subject) => readPackageManifest(subject.packageRoot));
+  const index = new Map(identities.map((summary, at) => [summary.identity, at]));
+  const ordered: T[] = [];
+  const state = new Map<number, "visiting" | "done">();
+  const visit = (at: number) => {
+    if (state.get(at) === "done" || state.get(at) === "visiting") return;
+    state.set(at, "visiting");
+    for (const dependency of identities[at]!.dependencies) {
+      const target = index.get(dependency.id);
+      if (target !== undefined) visit(target);
+    }
+    state.set(at, "done");
+    ordered.push(subjects[at]!);
+  };
+  subjects.forEach((_, at) => visit(at));
+  return ordered;
 }
 
 /**
@@ -353,6 +473,11 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
     return resolver;
   };
 
+  // Missing environment variables and unmet requirements are gathered and reported together, so one start names them all.
+  const problems: string[] = [];
+  const finish = (packageRoot: string, entry: ManifestExtension, label: string, source: ResolvedExtension["source"], origin: ResolvedExtension["origin"]) =>
+    finishEntry(packageRoot, entry, label, source, origin, env, problems);
+
   const listed: ResolvedExtension[] = [];
   for (const entry of manifest.extensions) {
     const label = describeEntry(entry);
@@ -367,12 +492,29 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
       if (entry.sha256 && entry.sha256 !== digest) throw new OnboardingError("archive-mismatch", `${label}: sha256 is ${digest}, the manifest expects ${entry.sha256}.`);
       packageRoot = unpack(bytes, path.join(cacheDir, `sha256-${digest.slice(0, 32)}`), label);
       source = "archive";
+    } else if (entry.url) {
+      // Cached by the hash the manifest pins: a repeat start reads nothing over the network.
+      const target = path.join(cacheDir, `sha256-${entry.sha256!.slice(0, 32)}`);
+      const cached = fs.existsSync(path.join(target, ".complete")) ? findPackageRoot(target) : undefined;
+      if (cached) packageRoot = cached;
+      else {
+        let bytes: Buffer;
+        try {
+          bytes = Buffer.from(await (options.fetchUrl ?? fetchUrl)(entry.url));
+        } catch (error) {
+          throw new OnboardingError("url-unreachable", `${label}: could not download it (${error instanceof Error ? error.message : String(error)}).`);
+        }
+        const digest = sha256Hex(bytes);
+        if (digest !== entry.sha256) throw new OnboardingError("archive-mismatch", `${label}: sha256 is ${digest}, the manifest expects ${entry.sha256}.`);
+        packageRoot = unpack(bytes, target, label);
+      }
+      source = "url";
     } else {
       const fetched = await needResolver(label).fetch({ org: manifest.org!, id: entry.id!, ...(entry.version ? { version: entry.version } : {}) });
       packageRoot = materialize(fetched, cacheDir, label);
       source = "org";
     }
-    listed.push(finish(packageRoot, entry, label, source, "listed", env));
+    listed.push(finish(packageRoot, entry, label, source, "listed"));
   }
 
   // The organization's admitted extensions, through the manifest's profile, unless listed already.
@@ -385,7 +527,7 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
       if (deny.has(admitted.id) || listedIds.has(admitted.id) || !(allow.includes("*") || allow.includes(admitted.id))) continue;
       const label = `${admitted.id}@${admitted.version} (org profile)`;
       const fetched = await resolver.fetch({ org: manifest.org, id: admitted.id, version: admitted.version });
-      fromProfile.push(finish(materialize(fetched, cacheDir, label), { id: admitted.id }, label, "org", "org-profile", env));
+      fromProfile.push(finish(materialize(fetched, cacheDir, label), { id: admitted.id }, label, "org", "org-profile"));
     }
   } else if (manifest.org?.profile?.allow?.length && !resolver) {
     throw new OnboardingError("resolver-missing", `org.profile admits extensions from the organization, which needs the org layer (src/org); this SDK build does not have it.`);
@@ -394,7 +536,8 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
   // The built-in defaults the manifest does not opt out of and does not already list.
   const taken = new Set([...listed, ...fromProfile].map((extension) => extension.identity));
   const defaults: ResolvedExtension[] = [];
-  let kit = manifest.kit;
+  // A `brain` block names the Brain and how the host signs in to it; it turns the kit's Brain on.
+  let kit = manifest.brain ? withBrainOptions(manifest.kit, brainKitOptions(manifest.brain, file)) : manifest.kit;
   for (const spec of DEFAULT_EXTENSIONS) {
     if (!defaultOn(manifest, spec) || taken.has(spec.identity)) continue;
     // A kit that already asks for the Brain (or memory, which needs it) loads it itself: not a default then.
@@ -417,7 +560,7 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
         `${label} is on because ${spec.why}, but no package was found: set ${spec.env} to a built package${spec.bundled ? `, put one at ${path.join(SDK_ROOT, spec.bundled)}` : ""}${manifest.org ? "" : ", or name the org that serves it"}, or opt out with "defaults": {"${spec.key}": false}.`,
       );
     }
-    const resolved = finish(packageRoot, { id: spec.identity }, label, source, "default", env);
+    const resolved = finish(packageRoot, { id: spec.identity }, label, source, "default");
     // The kit loads the Brain with its cloud configuration; the default turns that part on, at this package.
     if (spec.key === "brain") kit = withBrain(kit, resolved.packageRoot);
     defaults.push(resolved);
@@ -429,6 +572,17 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
     const earlier = seen.get(extension.identity);
     if (earlier) throw new OnboardingError("duplicate-extension", `${extension.identity} is listed twice (${earlier} and ${extension.entry}).`);
     seen.set(extension.identity, extension.entry);
+  }
+  // What the extensions declare they need, checked against what this host will load (the kit's Brain included).
+  const brainSpec = DEFAULT_EXTENSIONS.find((spec) => spec.key === "brain")!;
+  const shippedBrain = brainSpec.bundled ? path.join(SDK_ROOT, brainSpec.bundled) : undefined;
+  const kitBrain = kitAsksForBrain(kit)
+    ? (brainFromKit(kit) ?? envPackage(env[brainSpec.env]) ?? (shippedBrain && fs.existsSync(path.join(shippedBrain, "runtime-extension.json")) ? shippedBrain : undefined))
+    : undefined;
+  if (kitAsksForBrain(kit) && !kitBrain) problems.push(`the kit's Brain is on, but no ${BRAIN_EXTENSION} package was found: set ${brainSpec.env} to a built package.`);
+  problems.push(...unmetRequirements([...(kitBrain ? [{ packageRoot: kitBrain }] : []), ...all]));
+  if (problems.length) {
+    throw new OnboardingError("requirements-missing", `${file} cannot start a host:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
   }
   return {
     extensions: all,
@@ -487,21 +641,24 @@ function withOrgConfiguration(extension: ResolvedExtension, org: ManifestOrg | u
   return { ...extension, configuration: { discovery: org.discovery, ...(org.profile ? { profile: org.profile } : {}), ...given } };
 }
 
-function finish(
+function finishEntry(
   packageRoot: string,
   entry: ManifestExtension,
   label: string,
   source: ResolvedExtension["source"],
   origin: ResolvedExtension["origin"],
   env: Record<string, string | undefined>,
+  problems: string[],
 ): ResolvedExtension {
   const summary = readPackageManifest(packageRoot, label);
   if (entry.id && summary.identity !== entry.id) {
     throw new OnboardingError("identity-mismatch", `${label}: the package holds ${summary.identity}, not ${entry.id}.`);
   }
+  const missing = missingEnv(entry.configuration, env);
+  for (const name of missing) problems.push(`${label} configuration: environment variable ${name} is not set.`);
   return {
     packageRoot: fs.realpathSync(packageRoot),
-    ...(entry.configuration ? { configuration: expandEnv(entry.configuration, env, `${label} configuration`) } : {}),
+    ...(entry.configuration ? { configuration: missing.length ? entry.configuration : expandEnv(entry.configuration, env, `${label} configuration`) } : {}),
     identity: summary.identity,
     version: summary.version,
     source,
@@ -534,6 +691,83 @@ export function expandEnv(value: unknown, env: Record<string, string | undefined
   const object = record(value);
   if (!object) return value;
   return Object.fromEntries(Object.entries(object).map(([key, item]) => [key, expandEnv(item, env, where)]));
+}
+
+/** The `${env:NAME}` references in a configuration value whose variable is unset or empty, each once. */
+export function missingEnv(value: unknown, env: Record<string, string | undefined>): string[] {
+  const missing = new Set<string>();
+  const walk = (item: unknown) => {
+    if (typeof item === "string") {
+      const match = ENV_REFERENCE.exec(item);
+      if (match && (env[match[1]!] === undefined || env[match[1]!] === "")) missing.add(match[1]!);
+    } else if (Array.isArray(item)) item.forEach(walk);
+    else if (record(item)) Object.values(record(item)!).forEach(walk);
+  };
+  walk(value);
+  return [...missing];
+}
+
+/** The kit's Brain options for a manifest's `brain` block: the index's address and the sign-in mode. */
+export function brainKitOptions(brain: ManifestBrain, file = MANIFEST_FILE): NonNullable<KitOptions["brain"]> {
+  const index = brain.index ?? DEFAULT_BRAIN_INDEX;
+  const url = brain.url ?? BRAIN_INDEXES[index];
+  if (!url) {
+    throw new OnboardingError(
+      "brain-unknown",
+      `${file}: no Brain named "${index}" (known: ${Object.keys(BRAIN_INDEXES).join(", ")}); give its address as brain.url.`,
+    );
+  }
+  return {
+    cloudUrl: url,
+    cloudAudience: brain.audience ?? url,
+    callerMode: brain.auth === "service" ? "delegated" : "desktop",
+  };
+}
+
+/** The kit with its Brain part on and these Brain options under any the kit already gives. */
+function withBrainOptions(kit: KitSelection | undefined, brain: NonNullable<KitOptions["brain"]>): KitSelection {
+  const options: KitOptions = !kit ? { parts: [] } : Array.isArray(kit) ? { parts: kit as KitOptions["parts"] } : (kit as KitOptions);
+  return {
+    ...options,
+    parts: options.parts.includes("brain") ? options.parts : ["brain", ...options.parts],
+    brain: { ...brain, ...options.brain },
+  };
+}
+
+/** A `url` entry's bytes: gs:// through the GCS JSON API with the host's Google credentials, https:// with fetch. */
+async function fetchUrl(url: string): Promise<Uint8Array> {
+  let target = url;
+  const headers: Record<string, string> = {};
+  if (url.startsWith("gs://")) {
+    const [bucket, ...rest] = url.slice("gs://".length).split("/");
+    target = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket!)}/o/${encodeURIComponent(rest.join("/"))}?alt=media`;
+    headers.authorization = `Bearer ${await googleStorageToken()}`;
+  }
+  const response = await fetch(target, { headers, signal: AbortSignal.timeout(120_000) });
+  if (!response.ok) throw new Error(`HTTP ${response.status} from ${url.startsWith("gs://") ? "Cloud Storage" : new URL(url).host}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/**
+ * A Google access token for Cloud Storage: the metadata server's (a service on Google Cloud signs as its own service
+ * account), else the person's or the image's application default credentials (GOOGLE_ACCESS_TOKEN, google-auth-library,
+ * gcloud).
+ */
+async function googleStorageToken(): Promise<string> {
+  try {
+    const response = await fetch("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token", {
+      headers: { "Metadata-Flavor": "Google" },
+      signal: AbortSignal.timeout(1_500),
+    });
+    if (response.ok) {
+      const body = (await response.json()) as { access_token?: unknown };
+      if (typeof body.access_token === "string" && body.access_token) return body.access_token;
+    }
+  } catch {
+    // Not on Google Cloud: the application default credentials below.
+  }
+  const { googleAccessTokenProvider } = await import("./models/credentials.js");
+  return googleAccessTokenProvider()();
 }
 
 /** A configuration for printing: `${env:...}` references stay as written, other strings that look secret are masked. */

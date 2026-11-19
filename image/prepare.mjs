@@ -6,7 +6,7 @@
 // own vendor/packs; a desktop checkout works too), copied into
 // vendor/ and wired as file: dependencies plus overrides, as zyg-agents' vendor/runtime does. Only the
 // closure of what marshal-sdk imports is copied. Extensions are copied file by file from their built package
-// (no node_modules, no credential-shaped files) into extensions/<name>.
+// (no node_modules, no credential-shaped files) into extensions/<name>; none unless --extension names one.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,7 +20,6 @@ for (let index = 2; index < process.argv.length; index += 2) {
   if (key === "extension") args.extension.push(path.resolve(value));
   else args[key] = path.resolve(value);
 }
-if (!args.extension.length) args.extension.push("/Users/omer/marshal-tracking/page-studio/out/package");
 
 const sdk = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const desktop = JSON.parse(fs.readFileSync(path.join(args.packs, "package.json"), "utf8"));

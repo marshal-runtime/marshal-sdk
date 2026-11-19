@@ -1,7 +1,10 @@
 """Page builds on the Page Studio extension: an agent-sandbox page-agent query, answered by ``marshal-sdk page-run``.
 
 A query whose working folder is an agent-sandbox page-agent workspace
-(``input/page/brief.json`` and ``input/products/``) does not start the caller's own agent. The page is built (or, when
+(``input/page/brief.json`` and ``input/products/``), on a host whose marshal-sdk.json lists ``@zyg/page-studio``, does
+not start the caller's own agent. Page Studio, its configuration, the kit, the Brain and the model all come from that
+manifest (see manifest.py); nothing is taken from inside this package. Without such a manifest the query runs the
+caller's own agent and says so in a SystemMessage. The page is built (or, when
 ``input/page/base-page/index.html`` exists, edited) by Page Studio on a headless Marshal host, on Marshal's own system
 prompt and Page Studio's own skills, critic and copy. The caller's system prompt, skills, subagents and in-process MCP
 servers are not used on this path; any other query runs through marshal-claude as before.
@@ -19,11 +22,12 @@ Environment (all optional):
     MARSHAL_SDK_ENGINE                  page-studio (default) routes page-agent workspaces to Page Studio; claude runs the
                                         caller's own agent
     MARSHAL_SDK_CLI                     the marshal-sdk CLI (default: the one this package carries)
-    MARSHAL_SDK_PAGE_STUDIO             Page Studio's package folder (default: the one packed inside marshal-sdk)
+    MARSHAL_SDK_MANIFEST                the marshal-sdk.json (default: the one marshal_sdk.init() loaded, else
+                                        ./marshal-sdk.json, else beside the agent's working folder)
     MARSHAL_SDK_PAGE_DEPTH              quick | single | deep (default single)
     MARSHAL_SDK_PAGE_STATE_ROOT         a folder or gs://bucket/prefix to keep each page's state in as well, by key (for
                                         callers whose output root is unknown)
-    MARSHAL_SDK_KIT                     host kit parts (default brain,memory,sessions; "none" turns the kit off)
+    MARSHAL_SDK_KIT                     host kit parts over the manifest's (default: the manifest's kit)
     MARSHAL_SDK_RUN_POINTER_PREFIX      where the run's pointer for Marshal desktop's cloud run list goes (default
                                         gs://$GCS_BUCKET/marshal-sdk-cloud-runs when GCS_BUCKET is set)
     MARSHAL_SDK_RUN_OUTPUT_ROOT         the run's output root as a template on the brief's page_generation_run_id
@@ -50,7 +54,7 @@ from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions, Message, ResultMessage, SystemMessage
 
-from marshal_sdk import _node
+from marshal_sdk import _node, manifest
 
 ENGINE_ENV_VAR = "MARSHAL_SDK_ENGINE"
 ENGINE_PAGE_STUDIO = "page-studio"
@@ -59,7 +63,8 @@ CLI_ENV_VAR = "MARSHAL_SDK_CLI"
 DEPTH_ENV_VAR = "MARSHAL_SDK_PAGE_DEPTH"
 STATE_ROOT_ENV_VAR = "MARSHAL_SDK_PAGE_STATE_ROOT"
 KIT_ENV_VAR = "MARSHAL_SDK_KIT"
-DEFAULT_KIT = "brain,memory,sessions"
+BRAIN_CALLER_ENV_VAR = "MARSHAL_SDK_BRAIN_CALLER"
+NOTICE_SUBTYPE = "marshal_sdk_notice"
 # Page Studio's scripted backend (no model): the dry path, for tests.
 FAKE_ENV_VAR = "MARSHAL_SDK_PAGE_FAKE"
 # The host, not the agent's tools, calls the Decisions API that routes Page Studio's edits; the caller's agent env
@@ -125,12 +130,34 @@ def write_pointer(root: str, run: str) -> None:
     blob.upload_from_string(json.dumps({"outputRoot": root}), content_type="application/json")
 
 
-def routes(options: ClaudeAgentOptions | None) -> bool:
-    """Whether this query is a page-agent build that Page Studio answers."""
+def page_request(options: ClaudeAgentOptions | None) -> bool:
+    """Whether this query is a page-agent build or edit (its working folder is an agent-sandbox page-agent workspace)."""
     if os.environ.get(ENGINE_ENV_VAR, ENGINE_PAGE_STUDIO) != ENGINE_PAGE_STUDIO or options is None or options.cwd is None:
         return False
     input_dir = Path(options.cwd) / "input"
     return (input_dir / "page" / "brief.json").is_file() and (input_dir / "products").is_dir()
+
+
+def routes(options: ClaudeAgentOptions | None) -> bool:
+    """Whether Page Studio answers this query: a page-agent request on a host whose manifest lists Page Studio.
+
+    Raises manifest.MarshalInitError when the manifest cannot start a host (a missing setting, extension or variable).
+    """
+    if not page_request(options):
+        return False
+    found = manifest.find(options)
+    return found is not None and manifest.lists(found, manifest.PAGE_STUDIO)
+
+
+def not_routed_notice(options: ClaudeAgentOptions | None) -> SystemMessage:
+    """Why a page-agent request runs the caller's own agent: no manifest, or one that does not list Page Studio."""
+    found = manifest.find(options)
+    reason = (
+        f"no {manifest.MANIFEST_FILE} was found (marshal_sdk.init(path) or ${manifest.MANIFEST_ENV_VAR})"
+        if found is None
+        else f"{found} does not list {manifest.PAGE_STUDIO}"
+    )
+    return SystemMessage(subtype=NOTICE_SUBTYPE, data={"notice": f"this page request runs the caller's own agent: {reason}"})
 
 
 def base_page(cwd: Path) -> Path | None:
@@ -221,8 +248,21 @@ def cli() -> list[str]:
 
 
 def kit() -> str | None:
-    parts = os.environ.get(KIT_ENV_VAR, DEFAULT_KIT).strip()
+    """Kit parts named in $MARSHAL_SDK_KIT, over the manifest's; None leaves the manifest's kit."""
+    parts = os.environ.get(KIT_ENV_VAR, "").strip()
     return None if parts.lower() in ("", "none", "off") else parts
+
+
+def person(options: ClaudeAgentOptions) -> str | None:
+    """Who the run works for: the options' user when it is an email address (the caller sets it from its own request),
+    else $MARSHAL_SDK_BRAIN_CALLER. claude_agent_sdk spawns its CLI as the OS user ``user`` names, so marshal_sdk takes
+    an email there as the person and never passes it on as an OS user (see on_marshal)."""
+    given = options.user if is_email(options.user) else os.environ.get(BRAIN_CALLER_ENV_VAR)
+    return (given or "").strip().lower() or None
+
+
+def is_email(value: str | None) -> bool:
+    return bool(value) and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value.strip()) is not None
 
 
 def host_env(options: ClaudeAgentOptions) -> dict[str, str]:
@@ -261,7 +301,10 @@ async def run(options: ClaudeAgentOptions) -> AsyncIterator[Message]:
             write_pointer(run_root, str(run_label(cwd)))
         except Exception as error:  # a missing pointer only hides the run from cloud listings
             yield SystemMessage(subtype=PROGRESS_SUBTYPE, data={"warning": f"run pointer not written: {error!r}"})
+    declared = manifest.find(options)
     common = [
+        *(["--manifest", str(declared)] if declared is not None else []),
+        *(["--person", person(options)] if person(options) else []),
         *(["--model", options.model] if options.model else []),
         *(["--effort", str(options.effort)] if options.effort else []),
         *(["--kit", kit()] if kit() else []),

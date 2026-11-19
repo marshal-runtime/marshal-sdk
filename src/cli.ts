@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { MarshalHostOptions } from "./host.js";
 import type { KitOptions, KitPart } from "./kit/index.js";
+import { CHECK_USAGE } from "./check.js";
 import { ONBOARDING_USAGE, onboardingCommand, withManifest } from "./onboarding-cli.js";
 import { startLinkServer } from "./link/server.js";
 import { useExtensionResolver } from "./onboarding.js";
@@ -27,7 +28,7 @@ const USAGE = `marshal-sdk <command> [options]
               [--bind <address>] (default 127.0.0.1) [--port <n>] (default 7781) [--files name=<dir>]...
               [--page-studio-dir <dir>] serves the pages a run made there (default: $PAGE_STUDIO_DIR on a live host)
 
-${ONBOARDING_USAGE}
+${ONBOARDING_USAGE}${CHECK_USAGE}
 Host options (exec, agent, serve):
   --manifest <file>          the marshal-sdk.json to load (default: $MARSHAL_SDK_MANIFEST, else ./marshal-sdk.json)
   --cache <dir>              where organization and .tgz extensions are unpacked
@@ -140,6 +141,11 @@ async function main(): Promise<void> {
   if (process.argv[2] === "page-run") {
     const { pageRunCommand } = await import("./page-run.js");
     process.exitCode = await pageRunCommand(process.argv.slice(3));
+    return;
+  }
+  if (process.argv[2] === "check") {
+    const { checkCommand } = await import("./check.js");
+    process.exitCode = await checkCommand(process.argv.slice(3));
     return;
   }
   if (process.argv[2] === "init" || process.argv[2] === "extensions") {

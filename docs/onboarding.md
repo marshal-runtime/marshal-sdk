@@ -1,7 +1,9 @@
 # Onboarding: the extensions a host needs, in one file
 
-`marshal-sdk.json` lists what every host started from that folder loads: extensions, the kit, the model. Write it once
-with the CLI; `exec`, `agent` and `serve` pick it up from `--manifest`, `$MARSHAL_SDK_MANIFEST`, or the current folder.
+`marshal-sdk.json` lists what every host started from that folder loads: extensions, the kit, the Brain, the model.
+The SDK hardwires no extension: `page-run`, `page-edit`, `marshal-claude` and the Python package load Page Studio only
+because the manifest lists it. Write it once with the CLI; `exec`, `agent`, `serve`, `page-run`, `page-edit` and
+`check` pick it up from `--manifest`, `$MARSHAL_SDK_MANIFEST`, or the current folder.
 
 ```sh
 marshal-sdk init --model claude-opus-5-5 --effort high --kit memory,sessions \
@@ -30,6 +32,7 @@ marshal-sdk exec --workspace ws --state state --capability pagestudio.pages
   "extensions": [
     { "path": "vendor/page-studio" },
     { "archive": "vendor/brand-tools-1.2.0.tgz", "sha256": "…" },
+    { "url": "gs://<bucket>/marshal-extensions/@zyg/review-tools/1.0.0.tgz", "sha256": "…" },
     { "id": "@zyg/page-studio", "version": "0.2.0" },
     { "path": "vendor/foo", "configuration": { "apiKey": "${env:FOO_API_KEY}", "mode": "strict" } }
   ]
@@ -48,8 +51,9 @@ or `resolveManifest(file)` (`src/onboarding.ts`) for the resolved packages alone
 
 ## Rules
 
-- **One source per entry:** `path` (a built package folder), `archive` (a .tgz, checked against `sha256` when given)
-  or `id` (+ optional `version`) from the organization. Paths inside the manifest's folder are stored relative, so the
+- **One source per entry:** `path` (a built package folder), `archive` (a .tgz, checked against `sha256` when given),
+  `url` (a .tgz at `gs://bucket/object` or `https://…`, with a required `sha256`) or `id` (+ optional `version`) from
+  the organization. Paths inside the manifest's folder are stored relative, so the
   folder can move into an image whole; paths outside it are stored absolute.
 - **Secrets stay out of the file.** A configuration string `${env:NAME}` is read from the host's environment at start;
   a missing variable stops the host with its name. `extensions list` shows references as written and masks values
@@ -57,6 +61,75 @@ or `resolveManifest(file)` (`src/onboarding.ts`) for the resolved packages alone
 - **Flags win.** `--model` and `--effort` override the manifest; `--extension` packages load after its extensions.
 - **An identity appears once.** Two listed entries resolving to the same extension stop the host and name both. A
   listed entry replaces a default or an org-profile extension of the same identity.
+
+## A service's extensions: `url` entries
+
+A service (agent-sandbox, Marley) pins each extension to a published archive:
+
+```json
+{ "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.2.0.tgz",
+  "sha256": "603ebc8d5139401f2d775b18739dfd0cb8a64ec32d6aba69bf3f5f4c4c36e797",
+  "configuration": { "openaiApiKey": "${env:OPENAI_API_KEY}" } }
+```
+
+The host downloads it with its own credentials: `gs://` through the Cloud Storage API with the metadata server's token
+(a Cloud Run or GKE service account), else the application default credentials (`gcloud auth application-default
+login`, `GOOGLE_APPLICATION_CREDENTIALS`); `https://` with a plain GET. The bytes must match `sha256`, then unpack into
+the cache (`$MARSHAL_SDK_CACHE`, default `.marshal-sdk/extensions` beside the manifest) under that hash, so a repeat
+start reads nothing over the network. `marshal-sdk extensions fetch` fills the cache while an image builds.
+
+## What extensions declare they need
+
+An extension's `runtime-extension.json` already says what it needs, in the runtime's own fields:
+
+- `dependencies.extensions: [{ "id": "@marshal/brain", "version"?: "…" }]`: other extensions on the same host;
+- `configuration.schema.required: ["key", …]`: settings the host must give (a key in `configuration.defaults` counts
+  as given).
+
+Before a host starts, `resolveManifest` and `createMarshalHost` check every loaded extension (the kit's Brain
+included) and stop with one error that names every gap at once, together with every unset `${env:…}` variable:
+
+```
+/srv/marshal-sdk.json cannot start a host:
+  - gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.2.0.tgz configuration: environment variable OPENAI_API_KEY is not set.
+  - @zyg/page-studio@0.2.0 needs the extension @marshal/brain, which this host does not load.
+  - @acme/tools@1.0.0 needs the setting "region" in its configuration.
+```
+
+Extensions load in dependency order.
+
+## The Brain: `brain`
+
+```json
+"brain": { "index": "zyg", "auth": "service" }
+```
+
+- `index` names the Brain (default `zyg`, ZyG's company Brain). The SDK maps a name to its address (`BRAIN_INDEXES`
+  in `src/kit/brain.ts`); the file holds no URL. A Brain the table does not know takes `url` (and `audience`).
+- `auth`: `"person"` (default) signs in with the person's own Google credentials (a laptop, a Coder workspace);
+  `"service"` signs in as the service account (metadata-server ID token) and names the person each run works for
+  (`--person`, Python's `ClaudeAgentOptions(user="<email>")`, else `$MARSHAL_SDK_BRAIN_CALLER`).
+- A `brain` block turns the kit's Brain on. The old knobs (`MARSHAL_SDK_BRAIN_URL` and friends, a kit object's
+  `brain` options) still override it.
+
+## Proving a manifest: `marshal-sdk check`
+
+```sh
+marshal-sdk check --manifest marshal-sdk.json [--person someone@zyg.com] [--no-brain-ping]
+```
+
+Resolves the manifest (downloads, hashes, `${env:…}`), checks what every extension needs, starts a throwaway host with
+exactly those extensions, and asks the Brain one question (`knowledge.search`). It prints a JSON report and exits 1 on
+any problem:
+
+```json
+{ "ok": true, "manifest": "/srv/marshal-sdk.json",
+  "extensions": [{ "identity": "@zyg/page-studio", "version": "0.2.0", "source": "url", "from": "gs://…", "origin": "listed" }],
+  "brain": { "index": "zyg", "url": "https://…", "auth": "service", "reachable": true },
+  "model": "claude-opus-5-5", "effort": "xhigh", "problems": [] }
+```
+
+Python's `marshal_sdk.init(path)` runs it once at a service's start and raises `MarshalInitError` with the problems.
 
 ## Extensions from the organization
 

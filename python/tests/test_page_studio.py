@@ -1,6 +1,7 @@
 """marshal_sdk's Page Studio route: which queries it takes, the page's state key, the edit request, and a dry build."""
 
 import asyncio
+import base64
 import json
 import os
 from pathlib import Path
@@ -10,9 +11,30 @@ import shutil
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, SystemMessage
 
-from marshal_sdk import page_studio
+from marshal_sdk import manifest, page_studio
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def no_manifest(monkeypatch):
+    """Each test starts with no manifest in force, unless it writes one."""
+    manifest.reset()
+    monkeypatch.delenv(manifest.MANIFEST_ENV_VAR, raising=False)
+    monkeypatch.delenv(page_studio.BRAIN_CALLER_ENV_VAR, raising=False)
+    yield
+    manifest.reset()
+
+
+def checked(monkeypatch, identities: list[str], seen: list | None = None):
+    """manifest.check standing in for `marshal-sdk check`: a report listing these extensions."""
+
+    def fake_check(path, *, ping_brain, person=None):
+        if seen is not None:
+            seen.append((str(path), ping_brain))
+        return {"ok": True, "manifest": str(path), "extensions": [{"identity": identity} for identity in identities], "problems": []}
+
+    monkeypatch.setattr(manifest, "check", fake_check)
 
 
 def workspace(tmp_path: Path) -> Path:
@@ -23,16 +45,76 @@ def workspace(tmp_path: Path) -> Path:
     return cwd
 
 
-def test_routes_page_agent_workspaces_by_default_and_claude_opts_out(tmp_path, monkeypatch):
+def test_page_studio_answers_only_when_the_manifest_lists_it_and_claude_opts_out(tmp_path, monkeypatch):
     cwd = workspace(tmp_path)
     monkeypatch.delenv(page_studio.ENGINE_ENV_VAR, raising=False)
-    assert page_studio.routes(ClaudeAgentOptions(cwd=str(cwd)))
+    options = ClaudeAgentOptions(cwd=str(cwd))
+    # A page request with no manifest runs the caller's own agent, and says why.
+    assert page_studio.page_request(options) and not page_studio.routes(options)
+    assert "no marshal-sdk.json" in page_studio.not_routed_notice(options).data["notice"]
+    declared = tmp_path / "marshal-sdk.json"
+    declared.write_text('{"version": 1, "extensions": []}')
+    checked(monkeypatch, ["@marshal/brain"])
+    assert not page_studio.routes(options)
+    assert "does not list @zyg/page-studio" in page_studio.not_routed_notice(options).data["notice"]
+    checked(monkeypatch, ["@marshal/brain", "@zyg/page-studio"])
+    assert page_studio.routes(options)
     monkeypatch.setenv(page_studio.ENGINE_ENV_VAR, "claude")
-    assert not page_studio.routes(ClaudeAgentOptions(cwd=str(cwd)))
+    assert not page_studio.routes(options)
     monkeypatch.setenv(page_studio.ENGINE_ENV_VAR, "page-studio")
-    assert page_studio.routes(ClaudeAgentOptions(cwd=str(cwd)))
     assert not page_studio.routes(ClaudeAgentOptions(cwd=str(tmp_path)))
     assert not page_studio.routes(ClaudeAgentOptions())
+
+
+def test_init_proves_the_manifest_once_and_names_every_problem(tmp_path, monkeypatch):
+    import subprocess
+
+    declared = tmp_path / "marshal-sdk.json"
+    declared.write_text('{"version": 1, "extensions": []}')
+    calls: list = []
+    answer = {"ok": True, "extensions": [{"identity": "@zyg/page-studio", "source": "url"}], "problems": []}
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0 if answer["ok"] else 1, stdout=json.dumps(answer), stderr="")
+
+    monkeypatch.setattr(manifest.subprocess, "run", fake_run)
+    monkeypatch.setenv(page_studio.CLI_ENV_VAR, "/x/cli.js")
+    import marshal_sdk
+
+    report = marshal_sdk.init(declared)
+    assert report["extensions"][0]["identity"] == "@zyg/page-studio"
+    assert calls[0][-3:] == ["check", "--manifest", str(declared.resolve())]
+    assert marshal_sdk.init(declared) is report and len(calls) == 1
+    assert manifest.find() == declared.resolve()
+    # Routing reads the checked report: no second check.
+    assert manifest.lists(declared.resolve(), manifest.PAGE_STUDIO) and len(calls) == 1
+
+    manifest.reset()
+    answer.update(ok=False, problems=["@zyg/page-studio@0.2.0 needs the extension @marshal/brain", "environment variable OPENAI_API_KEY is not set"])
+    with pytest.raises(marshal_sdk.MarshalInitError) as raised:
+        marshal_sdk.init(declared)
+    assert raised.value.problems == answer["problems"] and "OPENAI_API_KEY" in str(raised.value)
+    with pytest.raises(marshal_sdk.MarshalInitError, match="No marshal-sdk.json"):
+        marshal_sdk.init(tmp_path / "missing.json")
+
+
+def test_the_person_is_the_options_user_email_never_an_os_user(monkeypatch):
+    import marshal_sdk
+
+    assert page_studio.person(ClaudeAgentOptions(user="Omer.Machluf@Zyg.com")) == "omer.machluf@zyg.com"
+    assert page_studio.person(ClaudeAgentOptions(user="www-data")) is None
+    monkeypatch.setenv(page_studio.BRAIN_CALLER_ENV_VAR, "bar@zyg.com")
+    assert page_studio.person(ClaudeAgentOptions()) == "bar@zyg.com"
+    monkeypatch.delenv(page_studio.BRAIN_CALLER_ENV_VAR)
+    monkeypatch.setenv(marshal_sdk.BRIDGE_ENV_VAR, "/x/marshal-claude")
+    monkeypatch.setattr(marshal_sdk, "_claude_cli", lambda _options: "/x/claude")
+    # claude_agent_sdk spawns its CLI as the OS user `user` names: an email goes to the Brain, not to the spawn.
+    spawned = marshal_sdk.on_marshal(ClaudeAgentOptions(user="omer@zyg.com"))
+    assert spawned.user is None and spawned.env[page_studio.BRAIN_CALLER_ENV_VAR] == "omer@zyg.com"
+    assert marshal_sdk.on_marshal(ClaudeAgentOptions(user="www-data")).user == "www-data"
+    monkeypatch.setenv(marshal_sdk.OFF_ENV_VAR, "1")
+    assert marshal_sdk.on_marshal(ClaudeAgentOptions(user="omer@zyg.com")).user is None
 
 
 def test_state_key_is_stamped_once_and_read_back():
@@ -74,6 +156,31 @@ def test_result_message_sums_usage_and_cost():
     assert page_studio.result_message({"error": "boom"}, 1).is_error
 
 
+PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
+def sandbox_pack(root: Path) -> Path:
+    """A page-agent input folder the way agent-sandbox writes it, cut down to what a run reads."""
+    files: dict[str, str | bytes] = {
+        "README.md": "# Input: Acme / Night Balm\n",
+        "brand/brand.json": json.dumps({"brand_id": 7, "name": "Acme", "existing_website": "https://www.acme.example"}),
+        "page/brief.json": json.dumps(
+            {"brand_id": "7", "product_id": "321", "brand_name": "Acme", "product_name": "NIGHT BALM", "positioning": {"brief_markdown": "## Positioning\n\nSleep better."}}
+        ),
+        "page/operator-request.md": "A page for tired parents.\n",
+        "products/321/product.json": json.dumps({"core": {"product_id": 321, "name": "NIGHT BALM", "product_handle": "night-balm"}}),
+        "products/321/offers.json": json.dumps({"domain": "acme.example", "offers": [{"price": 30}]}),
+        "products/321/facts.md": "- F1 (input): Night Balm costs $30.\n",
+        "products/321/pictures.json": json.dumps([{"key": "A01", "file": "pictures/jar.png", "description": "The jar on a white table.", "scope": "product"}]),
+        "products/321/pictures/jar.png": PNG,
+    }
+    for name, body in files.items():
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(body) if isinstance(body, bytes) else target.write_text(body)
+    return root
+
+
 @pytest.mark.skipif(
     not (PACKAGE_ROOT / "dist" / "src" / "cli.js").is_file() or not os.environ.get("MARSHAL_SDK_PAGE_STUDIO"),
     reason="needs a built marshal-sdk and MARSHAL_SDK_PAGE_STUDIO",
@@ -82,14 +189,23 @@ def test_dry_build_then_edit_through_query(tmp_path, monkeypatch):
     """A page-agent query builds a page on Page Studio's scripted backend, then an edit of it finds its state."""
     import marshal_sdk
 
-    pack = Path(os.environ.get("MARSHAL_SDK_TEST_PACK", ""))
+    # A real agent-sandbox input pack when given, else the cut-down one test/page-run.test.ts builds.
+    given = os.environ.get("MARSHAL_SDK_TEST_PACK")
+    pack = Path(given) if given else sandbox_pack(tmp_path / "pack")
     if not pack.is_dir():
-        pytest.skip("MARSHAL_SDK_TEST_PACK names no agent-sandbox input pack")
-    import shutil
+        pytest.skip(f"MARSHAL_SDK_TEST_PACK={given} is not a folder")
 
     monkeypatch.setenv(page_studio.FAKE_ENV_VAR, "1")
     monkeypatch.setenv(page_studio.STATE_ROOT_ENV_VAR, str(tmp_path / "states"))
     monkeypatch.setenv(page_studio.CLI_ENV_VAR, str(PACKAGE_ROOT / "dist" / "src" / "cli.js"))
+    # The host is what the manifest declares: Page Studio and the Brain it depends on (no Brain call on the dry path).
+    brain = os.environ.get("MARSHAL_SDK_BRAIN_PACKAGE")
+    if not brain:
+        pytest.skip("needs MARSHAL_SDK_BRAIN_PACKAGE (Page Studio depends on @marshal/brain)")
+    declared = tmp_path / "marshal-sdk.json"
+    declared.write_text(json.dumps({"version": 1, "defaults": False, "extensions": [{"path": os.environ["MARSHAL_SDK_PAGE_STUDIO"]}, {"path": brain}]}))
+    monkeypatch.setenv(manifest.MANIFEST_ENV_VAR, str(declared))
+    monkeypatch.delenv("MARSHAL_SDK_PAGE_STUDIO")
 
     async def run(cwd: Path) -> list:
         return [m async for m in marshal_sdk.query(prompt="build", options=ClaudeAgentOptions(cwd=str(cwd)))]
@@ -251,11 +367,26 @@ def test_an_edit_whose_page_names_no_state_runs_the_callers_agent(tmp_path, monk
     assert "calls" not in seen
 
 
-def test_the_kit_defaults_to_brain_memory_sessions_and_none_turns_it_off(monkeypatch):
+def test_the_kit_is_the_manifests_unless_the_environment_names_one(monkeypatch):
     monkeypatch.delenv(page_studio.KIT_ENV_VAR, raising=False)
-    assert page_studio.kit() == "brain,memory,sessions"
+    assert page_studio.kit() is None
+    monkeypatch.setenv(page_studio.KIT_ENV_VAR, "brain,memory")
+    assert page_studio.kit() == "brain,memory"
     monkeypatch.setenv(page_studio.KIT_ENV_VAR, "none")
     assert page_studio.kit() is None
+
+
+def test_a_build_names_its_manifest_and_person_to_page_run(tmp_path, monkeypatch):
+    seen: dict = {}
+    fake_cli(monkeypatch, seen, page="<html><head></head><body>v1</body></html>")
+    cwd = workspace(tmp_path)
+    declared = tmp_path / "marshal-sdk.json"
+    declared.write_text('{"version": 1, "extensions": []}')
+    asyncio.run(_collect(page_studio.run(ClaudeAgentOptions(cwd=str(cwd), user="Omer@zyg.com"))))
+    args = seen["calls"][0]["args"]
+    assert args[args.index("--manifest") + 1] == str(declared.resolve())
+    assert args[args.index("--person") + 1] == "omer@zyg.com"
+    assert "--kit" not in args
 
 
 async def _collect(stream) -> list:

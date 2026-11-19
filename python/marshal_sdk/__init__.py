@@ -9,8 +9,16 @@ marshal-sdk npm package), which starts a Marshal host around the Claude Code CLI
 Marshal's runtime tools and the run is recorded as a Marshal session, while hooks, subagents, permission callbacks and
 in-process MCP tools work as before.
 
-Nothing else needs installing: Node comes from the nodejs-wheel-binaries dependency, and the marshal-sdk npm package
-(with the Page Studio extension and the Brain inside) ships in this package and is installed when its wheel is built
+What the host loads is the caller's to declare, in one file, marshal-sdk.json: its extensions (a package by gs:// or
+https:// url and sha256, a folder, or an organization id), their configuration (secrets as ``${env:NAME}``), the kit,
+the Brain (``{"index": "zyg", "auth": "service"}``) and the model. Load it once at start:
+
+    import marshal_sdk
+    marshal_sdk.init("marshal-sdk.json")   # raises MarshalInitError naming every missing setting, extension or access
+
+The person a run works for is the options' ``user`` (``ClaudeAgentOptions(user=requester_email)``): the Brain answers
+with their memories. Nothing else needs installing: Node comes from the nodejs-wheel-binaries dependency, and the
+marshal-sdk npm package (the host and the Brain) ships in this package and is installed when its wheel is built
 (see _node.py).
 
 Environment:
@@ -18,8 +26,9 @@ Environment:
     MARSHAL_SDK_OFF=1     run on plain claude_agent_sdk (no Marshal host), for an A/B or a rollback
     MARSHAL_SDK_KIT       host kit parts: brain, memory, sessions (comma separated)
     MARSHAL_SDK_STATE     where the host keeps its sessions (default: a temp folder per run)
-    MARSHAL_SDK_ENGINE    page-studio (default): page-agent builds and edits run on the Page Studio extension
-                          (see page_studio.py); claude: they run the caller's own agent
+    MARSHAL_SDK_MANIFEST  the marshal-sdk.json when init() is not called (else ./marshal-sdk.json)
+    MARSHAL_SDK_ENGINE    page-studio (default): page-agent builds and edits run on the Page Studio extension when the
+                          manifest lists it (see page_studio.py); claude: they run the caller's own agent
 """
 
 from __future__ import annotations
@@ -37,9 +46,10 @@ from claude_agent_sdk import ClaudeAgentOptions, Message
 from claude_agent_sdk import ClaudeSDKClient as _ClaudeSDKClient
 from claude_agent_sdk._internal.transport import Transport
 
-from marshal_sdk import _node, page_studio
+from marshal_sdk import _node, manifest, page_studio
+from marshal_sdk.manifest import MarshalInitError, init
 
-__all__ = list(_sdk.__all__)
+__all__ = [*_sdk.__all__, "MarshalInitError", "init"]
 
 BRIDGE_ENV_VAR = "MARSHAL_CLAUDE"
 BRIDGE_NAME = "marshal-claude"
@@ -81,9 +91,21 @@ def on_marshal(options: ClaudeAgentOptions | None) -> ClaudeAgentOptions:
     """The same options, run through marshal-claude (unchanged when MARSHAL_SDK_OFF=1)."""
     options = options or ClaudeAgentOptions()
     if os.environ.get(OFF_ENV_VAR) == "1":
-        return options
+        return dataclasses.replace(options, user=None) if page_studio.is_email(options.user) else options
+    declared = manifest.find(options)
+    caller = page_studio.person(options)
     return dataclasses.replace(
-        options, cli_path=_bridge(), env={**_node.tool_env(), **options.env, REAL_CLI_ENV_VAR: _claude_cli(options)}
+        options,
+        # An email in `user` names the run's person (the Brain's caller), not an OS account to spawn the CLI as.
+        user=None if page_studio.is_email(options.user) else options.user,
+        cli_path=_bridge(),
+        env={
+            **_node.tool_env(),
+            **({manifest.MANIFEST_ENV_VAR: str(declared)} if declared is not None else {}),
+            **({page_studio.BRAIN_CALLER_ENV_VAR: caller} if caller else {}),
+            **options.env,
+            REAL_CLI_ENV_VAR: _claude_cli(options),
+        },
     )
 
 
@@ -98,11 +120,13 @@ async def query(
     def own_agent() -> AsyncIterator[Message]:
         return _sdk.query(prompt=prompt, options=on_marshal(options), transport=transport)
 
-    if transport is None and os.environ.get(OFF_ENV_VAR) != "1" and page_studio.routes(options):
-        assert options is not None
-        async for message in page_studio.query(options, own_agent):
-            yield message
-        return
+    if transport is None and os.environ.get(OFF_ENV_VAR) != "1" and page_studio.page_request(options):
+        if page_studio.routes(options):
+            assert options is not None
+            async for message in page_studio.query(options, own_agent):
+                yield message
+            return
+        yield page_studio.not_routed_notice(options)
     async for message in own_agent():
         yield message
 

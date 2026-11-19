@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "model": "claude-opus-5-5",
+  "reasoningEffort": "xhigh",
+  "kit": ["brain", "memory", "sessions"],
+  "brain": { "index": "zyg", "auth": "service" },
+  "extensions": [
+    {
+      "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.2.0.tgz",
+      "sha256": "603ebc8d5139401f2d775b18739dfd0cb8a64ec32d6aba69bf3f5f4c4c36e797",
+      "configuration": { "openaiApiKey": "${env:OPENAI_API_KEY}" }
+    }
+  ]
+}

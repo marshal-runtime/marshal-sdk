@@ -11,14 +11,15 @@
 // package's node_modules and listed in bundleDependencies, so npm installs them as shipped. Their own
 // registry dependencies are declared at the top level (npm does not resolve dependencies of bundled packages),
 // at the packs' own ranges. Extensions are copied file by file (no node_modules, no credential-shaped files)
-// into extensions/<short name>; page-run finds Page Studio at extensions/page-studio.
+// into extensions/<short name>. Page Studio is not inside unless asked for: a service lists it in its own
+// marshal-sdk.json (a url + sha256 entry) and the host fetches it at start.
 // Chromium is not inside: install it after the package with its own Playwright,
 //   node <install dir>/node_modules/playwright-core/cli.js install --with-deps chromium
 // or point MARSHAL_SDK_CHROME at one.
 //
 // The extension list: --manifest <marshal-sdk.json>, resolved by the onboarding resolver (docs/onboarding.md: path,
 // archive + sha256 and organization id entries, archives unpacked under --cache) and/or --extension <packageRoot>
-// (repeatable); with neither, Page Studio's built package. Configuration stays in the manifest of the run.
+// (repeatable); with neither, no extensions beyond the SDK. Configuration stays in the manifest of the run.
 // A manifest also brings the SDK's default extensions it does not opt out of (the Brain always, found through
 // $MARSHAL_SDK_BRAIN_PACKAGE and packed into extensions/brain, where the installed SDK finds it; the org and Zyg tools where they apply); "defaults": {"brain": false} leaves the Brain out.
 // The Brain needs Node 24 (FTS5) where it runs.
@@ -60,7 +61,6 @@ if (args.manifest) {
     bundledAt.set(path.resolve(brainRoot), brainSpec.bundled);
   }
 }
-if (!args.extension.length) args.extension.push("/Users/omer/marshal-tracking/page-studio/out/package");
 
 const sdk = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const desktop = JSON.parse(fs.readFileSync(path.join(args.packs, "package.json"), "utf8"));
