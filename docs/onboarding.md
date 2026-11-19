@@ -100,7 +100,7 @@ An extension declares the agents it brings in its `runtime-extension.json`, and 
 A service (agent-sandbox, Marley) pins each extension to a published archive:
 
 ```json
-{ "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.2.0.tgz",
+{ "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.3.0.tgz",
   "sha256": "603ebc8d5139401f2d775b18739dfd0cb8a64ec32d6aba69bf3f5f4c4c36e797",
   "configuration": { "openaiApiKey": "${env:OPENAI_API_KEY}" } }
 ```
@@ -131,7 +131,7 @@ included) and stop with one error that names every gap at once, together with ev
 
 ```
 /srv/marshal-sdk.json cannot start a host:
-  - gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.2.0.tgz configuration: environment variable OPENAI_API_KEY is not set.
+  - gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.3.0.tgz configuration: environment variable OPENAI_API_KEY is not set.
   - @zyg/page-studio@0.2.0 needs the extension @marshal/brain, which this host does not load.
   - @acme/tools@1.0.0 needs the setting "region" in its configuration.
 ```

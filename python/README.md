@@ -20,14 +20,15 @@ every query because `agent` names it. agent-sandbox's, for example
 ```json
 {
   "version": 1,
+  "agent": "@zyg/page-studio",
   "model": "claude-opus-5-5",
   "reasoningEffort": "xhigh",
   "kit": ["brain", "memory", "sessions"],
   "brain": { "index": "zyg", "auth": "service", "person": "${env:MARSHAL_BRAIN_PERSON}" },
   "extensions": [
     {
-      "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.2.0.tgz",
-      "sha256": "603ebc8d5139401f2d775b18739dfd0cb8a64ec32d6aba69bf3f5f4c4c36e797",
+      "url": "gs://shop-builder-local-runs/marshal-extensions/@zyg/page-studio/0.3.0.tgz",
+      "sha256": "22cf733f8235acf426177886599a7e583f3766950193a6282df39a78d0e955d0",
       "configuration": { "openaiApiKey": "${env:OPENAI_API_KEY}" }
     }
   ]
