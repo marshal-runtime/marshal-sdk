@@ -106,9 +106,16 @@ Extensions load in dependency order.
 
 - `index` names the Brain (default `zyg`, ZyG's company Brain). The SDK maps a name to its address (`BRAIN_INDEXES`
   in `src/kit/brain.ts`); the file holds no URL. A Brain the table does not know takes `url` (and `audience`).
-- `auth`: `"person"` (default) signs in with the person's own Google credentials (a laptop, a Coder workspace);
-  `"service"` signs in as the service account (metadata-server ID token) and names the person each run works for
-  (`--person`, Python's `ClaudeAgentOptions(user="<email>")`, else `$MARSHAL_SDK_BRAIN_CALLER`).
+- `auth`: `"person"` (default) signs in with the person's own Google credentials (a laptop, a Coder workspace):
+  the Brain's `desktop` mode. `"service"` signs in as the service and names the person each run works for
+  (`--person`, Python's `ClaudeAgentOptions(user="<email>")`, else `$MARSHAL_SDK_BRAIN_CALLER`; a service call with no
+  person fails). How the service signs in follows what the host has:
+  - a service account key: `brain.credentialsFile` (a key file, relative to the manifest), else
+    `$GOOGLE_APPLICATION_CREDENTIALS_JSON` (the key inline, as an E2B sandbox carries it), else a `service_account` file
+    at `$GOOGLE_APPLICATION_CREDENTIALS`: the Brain's `service-key` mode (@marshal/brain 0.2.1 or later);
+  - otherwise the metadata server's identity (Cloud Run, GKE, a GCE VM): `delegated` mode.
+
+  `check` reports the mode it chose (`brain.mode`). The Brain front must allow the service account.
 - A `brain` block turns the kit's Brain on. The old knobs (`MARSHAL_SDK_BRAIN_URL` and friends, a kit object's
   `brain` options) still override it.
 

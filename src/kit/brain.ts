@@ -24,10 +24,15 @@ export interface BrainKitOptions {
   /**
    * `desktop` (default): the person's own Google user credentials (gcloud ADC, or `credentialsFile`) mint an
    * ID token; the Brain answers as that person. `delegated`: a service on Google Cloud signs with its own
-   * metadata-server ID token, and the person comes from the host principal's `callerEmail` claim.
+   * metadata-server ID token, and the person comes from the host principal's `callerEmail` claim. `service-key`:
+   * the same, signed with a service account key (`credentialsFile`, else $GOOGLE_APPLICATION_CREDENTIALS_JSON, else
+   * the file $GOOGLE_APPLICATION_CREDENTIALS names), for a service with no metadata server (an E2B sandbox).
    */
-  callerMode?: "desktop" | "delegated";
-  /** An `authorized_user` credentials file for desktop mode; defaults to gcloud's application default credentials. */
+  callerMode?: "desktop" | "delegated" | "service-key";
+  /**
+   * Desktop mode: an `authorized_user` credentials file (default: gcloud's application default credentials).
+   * Service-key mode: a `service_account` key file.
+   */
   credentialsFile?: string;
   callerServiceAccount?: string;
   /** Delegated mode: the person a run works for (lower-case work email). Put on the principal, never taken from model input. */

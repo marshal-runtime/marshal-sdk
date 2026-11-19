@@ -81,6 +81,8 @@ export interface ManifestBrain {
   auth?: "person" | "service";
   url?: string;
   audience?: string;
+  /** auth "service": the service account key file (relative to the manifest); default: the environment's key, else the metadata server. */
+  credentialsFile?: string;
 }
 
 export interface SdkManifest {
@@ -278,16 +280,20 @@ export function parseManifest(raw: unknown, file = MANIFEST_FILE): SdkManifest {
   let brain: ManifestBrain | undefined;
   if (root.brain !== undefined) {
     const value = record(root.brain);
-    const fields = ["index", "auth", "url", "audience"];
+    const fields = ["index", "auth", "url", "audience", "credentialsFile"];
     if (
       !value ||
       Object.keys(value).some((key) => !fields.includes(key)) ||
       (value.index !== undefined && (typeof value.index !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(value.index))) ||
       (value.auth !== undefined && value.auth !== "person" && value.auth !== "service") ||
       (value.url !== undefined && (typeof value.url !== "string" || !value.url.startsWith("https://"))) ||
-      (value.audience !== undefined && typeof value.audience !== "string")
+      (value.audience !== undefined && typeof value.audience !== "string") ||
+      (value.credentialsFile !== undefined && (typeof value.credentialsFile !== "string" || value.auth !== "service"))
     ) {
-      throw new OnboardingError("manifest-invalid", `${file}: brain is {"index"?: "zyg" | <brain name>, "auth"?: "person" | "service", "url"?: "https://…", "audience"?: string}.`);
+      throw new OnboardingError(
+        "manifest-invalid",
+        `${file}: brain is {"index"?: "zyg" | <brain name>, "auth"?: "person" | "service", "url"?: "https://…", "audience"?: string, "credentialsFile"?: <key file, with auth "service">}.`,
+      );
     }
     brain = value as ManifestBrain;
   }
@@ -537,7 +543,7 @@ export async function resolveManifest(file: string, options: ResolveOptions = {}
   const taken = new Set([...listed, ...fromProfile].map((extension) => extension.identity));
   const defaults: ResolvedExtension[] = [];
   // A `brain` block names the Brain and how the host signs in to it; it turns the kit's Brain on.
-  let kit = manifest.brain ? withBrainOptions(manifest.kit, brainKitOptions(manifest.brain, file)) : manifest.kit;
+  let kit = manifest.brain ? withBrainOptions(manifest.kit, brainKitOptions(manifest.brain, file, env)) : manifest.kit;
   for (const spec of DEFAULT_EXTENSIONS) {
     if (!defaultOn(manifest, spec) || taken.has(spec.identity)) continue;
     // A kit that already asks for the Brain (or memory, which needs it) loads it itself: not a default then.
@@ -707,8 +713,13 @@ export function missingEnv(value: unknown, env: Record<string, string | undefine
   return [...missing];
 }
 
-/** The kit's Brain options for a manifest's `brain` block: the index's address and the sign-in mode. */
-export function brainKitOptions(brain: ManifestBrain, file = MANIFEST_FILE): NonNullable<KitOptions["brain"]> {
+/**
+ * The kit's Brain options for a manifest's `brain` block: the index's address and the sign-in mode. `auth: "person"`
+ * is desktop mode. `auth: "service"` signs with a service account key when the host has one (`credentialsFile`,
+ * $GOOGLE_APPLICATION_CREDENTIALS_JSON, or a service_account file at $GOOGLE_APPLICATION_CREDENTIALS: an E2B sandbox),
+ * else with the metadata server's identity (Cloud Run, GKE, a GCE VM).
+ */
+export function brainKitOptions(brain: ManifestBrain, file = MANIFEST_FILE, env: Record<string, string | undefined> = process.env): NonNullable<KitOptions["brain"]> {
   const index = brain.index ?? DEFAULT_BRAIN_INDEX;
   const url = brain.url ?? BRAIN_INDEXES[index];
   if (!url) {
@@ -717,11 +728,24 @@ export function brainKitOptions(brain: ManifestBrain, file = MANIFEST_FILE): Non
       `${file}: no Brain named "${index}" (known: ${Object.keys(BRAIN_INDEXES).join(", ")}); give its address as brain.url.`,
     );
   }
-  return {
-    cloudUrl: url,
-    cloudAudience: brain.audience ?? url,
-    callerMode: brain.auth === "service" ? "delegated" : "desktop",
-  };
+  const options = { cloudUrl: url, cloudAudience: brain.audience ?? url };
+  if (brain.auth !== "service") return { ...options, callerMode: "desktop" };
+  if (brain.credentialsFile) {
+    const keyFile = path.resolve(path.dirname(path.resolve(file)), brain.credentialsFile);
+    if (!isServiceAccountKey(keyFile)) throw new OnboardingError("brain-key", `${file}: brain.credentialsFile ${keyFile} is not a service_account key file.`);
+    return { ...options, callerMode: "service-key", credentialsFile: keyFile };
+  }
+  const environmentKey = Boolean(env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim()) || (env.GOOGLE_APPLICATION_CREDENTIALS ? isServiceAccountKey(env.GOOGLE_APPLICATION_CREDENTIALS) : false);
+  return { ...options, callerMode: environmentKey ? "service-key" : "delegated" };
+}
+
+function isServiceAccountKey(file: string): boolean {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
+    return record(parsed)?.type === "service_account";
+  } catch {
+    return false;
+  }
 }
 
 /** The kit with its Brain part on and these Brain options under any the kit already gives. */

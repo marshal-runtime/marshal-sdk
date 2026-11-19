@@ -1,6 +1,6 @@
 {
   "sdk": "0.0.1",
-  "builtAt": "2026-11-19T09:48:38.521Z",
+  "builtAt": "2026-11-19T09:55:31.886Z",
   "packs": {
     "@marshal/agent-runtime-claude": {
       "version": "0.1.0",
@@ -105,7 +105,7 @@
   "extensions": [
     {
       "identity": "@marshal/brain",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "path": "extensions/brain"
     }
   ],
