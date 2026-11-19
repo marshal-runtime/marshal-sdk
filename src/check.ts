@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { inspect } from "node:util";
 
 import { brainKitOptions, readManifest, resolveManifest, type ResolvedExtension } from "./onboarding.js";
 import { manifestPath } from "./onboarding-cli.js";
@@ -125,12 +126,22 @@ export async function checkCommand(argv: readonly string[]): Promise<number> {
     const at = argv.indexOf(`--${name}`);
     return at >= 0 ? argv[at + 1] : undefined;
   };
-  const report = await checkManifest({
-    ...(value("manifest") ? { manifest: value("manifest")! } : {}),
-    ...(value("person") ? { person: value("person")! } : {}),
-    pingBrain: !argv.includes("--no-brain-ping"),
-    log: (line) => process.stderr.write(`[marshal-sdk check] ${line}\n`),
-  });
+  // Extensions run in this process and some log with console.log ("[brain] cloud warm-up …"); stdout carries only the
+  // report, which marshal_sdk.init() parses.
+  const toStderr = (...args: unknown[]) => process.stderr.write(`${args.map((arg) => (typeof arg === "string" ? arg : inspect(arg))).join(" ")}\n`);
+  const saved = { log: console.log, info: console.info, debug: console.debug };
+  Object.assign(console, { log: toStderr, info: toStderr, debug: toStderr });
+  let report: CheckReport;
+  try {
+    report = await checkManifest({
+      ...(value("manifest") ? { manifest: value("manifest")! } : {}),
+      ...(value("person") ? { person: value("person")! } : {}),
+      pingBrain: !argv.includes("--no-brain-ping"),
+      log: (line) => process.stderr.write(`[marshal-sdk check] ${line}\n`),
+    });
+  } finally {
+    Object.assign(console, saved);
+  }
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   return report.ok ? 0 : 1;
 }
