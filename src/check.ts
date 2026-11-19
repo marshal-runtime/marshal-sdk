@@ -71,8 +71,10 @@ export async function checkManifest(options: CheckOptions = {}): Promise<CheckRe
   const { createMarshalHost } = await import("./host.js");
   let host: Awaited<ReturnType<typeof createMarshalHost>> | undefined;
   try {
+    // The host refuses a state folder inside its workspace.
+    fs.mkdirSync(path.join(scratch, "workspace"));
     host = await createMarshalHost({
-      workspacePath: scratch,
+      workspacePath: path.join(scratch, "workspace"),
       stateRoot: path.join(scratch, "host"),
       browser: false,
       labels: { job: "check" },

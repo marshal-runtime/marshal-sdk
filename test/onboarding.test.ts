@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { checkManifest } from "../src/check.js";
 import { createMarshalHost } from "../src/host.js";
 import { withManifest } from "../src/onboarding-cli.js";
 import {
@@ -440,4 +441,20 @@ test("the sample agent-sandbox manifest is valid and names no Brain address", ()
   assert.deepEqual(manifest.brain, { index: "zyg", auth: "service" });
   assert.match(manifest.extensions[0]!.url ?? "", /^gs:\/\/shop-builder-local-runs\/marshal-extensions\/@zyg\/page-studio\/\d+\.\d+\.\d+\.tgz$/);
   assert.equal(brainKitOptions(manifest.brain!).callerMode, "delegated");
+});
+
+test("check proves a manifest by starting its host: a report of what loaded and from where, or every problem", async () => {
+  const root = scratch();
+  const packageRoot = fixture(root, "@test/checked", "1.2.0");
+  const file = path.join(root, "marshal-sdk.json");
+  writeManifest(file, { version: 1, defaults: false, model: "claude-opus-5-5", extensions: [{ path: path.relative(root, packageRoot), configuration: { key: "${env:CHECK_KEY}" } }] });
+  const report = await checkManifest({ manifest: file, env: { CHECK_KEY: "k" } });
+  assert.deepEqual(report.problems, []);
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.extensions.map((extension) => [extension.identity, extension.version, extension.source]), [["@test/checked", "1.2.0", "path"]]);
+  assert.equal(report.model, "claude-opus-5-5");
+  const failed = await checkManifest({ manifest: file, env: {} });
+  assert.equal(failed.ok, false);
+  assert.deepEqual(failed.problems, [`${path.relative(root, packageRoot)} configuration: environment variable CHECK_KEY is not set.`]);
+  assert.match((await checkManifest({ env: {} })).problems[0] ?? "", /No marshal-sdk\.json/);
 });
