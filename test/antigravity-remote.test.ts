@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { TURN_EXTRAS, type QueryFn } from "../src/agent-port.js";
+import { TURN_EXTRAS, type QueryFn, type TurnExtras } from "../src/agent-port.js";
 import { createMarshalHost, type MarshalHostOptions } from "../src/host.js";
 import { PROVIDER_TOOLS, PROVIDER_TOOLS_ONLY, sessionConfig } from "../src/provider-query.js";
 import { providerForModelFamily } from "../src/provider-selection.js";
@@ -925,4 +925,136 @@ test("N3: stopping a bridge whose process ignores SIGTERM ends in SIGKILL, and o
   const begun = Date.now();
   await new AntigravityBridge({ child: silent as never, stopGraceMs: 100 }).stop();
   assert.ok(Date.now() - begun < 1_500, "stop returned instead of hanging");
+});
+
+/**
+ * An embedder's own query around every model run, as Marley's routine engine does: it opens the run's sandbox, adds
+ * its report instruction to the prompt, reads the result before passing it on, and closes the sandbox at the end.
+ * A turn routed to another provider (wrapRoutedTurns) runs that provider's query from the extras, here with the
+ * run's brand-VM bridge, which the wrapper sets because the bridge belongs to the sandbox it opened.
+ */
+function routineWrapper(claude: QueryFn, bridgeOfRun: () => AntigravityRemoteBridge) {
+  const hooks: string[] = [];
+  const query: QueryFn = (params) =>
+    (async function* () {
+      const extras = (params.options as Record<symbol, unknown>)[TURN_EXTRAS] as TurnExtras;
+      const routed = extras.routedProvider;
+      const on = routed?.runtime ?? "host";
+      hooks.push(`open sandbox:${on}`);
+      const options = {
+        ...params.options,
+        [TURN_EXTRAS]: { ...extras, ...(routed?.runtime === "antigravity" ? { antigravityBridge: bridgeOfRun() } : {}) },
+      };
+      const prompt = typeof params.prompt === "string" ? `${params.prompt}\n[write the run report]` : params.prompt;
+      try {
+        for await (const message of (routed?.query ?? claude)({ prompt, options })) {
+          if (message.type === "result") {
+            const verdict = (message.structured_output as { verdict?: string } | undefined)?.verdict;
+            hooks.push(`report:${on}:${verdict ?? String(message.result)}`);
+          }
+          yield message;
+        }
+      } finally {
+        hooks.push(`close sandbox:${on}`);
+      }
+    })();
+  return { query, hooks };
+}
+
+test("wrapRoutedTurns: an embedder's query wraps a gemini-4-neon routine turn on the brand VM, with structured output and remote marshal tools", async () => {
+  const proxy = await fakeProxy();
+  const vm = vmRuntime();
+  const claude = recording();
+  let spawned: ReturnType<typeof vmBridge> | undefined;
+  let wrapper: ReturnType<typeof routineWrapper> | undefined;
+  let marker = "";
+  const { host, fake } = await vmHost((agy, root) => {
+    const local = hostWithoutGoogleCredentials(agy, root);
+    marker = local.marker;
+    spawned = vmBridge(
+      agy,
+      { kind: "proxy", api: "vertex", baseUrl: proxy.baseUrl, httpHeaders: { "x-zs-session-key": "routine-key" } },
+      { disabledBuiltinTools: ["generate_image", "search_web"] },
+    );
+    wrapper = routineWrapper(claude.query, () => spawned!.bridge);
+    return {
+      env: local.env,
+      query: wrapper.query,
+      wrapRoutedTurns: true,
+      providerFor: providerForModelFamily({ google: { id: "antigravity", home: agy.home } }),
+      remoteRuntime: () => vm,
+      remoteHostToolsFor: () => [],
+    };
+  });
+  try {
+    const neon = host.agents.launch({
+      task: "daily brief",
+      idempotencyKey: "wrap-neon",
+      model: "gemini-4-neon",
+      options: { outputFormat: { type: "json_schema", schema: VERDICT_SCHEMA } },
+    });
+    const done = await host.agents.wait(neon.id, 60_000);
+    assert.notEqual(host.sessions.messages(neon.id).at(-1)?.error, true, `turn failed: ${done.result}`);
+    // The wrapper ran the Gemini turn end to end: sandbox opened, report read from the result, sandbox closed.
+    assert.deepEqual(wrapper!.hooks, ["open sandbox:antigravity", "report:antigravity:held", "close sandbox:antigravity"]);
+    assert.equal((done.structuredOutput as { verdict?: string } | undefined)?.verdict, "held");
+    assert.equal(claude.turns.length, 0, "the Gemini turn never reached the wrapper's usual (Claude) query");
+    // The wrapper's prompt reached the model; the bridge it set ran on the VM through the proxy, with no credential.
+    const turn = fake.entries().find((entry) => entry.op === "turn")!;
+    assert.match(turn.prompt ?? "", /daily brief\n\[write the run report\]/);
+    assert.equal(spawned!.requests.length, 1);
+    assert.deepEqual(spawned!.requests[0]!.env, {});
+    assert.ok(!fs.existsSync(marker), "no local bridge or Python ran on the control host");
+    const open = fake.entries().find((entry) => entry.op === "open")!;
+    assert.deepEqual(open.config!.endpoint, { kind: "vertex", baseUrl: proxy.baseUrl, httpHeaders: { "x-zs-session-key": "routine-key" } });
+    assert.deepEqual(open.config!.mcpServers, []);
+    assert.ok(open.config!.responseSchema, "outputFormat became the response schema");
+    assert.ok(!turn.active!.includes("generate_image") && !turn.active!.includes("search_web") && turn.active!.includes("finish"));
+    assert.equal(proxy.calls.length, 1);
+    assert.equal(proxy.calls[0]!.headers.authorization, undefined);
+    // The marshal tools ran on the VM's runtime.
+    assert.deepEqual(vm.calls.map((call) => call.name), ["runtime_exec"]);
+    // A Claude session of the same host still runs on the wrapper's own query, with no routed provider.
+    const sonnet = host.agents.launch({ task: "free time", idempotencyKey: "wrap-claude", model: "claude-sonnet-5-5" });
+    await host.agents.wait(sonnet.id, 60_000);
+    assert.equal(claude.turns.length, 1);
+    assert.equal((claude.turns[0]![TURN_EXTRAS] as TurnExtras).routedProvider, undefined);
+    assert.equal((claude.turns[0]![TURN_EXTRAS] as TurnExtras).antigravityBridge, undefined);
+    assert.deepEqual(wrapper!.hooks.slice(3), ["open sandbox:host", "report:host:claude ok", "close sandbox:host"]);
+  } finally {
+    await host.dispose();
+    await proxy.close();
+  }
+});
+
+test("wrapRoutedTurns off (the default): a routed session runs straight on its provider and the host's query never sees it", async () => {
+  const proxy = await fakeProxy();
+  const claude = recording();
+  let spawned: ReturnType<typeof vmBridge> | undefined;
+  let wrapper: ReturnType<typeof routineWrapper> | undefined;
+  const { host } = await vmHost((agy, root) => {
+    spawned = vmBridge(agy, { kind: "proxy", api: "vertex", baseUrl: proxy.baseUrl });
+    wrapper = routineWrapper(claude.query, () => spawned!.bridge);
+    return {
+      env: hostWithoutGoogleCredentials(agy, root).env,
+      query: wrapper.query,
+      providerFor: providerForModelFamily({ google: { id: "antigravity", home: agy.home } }),
+      remoteRuntime: () => vmRuntime(),
+      remoteHostToolsFor: () => [],
+      antigravityBridgeFor: () => spawned!.bridge,
+    };
+  });
+  try {
+    const neon = host.agents.launch({ task: "daily brief", idempotencyKey: "nowrap", model: "gemini-4-neon" });
+    const done = await host.agents.wait(neon.id, 60_000);
+    assert.match(done.result ?? "", /model: proxy answer/);
+    assert.deepEqual(wrapper!.hooks, [], "the host's query is not called for a routed turn");
+  } finally {
+    await host.dispose();
+    await proxy.close();
+  }
+  await assert.rejects(
+    vmHost(() => ({ wrapRoutedTurns: true })),
+    /wrapRoutedTurns needs the host's `query`/,
+  );
 });

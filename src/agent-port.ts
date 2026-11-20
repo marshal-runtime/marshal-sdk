@@ -44,6 +44,11 @@ export interface TurnExtras {
   turnId?: string;
   /** The launch's Antigravity bridge on another machine (AgentLaunchOptions.antigravityBridge). */
   antigravityBridge?: AntigravityRemoteBridge;
+  /**
+   * The provider a host's `providerFor` routed this turn's session to, when the host's own `query` wraps routed turns
+   * (MarshalHostOptions.wrapRoutedTurns): its runtime id and its query, which the wrapper calls to run the model.
+   */
+  routedProvider?: { runtime: string; query: QueryFn };
 }
 
 /**

@@ -39,6 +39,14 @@ provider other than the host's own (naming the host's id with an account or key 
 provider it was created on: its native session lives there, so a later model that routes elsewhere fails the turn with
 a message to start a new session. Each session's prompt describes its own provider's tools.
 
+A host whose own `query` wraps every model run (a sandbox, an outbox, a run report around it) sets `wrapRoutedTurns:
+true` so routed turns run through that wrapper too. The turn's `TURN_EXTRAS` entry then carries `routedProvider:
+{runtime, query}`, and the wrapper calls that query in place of its usual one, with its own options merged in and the
+`TURN_EXTRAS` entry kept (it may add the run's `antigravityBridge` there). A turn of the host's own provider has no
+`routedProvider`. Without the flag, routed turns run straight on their provider and `query` never sees them. Everything
+the provider enforces still holds, because the wrapper runs the provider's own query: the proxy endpoint check, no MCP
+server on a VM bridge, and a dead bridge being replaced.
+
 ## Where credentials come from
 
 | Provider | Subscription (account) | API key |

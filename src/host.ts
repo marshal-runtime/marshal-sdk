@@ -134,6 +134,15 @@ export interface MarshalHostOptions extends MarshalHostPorts {
   /** Test hook: every turn of the host's own provider runs on this instead of it (sessions `providerFor` routes elsewhere keep theirs). */
   query?: QueryFn;
   /**
+   * With `query` and `providerFor`: a turn of a session `providerFor` routed to another provider runs through `query`
+   * too, so an embedder's wrapper around the model run (its sandbox, outbox, run report) holds on every provider. The
+   * turn's `TurnExtras.routedProvider` names that provider and carries its own query, which the wrapper calls in place
+   * of its usual model query with the turn's options (its own merged in, the `TURN_EXTRAS` entry kept). The wrapper may
+   * set the turn's `antigravityBridge` in those extras; `antigravityBridgeFor` also sets it, and its prompt then names
+   * the VM's built-ins. Default false: routed turns run straight on their provider and `query` sees only the host's own.
+   */
+  wrapRoutedTurns?: boolean;
+  /**
    * Load the workspace's repository rules the way the desktop does: the provider reads its own convention (Claude:
    * CLAUDE.md, .claude/rules), and the rest (AGENTS.md, .github and .cursor rules) goes into the prompt. Default true.
    */
@@ -474,6 +483,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     }
     return resolved;
   };
+  if (options.wrapRoutedTurns && !options.query) throw new Error("wrapRoutedTurns needs the host's `query`, which runs the routed turns.");
+  const wrapRouted = options.wrapRoutedTurns ? options.query : undefined;
   /** The runtime a session's turns run on: recorded when it was created (providerFor), else the host's. */
   const runtimeOfSession = (session: SessionRecord | undefined): string =>
     session && options.providerFor ? (session.runtimeId ?? session.runtime) : hostRuntime;
@@ -490,7 +501,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         throw new Error(`Session ${session?.id ?? "?"} runs on ${runtime}, and its model ${session?.model || "(default)"} routes to ${wanted}; a session keeps its provider, so start a new session for that model.`);
       }
       if (!chosen) return hostQuery(params);
-      return (routedProvider(chosen).query ?? (claudeQuery as unknown as QueryFn))(params);
+      const routed = routedProvider(chosen).query ?? (claudeQuery as unknown as QueryFn);
+      if (!wrapRouted) return routed(params);
+      // The embedder's query runs the turn and calls the provider's own query from the extras.
+      const wrapped: TurnExtras = { ...(extras ?? { attachments: [] }), routedProvider: { runtime: chosen.id, query: routed } };
+      return wrapRouted({ ...params, options: { ...params.options, [TURN_EXTRAS]: wrapped } });
     } catch (error) {
       return (async function* () {
         throw error;
