@@ -110,7 +110,9 @@ export function antigravityThinkingLevel(effort: ReasoningEffort | undefined): s
   }
 }
 
-function permissionRequest(request: Extract<BridgeRequest, { kind: "pre_tool" }>): RuntimePermissionRequest | null {
+function permissionRequest(
+  request: Extract<BridgeRequest, { kind: "pre_tool" }>,
+): RuntimePermissionRequest | null {
   const common = {
     toolCallId: request.callId,
     toolName: request.toolName,
@@ -139,7 +141,15 @@ function permissionRequest(request: Extract<BridgeRequest, { kind: "pre_tool" }>
   }
   const filePath =
     request.canonicalPath ??
-    stringArg(request.args, "TargetFile", "AbsolutePath", "path", "file_path", "DirectoryPath", "directory_path");
+    stringArg(
+      request.args,
+      "TargetFile",
+      "AbsolutePath",
+      "path",
+      "file_path",
+      "DirectoryPath",
+      "directory_path",
+    );
   if (ANTIGRAVITY_WRITE_TOOLS.has(request.toolName)) {
     return { kind: "write", ...common, path: filePath, diff: null };
   }
@@ -426,11 +436,19 @@ export class AntigravityRuntimeSession implements RuntimeClientSession {
         if (!turn || turn.cancelled || bridgeEvent.turn !== turn.id) return;
         if (bridgeEvent.kind === "text" && bridgeEvent.text) {
           turn.text.push(bridgeEvent.text);
-          this.emit(event("assistant.message_delta", { messageId: turn.id, deltaContent: bridgeEvent.text }));
+          this.emit(
+            event("assistant.message_delta", {
+              messageId: turn.id,
+              deltaContent: bridgeEvent.text,
+            }),
+          );
         } else if (bridgeEvent.kind === "thought" && bridgeEvent.text) {
           turn.reasoning.push(bridgeEvent.text);
           this.emit(
-            event("assistant.reasoning_delta", { reasoningId: turn.id, deltaContent: bridgeEvent.text }),
+            event("assistant.reasoning_delta", {
+              reasoningId: turn.id,
+              deltaContent: bridgeEvent.text,
+            }),
           );
         }
         // tool_call chunks are reported from the pre-tool gate, which carries the call id the result uses.
@@ -438,7 +456,11 @@ export class AntigravityRuntimeSession implements RuntimeClientSession {
       }
       case "tool_result": {
         const callId = bridgeEvent.callId ?? "";
-        this.completeTool(callId, bridgeEvent.error ? undefined : bridgeEvent.result, bridgeEvent.error ?? undefined);
+        this.completeTool(
+          callId,
+          bridgeEvent.error ? undefined : bridgeEvent.result,
+          bridgeEvent.error ?? undefined,
+        );
         const hookInput = {
           toolName: bridgeEvent.toolName,
           toolCallId: callId,
@@ -497,10 +519,7 @@ export class AntigravityRuntimeSession implements RuntimeClientSession {
     }
   }
 
-  private finishTurn(
-    turn: ActiveTurn,
-    end: Extract<BridgeEvent, { ev: "turn_end" }>,
-  ): void {
+  private finishTurn(turn: ActiveTurn, end: Extract<BridgeEvent, { ev: "turn_end" }>): void {
     const content = turn.text.join("");
     if (content) this.conversationState.messages.push({ role: "assistant", content });
     if (end.usage) this.emit(this.usageEvent(end.usage));
@@ -514,7 +533,9 @@ export class AntigravityRuntimeSession implements RuntimeClientSession {
           messageId: turn.id,
           content:
             content ||
-            (end.structured !== undefined && end.structured !== null ? JSON.stringify(end.structured) : ""),
+            (end.structured !== undefined && end.structured !== null
+              ? JSON.stringify(end.structured)
+              : ""),
           ...(turn.reasoning.length ? { reasoningText: turn.reasoning.join("") } : {}),
         }),
       );
@@ -620,7 +641,9 @@ export class AntigravityRuntimeSession implements RuntimeClientSession {
     });
     this.emit(
       event("tool.execution_start", {
-        toolName: request.serverName ? `${request.serverName}-${request.toolName}` : request.toolName,
+        toolName: request.serverName
+          ? `${request.serverName}-${request.toolName}`
+          : request.toolName,
         toolCallId: request.callId,
         arguments: request.args,
         ...(request.serverName

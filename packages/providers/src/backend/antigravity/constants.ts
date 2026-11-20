@@ -37,4 +37,8 @@ export const ANTIGRAVITY_SHELL_TOOL = "run_command";
  * Built-in tools whose job Marshal owns (askUser, forkSubagents, automations),
  * kept out of a session on Marshal's tool surface like Claude's disabled tools.
  */
-export const ANTIGRAVITY_MARSHAL_OWNED_TOOLS = ["ask_question", "invoke_subagent", "schedule"] as const;
+export const ANTIGRAVITY_MARSHAL_OWNED_TOOLS = [
+  "ask_question",
+  "invoke_subagent",
+  "schedule",
+] as const;

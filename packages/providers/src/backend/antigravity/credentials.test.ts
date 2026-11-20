@@ -32,7 +32,9 @@ describe("Antigravity credentials", () => {
 
   it("takes a project for Application Default Credentials, an express key, or a Gemini key", async () => {
     const dir = await home();
-    expect(await saveAntigravityCredential(dir, '{"project":"p","location":"us-central1"}')).toEqual({
+    expect(
+      await saveAntigravityCredential(dir, '{"project":"p","location":"us-central1"}'),
+    ).toEqual({
       kind: "vertex",
       project: "p",
       location: "us-central1",

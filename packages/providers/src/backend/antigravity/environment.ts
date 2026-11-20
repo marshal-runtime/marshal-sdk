@@ -172,7 +172,9 @@ async function install(options: AntigravityEnvironmentOptions): Promise<string> 
   return python;
 }
 
-async function prepare(options: AntigravityEnvironmentOptions): Promise<AntigravityPythonEnvironment> {
+async function prepare(
+  options: AntigravityEnvironmentOptions,
+): Promise<AntigravityPythonEnvironment> {
   const env = options.env ?? process.env;
   const bridgePath = await writeBridge(options.homeDir);
   const prepared = env[ANTIGRAVITY_PYTHON_ENV]?.trim();

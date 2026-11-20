@@ -37,8 +37,12 @@ function accountEnvironment(env: AntigravityProcessEnv, accountId: string | unde
   return scoped;
 }
 
-export async function antigravityHomeDir(options: AntigravityClientFactoryOptions): Promise<string> {
-  const base = options.homeDir ?? defaultAntigravityHome(options.appDataDir ? await options.appDataDir() : undefined);
+export async function antigravityHomeDir(
+  options: AntigravityClientFactoryOptions,
+): Promise<string> {
+  const base =
+    options.homeDir ??
+    defaultAntigravityHome(options.appDataDir ? await options.appDataDir() : undefined);
   return options.accountId ? path.join(base, "accounts", options.accountId) : base;
 }
 
@@ -48,15 +52,16 @@ export function createAntigravityClientFactory(
   return async (workspaceDir) => {
     const homeDir = await antigravityHomeDir(options);
     // Accounts share the base home's venv; only credentials and conversations are per account.
-    const sharedHome = options.homeDir ?? defaultAntigravityHome(options.appDataDir ? await options.appDataDir() : undefined);
+    const sharedHome =
+      options.homeDir ??
+      defaultAntigravityHome(options.appDataDir ? await options.appDataDir() : undefined);
     const env = accountEnvironment(options.env ?? process.env, options.accountId);
     return new AntigravityRuntimeClient({
       workspaceDir,
       homeDir,
       env,
       environment:
-        options.environment ??
-        (() => ensureAntigravityEnvironment({ homeDir: sharedHome, env })),
+        options.environment ?? (() => ensureAntigravityEnvironment({ homeDir: sharedHome, env })),
     });
   };
 }
