@@ -78,7 +78,9 @@ export type BridgeRequest =
       args: Record<string, unknown>;
     };
 
-export type PreToolReply = { allow: true; args?: Record<string, unknown> } | { allow: false; message: string };
+export type PreToolReply =
+  | { allow: true; args?: Record<string, unknown> }
+  | { allow: false; message: string };
 export type HostToolReply = { text: string } | { error: string };
 
 export interface BridgeSessionListener {
@@ -271,7 +273,10 @@ export class AntigravityBridge {
         void reply
           .catch((error: unknown) =>
             event.kind === "pre_tool"
-              ? { allow: false as const, message: error instanceof Error ? error.message : String(error) }
+              ? {
+                  allow: false as const,
+                  message: error instanceof Error ? error.message : String(error),
+                }
               : { error: error instanceof Error ? error.message : String(error) },
           )
           .then((result) => {

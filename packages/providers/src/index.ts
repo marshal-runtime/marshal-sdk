@@ -60,6 +60,9 @@ export {
   saveAntigravityCredential,
   type AntigravityEndpoint,
 } from "./backend/antigravity/credentials";
-export { ensureAntigravityEnvironment, defaultAntigravityHome } from "./backend/antigravity/environment";
+export {
+  ensureAntigravityEnvironment,
+  defaultAntigravityHome,
+} from "./backend/antigravity/environment";
 
 export { addLogSink, createLogger, type LogEntry } from "./common/marshal-logger";

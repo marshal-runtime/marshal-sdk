@@ -92,7 +92,8 @@ async function readGcloudProject(env: AntigravityProcessEnv): Promise<string | u
       ? path.join(env["APPDATA"] ?? homedir(), "gcloud")
       : path.join(env["HOME"] ?? homedir(), ".config", "gcloud"));
   try {
-    const active = (await readFile(path.join(configDir, "active_config"), "utf8")).trim() || "default";
+    const active =
+      (await readFile(path.join(configDir, "active_config"), "utf8")).trim() || "default";
     const ini = await readFile(path.join(configDir, "configurations", `config_${active}`), "utf8");
     let section = "";
     for (const line of ini.split(/\r?\n/)) {

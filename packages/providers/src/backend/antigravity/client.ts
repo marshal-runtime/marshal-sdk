@@ -26,10 +26,7 @@ import {
   saveAntigravityCredential,
   type AntigravityEndpoint,
 } from "./credentials";
-import {
-  ensureAntigravityEnvironment,
-  type AntigravityPythonEnvironment,
-} from "./environment";
+import { ensureAntigravityEnvironment, type AntigravityPythonEnvironment } from "./environment";
 import { antigravityModels } from "./models";
 import { AntigravityRuntimeSession } from "./session";
 
@@ -56,9 +53,16 @@ function toBridgeMcpServers(
   return Object.entries(servers)
     .filter(([name]) => !allowed || allowed.includes(name))
     .map(([name, server]) => {
-      const common = { name: mcpServerName(name), ...(server.tools?.length && !server.tools.includes("*") ? { tools: server.tools } : {}) };
+      const common = {
+        name: mcpServerName(name),
+        ...(server.tools?.length && !server.tools.includes("*") ? { tools: server.tools } : {}),
+      };
       if ("url" in server) {
-        return { ...common, url: server.url, ...(server.headers ? { headers: server.headers } : {}) };
+        return {
+          ...common,
+          url: server.url,
+          ...(server.headers ? { headers: server.headers } : {}),
+        };
       }
       return {
         ...common,
@@ -118,7 +122,11 @@ export class AntigravityRuntimeClient implements RuntimeClient {
     this.sessions.delete(id);
   }
 
-  async getAuthStatus(): Promise<{ isAuthenticated: boolean; login?: string; statusMessage?: string }> {
+  async getAuthStatus(): Promise<{
+    isAuthenticated: boolean;
+    login?: string;
+    statusMessage?: string;
+  }> {
     const endpoint = await resolveAntigravityEndpoint(this.options.homeDir, this.env);
     if (!endpoint) {
       return { isAuthenticated: false, statusMessage: ANTIGRAVITY_AUTH_SETUP_INSTRUCTIONS };
@@ -137,7 +145,9 @@ export class AntigravityRuntimeClient implements RuntimeClient {
 
   async login(request: RuntimeAuthLoginRequest): Promise<RuntimeAuthLoginResult> {
     if (request.type !== "api-key") {
-      throw new Error(`Antigravity does not support ${request.type} sign-in. ${ANTIGRAVITY_AUTH_SETUP_INSTRUCTIONS}`);
+      throw new Error(
+        `Antigravity does not support ${request.type} sign-in. ${ANTIGRAVITY_AUTH_SETUP_INSTRUCTIONS}`,
+      );
     }
     if (this.sessions.size > 0) {
       throw new Error("Cannot change Antigravity credentials while sessions are active");
@@ -164,7 +174,10 @@ export class AntigravityRuntimeClient implements RuntimeClient {
     return this.startSession(randomUUID(), config, false);
   }
 
-  async resumeSession(id: string, config: RuntimeSessionConfig): Promise<AntigravityRuntimeSession> {
+  async resumeSession(
+    id: string,
+    config: RuntimeSessionConfig,
+  ): Promise<AntigravityRuntimeSession> {
     const active = this.sessions.get(id);
     if (active) await active.disconnect();
     return this.startSession(id, config, true);
@@ -223,13 +236,18 @@ export class AntigravityRuntimeClient implements RuntimeClient {
     }
   }
 
-  private baseConfig(config: RuntimeSessionConfig, endpoint: AntigravityEndpoint): Record<string, unknown> {
+  private baseConfig(
+    config: RuntimeSessionConfig,
+    endpoint: AntigravityEndpoint,
+  ): Record<string, unknown> {
     const cwd = config.cwd ?? config.workingDirectory ?? this.options.workspaceDir;
     const restricted = config.availableTools !== undefined;
     const allowed = new Set(config.availableTools ?? []);
     const exposed = config.exposedHostTools ? new Set(config.exposedHostTools) : undefined;
     const hostTools = (config.tools ?? [])
-      .filter((tool) => (!restricted || allowed.has(tool.name)) && (!exposed || exposed.has(tool.name)))
+      .filter(
+        (tool) => (!restricted || allowed.has(tool.name)) && (!exposed || exposed.has(tool.name)),
+      )
       .map((tool) => ({
         name: tool.name,
         ...(tool.description ? { description: tool.description } : {}),
@@ -242,7 +260,12 @@ export class AntigravityRuntimeClient implements RuntimeClient {
       appDataDir: path.join(this.options.homeDir, "harness"),
       endpoint: bridgeEndpoint(endpoint).config,
       ...(config.systemMessage?.content
-        ? { system: { mode: config.systemMessage.mode ?? "append", text: config.systemMessage.content } }
+        ? {
+            system: {
+              mode: config.systemMessage.mode ?? "append",
+              text: config.systemMessage.content,
+            },
+          }
         : {}),
       hostTools,
       mcpServers: toBridgeMcpServers(
@@ -250,10 +273,19 @@ export class AntigravityRuntimeClient implements RuntimeClient {
         restricted ? (config.availableMcpServers ?? []) : undefined,
       ),
       ...(restricted
-        ? { enabledBuiltinTools: [...allowed].filter((name) => !config.tools?.some((tool) => tool.name === name)) }
+        ? {
+            enabledBuiltinTools: [...allowed].filter(
+              (name) => !config.tools?.some((tool) => tool.name === name),
+            ),
+          }
         : {}),
       ...(onMarshalSurface
-        ? { disabledBuiltinTools: [...ANTIGRAVITY_MARSHAL_OWNED_TOOLS, ...(config.disabledBuiltInTools ?? [])] }
+        ? {
+            disabledBuiltinTools: [
+              ...ANTIGRAVITY_MARSHAL_OWNED_TOOLS,
+              ...(config.disabledBuiltInTools ?? []),
+            ],
+          }
         : {}),
     };
   }
