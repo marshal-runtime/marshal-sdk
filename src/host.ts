@@ -15,6 +15,7 @@ import { z } from "zod";
 import { ClaudeAgentPort, TURN_EXTRAS, type AgentPortOptions, type QueryFn, type TurnExtras } from "./agent-port.js";
 import { marshalProviderTools, PROVIDER_TOOLS, resolveProvider, type ProviderSelection, type ResolvedProvider } from "./provider-selection.js";
 import { PROVIDER_TOOLS_ONLY } from "./provider-query.js";
+import type { AntigravityRemoteBridge } from "./providers.js";
 import { callerSessionId, createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
 import { createAutomationsProvider, HostAutomations, type AgentExtensionSource, type AutomationStore, type HostAutomationsOptions, type JobHandler } from "./automations.js";
 import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decisions.js";
@@ -185,6 +186,16 @@ export interface MarshalHostOptions extends MarshalHostPorts {
    * session's tools are served elsewhere. A session adopted after a restart runs behind them too.
    */
   launchOptionsFor?: AgentPortOptions["launchOptionsFor"];
+  /**
+   * An Antigravity session whose bridge runs on another machine (a brand VM over ssh), the Antigravity counterpart of
+   * a remote `spawnClaudeCodeProcess`: called for each turn of a session on Antigravity (the host's provider or one
+   * `providerFor` chose); undefined keeps the bridge on this host. The bridge's model calls go to the descriptor's
+   * proxy endpoint, so that machine holds no Google credential. Its built-in tools run on that machine, so the session
+   * keeps them and its prompt names them, while a remote session (`remoteRuntime`) without a bridge here gets none of
+   * them. Keep it cheap: return a descriptor; `spawnBridge` does the work when a bridge starts. Merged into
+   * `launchOptionsFor` as `antigravityBridge`.
+   */
+  antigravityBridgeFor?: (session: SessionRecord) => AntigravityRemoteBridge | undefined;
   /**
    * A session whose Claude Code runs on another machine (a remote `spawnClaudeCodeProcess`): how the host reaches that
    * machine's own Marshal runtime MCP server over stdio (Marley: the ssh command that starts the brand VM's runtime for
@@ -486,6 +497,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       })();
     }
   };
+  /** The session's Antigravity bridge on another machine (antigravityBridgeFor), for a session on Antigravity only. */
+  const antigravityBridgeOf = (session: SessionRecord): AntigravityRemoteBridge | undefined =>
+    runtimeOfSession(session) === "antigravity" ? options.antigravityBridgeFor?.(session) : undefined;
   const repoRules = options.repoRules !== false;
   const agents = new ClaudeAgentPort({
     query: options.providerFor ? routedQuery : hostQuery,
@@ -502,7 +516,17 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     ...(options.settings ? { settings: () => options.settings!.read() } : {}),
     workspaceName,
     systemPrompt: (session) => prompts?.forSession(session),
-    ...(options.launchOptionsFor ? { launchOptionsFor: options.launchOptionsFor } : {}),
+    ...(options.antigravityBridgeFor
+      ? {
+          launchOptionsFor: (session: SessionRecord) => {
+            const base = options.launchOptionsFor?.(session);
+            const bridge = antigravityBridgeOf(session);
+            return bridge ? { ...base, antigravityBridge: bridge } : base;
+          },
+        }
+      : options.launchOptionsFor
+        ? { launchOptionsFor: options.launchOptionsFor }
+        : {}),
     ...(options.live ? { live: options.live } : {}),
     ...(options.liveFor ? { liveFor: options.liveFor } : {}),
     ...(options.onLiveProcessClosed || options.remoteRuntime
@@ -729,8 +753,8 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       : undefined;
   // The base prompt names the session's own runtime's tools, so it depends on the session's provider (providerFor).
   const baseLayers = new Map<string, PromptLayer>();
-  const baseLayerOf = (runtimeId: string, remote: boolean): PromptLayer => {
-    const key = `${runtimeId}:${remote}`;
+  const baseLayerOf = (runtimeId: string, noBuiltins: boolean): PromptLayer => {
+    const key = `${runtimeId}:${noBuiltins}`;
     let layer = baseLayers.get(key);
     if (!layer) {
       const rulesSection = repoRules ? repositoryRulesPrompt(workspacePath, runtimeId) : "";
@@ -743,8 +767,9 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
         directTools,
         // The test hook's query stands in for the host's own provider, which then has no native tools.
         ...(runtimeId === "claude" && (runtimeId !== hostRuntime || !options.query) ? { nativeTools: CLAUDE_NATIVE_PROMPT_TOOLS } : {}),
-        // A remote Antigravity session has none of Antigravity's built-ins (serversFor), so its prompt names none.
-        ...(runtimeId === "antigravity" && !remote ? { nativeTools: ANTIGRAVITY_NATIVE_PROMPT_TOOLS, runtimeSlots: ANTIGRAVITY_V2_SLOTS } : {}),
+        // A remote Antigravity session with its bridge on this host has none of Antigravity's built-ins (serversFor),
+        // so its prompt names none; with its bridge on its own machine (antigravityBridgeFor) it has them there.
+        ...(runtimeId === "antigravity" && !noBuiltins ? { nativeTools: ANTIGRAVITY_NATIVE_PROMPT_TOOLS, runtimeSlots: ANTIGRAVITY_V2_SLOTS } : {}),
       });
       baseLayers.set(key, layer);
     }
@@ -753,7 +778,13 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   prompts = createHostPrompts(
     (session) => {
       const runtimeId = runtimeOfSession(session);
-      return baseLayerOf(runtimeId, runtimeId === "antigravity" && session !== undefined && options.remoteRuntime?.(session) !== undefined);
+      return baseLayerOf(
+        runtimeId,
+        runtimeId === "antigravity" &&
+          session !== undefined &&
+          options.remoteRuntime?.(session) !== undefined &&
+          antigravityBridgeOf(session) === undefined,
+      );
     },
     options.prompt,
     log,

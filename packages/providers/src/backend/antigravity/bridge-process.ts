@@ -90,12 +90,21 @@ export interface BridgeSessionListener {
   onExit(error: Error): void;
 }
 
-export interface AntigravityBridgeOptions {
-  python: string;
-  bridgePath: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-}
+/** What the bridge needs of its process: stdio and an exit. A ChildProcess is one; so is an ssh session to bridge.py. */
+export type AntigravityBridgeChild = Pick<
+  ChildProcessWithoutNullStreams,
+  "stdin" | "stdout" | "stderr" | "pid" | "exitCode" | "killed" | "kill" | "on" | "once"
+>;
+
+export type AntigravityBridgeOptions =
+  | {
+      python: string;
+      bridgePath: string;
+      cwd: string;
+      env: NodeJS.ProcessEnv;
+    }
+  /** A bridge process started elsewhere (AntigravityRemoteBridge.spawnBridge), e.g. bridge.py on another machine. */
+  | { child: AntigravityBridgeChild };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -106,7 +115,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * runtime client. Commands go in on stdin, events come back on stdout.
  */
 export class AntigravityBridge {
-  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly child: AntigravityBridgeChild;
   private readonly listeners = new Map<string, BridgeSessionListener>();
   private readonly opening = new Map<
     string,
@@ -118,12 +127,15 @@ export class AntigravityBridge {
   private stderrTail = "";
 
   constructor(options: AntigravityBridgeOptions) {
-    this.child = spawn(options.python, ["-I", options.bridgePath], {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    this.child =
+      "child" in options
+        ? options.child
+        : spawn(options.python, ["-I", options.bridgePath], {
+            cwd: options.cwd,
+            env: options.env,
+            stdio: ["pipe", "pipe", "pipe"],
+            windowsHide: true,
+          });
     let markReady!: () => void;
     let failReady!: (error: Error) => void;
     this.ready = new Promise<void>((resolve, reject) => {
@@ -165,6 +177,8 @@ export class AntigravityBridge {
       this.listeners.clear();
     };
     this.child.on("error", (error) => onGone(error));
+    // A remote bridge's stdin is a connection that can break (EPIPE); that ends the bridge, it does not crash the host.
+    this.child.stdin.on("error", (error) => onGone(error));
     this.child.on("exit", (code, signal) => {
       const detail = this.stderrTail.trim().split("\n").slice(-6).join("\n");
       onGone(

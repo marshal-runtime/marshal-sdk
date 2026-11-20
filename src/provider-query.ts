@@ -220,13 +220,23 @@ export function responseSchemaOf(outputFormat: unknown): Record<string, unknown>
   return format.schema as Record<string, unknown>;
 }
 
-export function sessionConfig(turnOptions: Record<string, unknown>, cwd: string, extras: TurnExtras | undefined): RuntimeSessionConfig {
+export function sessionConfig(
+  turnOptions: Record<string, unknown>,
+  cwd: string,
+  extras: TurnExtras | undefined,
+  /** The engine runtime the turn runs on; only `antigravity` takes a remote bridge (TurnExtras.antigravityBridge). */
+  runtime?: string,
+): RuntimeSessionConfig {
   const servers = (turnOptions.mcpServers ?? {}) as Record<string | symbol, unknown>;
   const tools = (servers[PROVIDER_TOOLS] as RuntimeTool[] | undefined) ?? [];
-  const toolsOnly = servers[PROVIDER_TOOLS_ONLY] === true;
+  // A bridge on the session's own machine (a brand VM): its built-ins run there, not on this host, so the provider
+  // tools stop being the session's only tools. Every other runtime keeps the restriction.
+  const remoteBridge = runtime === "antigravity" ? extras?.antigravityBridge : undefined;
+  const toolsOnly = servers[PROVIDER_TOOLS_ONLY] === true && !remoteBridge;
   const mcpServers: Record<string, RuntimeMcpServerConfig> = {};
-  // A session limited to its provider tools gets no MCP server either.
-  for (const [name, server] of toolsOnly ? [] : Object.entries(servers)) {
+  // A session limited to its provider tools gets no MCP server either, nor does a remote bridge: this host's MCP
+  // servers are this host's commands and URLs.
+  for (const [name, server] of toolsOnly || remoteBridge ? [] : Object.entries(servers)) {
     const converted = mcpServerConfig(server);
     if (converted) mcpServers[name] = converted;
   }
@@ -244,6 +254,7 @@ export function sessionConfig(turnOptions: Record<string, unknown>, cwd: string,
     // The provider's strict allowlist: exactly these tools, so none of its built-ins.
     ...(toolsOnly ? { availableTools: tools.map((tool) => tool.name) } : {}),
     ...(responseSchema ? { responseSchema } : {}),
+    ...(remoteBridge ? { antigravityRemote: remoteBridge } : {}),
     ...(typeof systemPrompt === "string" ? { systemMessage: { content: systemPrompt, mode: "replace" as const } } : {}),
     ...(Array.isArray(turnOptions.disallowedTools) && turnOptions.disallowedTools.length
       ? { disabledBuiltInTools: turnOptions.disallowedTools.map(String) }

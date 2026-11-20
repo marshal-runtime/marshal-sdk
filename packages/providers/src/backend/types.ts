@@ -336,6 +336,8 @@ export interface CreateSessionOpts {
   disabledBuiltInTools?: readonly string[];
   /** See RuntimeSessionConfig.responseSchema. */
   responseSchema?: Record<string, unknown>;
+  /** See RuntimeSessionConfig.antigravityRemote. */
+  antigravityRemote?: import("./antigravity/remote").AntigravityRemoteBridge;
   /** False drops the per-turn host-tool availability line (the v2 prompt states it once); undefined = sent. */
   hostToolTurnNote?: boolean;
   /** See RuntimeSessionConfig.exposedHostTools. */

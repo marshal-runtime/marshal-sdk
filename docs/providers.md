@@ -138,10 +138,34 @@ checked out beside this repo).
   `url`, `mcp`, `custom-tool`). Marshal's host tools run in the host and are registered with their JSON schemas; stdio
   and HTTP MCP servers pass through. On Marshal's tool surface `ask_question`, `invoke_subagent` and `schedule` are
   off, since Marshal owns those jobs.
-- **Remote sessions** (`remoteRuntime`). The session's marshal tools are its only tools: they reach Antigravity as host
-  tools whose calls run on the session's remote runtime, and the session gets `enabledBuiltinTools: []` (no
-  `run_command`, file or web built-in, which would run on the host) and no MCP server. Its prompt names none of
-  Antigravity's built-ins.
+- **Remote sessions** (`remoteRuntime`) with the bridge on this host. The session's marshal tools are its only tools:
+  they reach Antigravity as host tools whose calls run on the session's remote runtime, and the session gets
+  `enabledBuiltinTools: []` (no `run_command`, file or web built-in, which would run on the host) and no MCP server.
+  Its prompt names none of Antigravity's built-ins.
+- **The bridge on the session's own machine** (`antigravityBridgeFor`, a brand VM). The Antigravity counterpart of a
+  remote `spawnClaudeCodeProcess`: `createMarshalHost({antigravityBridgeFor: (session) => ({key, spawnBridge,
+  endpoint, workspaceDir?, homeDir?, enabledBuiltinTools?, disabledBuiltinTools?})})`, called for each turn of a
+  session on Antigravity (also the launch option `antigravityBridge`). `spawnBridge({sessionId, bridgeSource,
+  sdkVersion, protocol, env})` starts bridge.py there (e.g. `ssh vm python3 -I <installed bridge.py>`, checked against
+  `bridgeSource`) and returns its stdio as a `ChildProcess`-like handle; the host keeps the session over it, so tool
+  decisions, the marshal tools (still run through the remote adapter) and events cross that connection. Nothing is
+  provisioned on this host: no venv, no local Python, no stored credentials. One bridge per session, kept across turns
+  while `key` is the same and stopped when the session closes; a new `key` re-opens the session on a new bridge.
+  - **No credential on that machine.** `endpoint` must be a proxy, `{kind: "proxy", api: "vertex" | "gemini",
+    baseUrl, httpHeaders?, project?, location?}`, checked before anything is spawned (an http(s) URL with no user or
+    password, string headers, and no other field: an `apiKey` or `credentialsFile` is refused). The bridge builds
+    `VertexEndpoint(base_url, http_headers)` (or `GeminiAPIEndpoint`), with which google-antigravity skips its
+    credential checks and ignores ambient `GOOGLE_CLOUD_PROJECT`/`LOCATION`; `env` is empty. The proxy adds the real
+    credential. The harness calls `<baseUrl>/v1beta1/publishers/google/models/<model>:streamGenerateContent?alt=sse`
+    (with `project` and `location`, `<baseUrl>/v1beta1/projects/<p>/locations/<l>/publishers/...`), with `httpHeaders`
+    and no `Authorization` or `x-goog-api-key` header.
+  - **Built-ins run on that machine**, so the session keeps them, minus the ones Marshal owns (`ask_question`,
+    `invoke_subagent`, `run_workflow`, `schedule`) and `disabledBuiltinTools`; `enabledBuiltinTools` is an exact
+    allowlist instead (`finish` is added for a structured answer). The host's MCP servers (its own commands and URLs)
+    are not passed, and the prompt names the built-ins. Only Antigravity lifts the tools-only rule this way; a Codex or
+    Cursor remote session keeps it.
+  - Paths in the open config are that machine's: `workspaces: [workspaceDir]`, `saveDir`/`appDataDir` under
+    `homeDir` (else the bridge's working directory and the SDK's defaults).
 - **Structured output.** A launch's `outputFormat: {type: "json_schema", schema}` becomes Antigravity's
   `response_schema`; the answer comes back through its built-in `finish` tool (which ends the turn and runs nothing),
   so a session limited to an allowlist keeps `finish` when it asks for a schema. The parsed answer is the turn's

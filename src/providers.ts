@@ -37,6 +37,8 @@ export {
   CURSOR_PREFERRED_MODEL_IDS,
   CURSOR_SESSION_CONFIG_TRACE_FILENAME,
 } from "../packages/providers/src/backend/cursor/constants";
+// The Antigravity client itself, for an embedder that drives sessions without the engine (and the tests).
+export { AntigravityRuntimeClient } from "../packages/providers/src/backend/antigravity/client";
 export {
   ANTIGRAVITY_ACCOUNT_IDENTITY_PREFIX,
   ANTIGRAVITY_DEFAULT_MODEL_ID,

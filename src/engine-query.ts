@@ -206,7 +206,7 @@ async function* engineTurn(
   const sessionId = extras?.sessionId ?? randomUUID();
   const cwd = String(turnOptions.cwd ?? process.cwd());
   const backend = backendFor(cwd);
-  const config = sessionConfig(turnOptions, cwd, extras);
+  const config = sessionConfig(turnOptions, cwd, extras, options.runtime);
   backend.toolsBySession.set(sessionId, [...(config.tools ?? [])]);
   backend.mcpBySession.set(sessionId, { ...config.mcpServers });
   backend.permissionBySession.set(sessionId, extras?.permissionHandler);
@@ -226,6 +226,7 @@ async function* engineTurn(
     // gets only these and none of its built-ins.
     ...(config.availableTools ? { allowedTools: [...config.availableTools] } : {}),
     ...(config.responseSchema ? { responseSchema: config.responseSchema } : {}),
+    ...(config.antigravityRemote ? { antigravityRemote: config.antigravityRemote } : {}),
     // The host's prompt names the session's tools once; no per-turn availability line.
     hostToolTurnNote: false,
     sandbox: { mode: "danger-full-access" } as never,
@@ -242,6 +243,8 @@ async function* engineTurn(
         projectContext: config.projectContext,
         available: config.availableTools,
         responseSchema: config.responseSchema,
+        // Where the session's bridge runs; a session moved to another machine re-opens on a new bridge.
+        remoteBridge: config.antigravityRemote?.key,
       }),
     )
     .digest("hex");

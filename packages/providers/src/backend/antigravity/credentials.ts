@@ -30,7 +30,69 @@ export type AntigravityEndpoint =
       credentialsFile?: string;
     }
   | { kind: "vertex-express"; apiKey: string }
-  | { kind: "gemini"; apiKey: string };
+  | { kind: "gemini"; apiKey: string }
+  | AntigravityProxyEndpoint;
+
+/**
+ * Gemini through a proxy that holds the credentials: the bridge sends every model call to `baseUrl` with
+ * `httpHeaders` and carries no key, service account or project of its own (the SDK skips its credential checks and
+ * ambient GOOGLE_CLOUD_* when a base URL is set). For a bridge on a machine that must hold no Google credential, such
+ * as a brand VM reaching the control host's proxy through a tunnel. `api` is the wire format the proxy speaks.
+ */
+export interface AntigravityProxyEndpoint {
+  kind: "proxy";
+  api: "vertex" | "gemini";
+  baseUrl: string;
+  /** Sent with every model call, e.g. a per-session key the proxy checks. Never logged. */
+  httpHeaders?: Record<string, string>;
+  /** Vertex only: puts `/projects/<p>/locations/<l>/` in the request path, when the proxy wants it there. */
+  project?: string;
+  location?: string;
+}
+
+const PROXY_ENDPOINT_FIELDS = new Set(["kind", "api", "baseUrl", "httpHeaders", "project", "location"]);
+
+/**
+ * Checks a proxy endpoint before any bridge starts: an http(s) base URL, string headers, and nothing else, so a key
+ * or credentials file added by mistake fails here instead of travelling to the bridge's machine.
+ */
+export function assertProxyEndpoint(endpoint: unknown): asserts endpoint is AntigravityProxyEndpoint {
+  if (!isRecord(endpoint) || endpoint["kind"] !== "proxy") {
+    throw new Error('A remote Antigravity bridge runs only on a proxy endpoint ({kind: "proxy", api, baseUrl}).');
+  }
+  const extra = Object.keys(endpoint).filter((key) => !PROXY_ENDPOINT_FIELDS.has(key));
+  if (extra.length) {
+    throw new Error(`A proxy endpoint carries no credentials; remove ${extra.join(", ")}.`);
+  }
+  if (endpoint["api"] !== "vertex" && endpoint["api"] !== "gemini") {
+    throw new Error('A proxy endpoint\'s api is "vertex" or "gemini".');
+  }
+  let url: URL;
+  try {
+    url = new URL(String(endpoint["baseUrl"]));
+  } catch {
+    throw new Error("A proxy endpoint's baseUrl is not a URL.");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("A proxy endpoint's baseUrl is http or https.");
+  }
+  if (url.username || url.password) throw new Error("A proxy endpoint's baseUrl carries no user or password.");
+  const headers = endpoint["httpHeaders"];
+  if (
+    headers !== undefined &&
+    (!isRecord(headers) || Object.values(headers).some((value) => typeof value !== "string"))
+  ) {
+    throw new Error("A proxy endpoint's httpHeaders map names to strings.");
+  }
+  for (const key of ["project", "location"] as const) {
+    if (endpoint[key] !== undefined && typeof endpoint[key] !== "string") {
+      throw new Error(`A proxy endpoint's ${key} is a string.`);
+    }
+  }
+  if (endpoint["api"] === "gemini" && (endpoint["project"] || endpoint["location"])) {
+    throw new Error("A Gemini API proxy endpoint takes no project or location.");
+  }
+}
 
 /** What Marshal stores for an account (`credentials.json`, mode 0600). */
 export type StoredAntigravityCredentials = AntigravityEndpoint & { savedAt?: string };
@@ -218,12 +280,21 @@ export function describeAntigravityEndpoint(endpoint: AntigravityEndpoint): stri
       return "vertex (express API key)";
     case "gemini":
       return "gemini-api (API key)";
+    case "proxy": {
+      let origin = "?";
+      try {
+        origin = new URL(endpoint.baseUrl).host;
+      } catch {
+        // Described before validation; the bridge refuses it later.
+      }
+      return `${endpoint.api} through the proxy at ${origin}`;
+    }
   }
 }
 
 /** The bridge's endpoint config plus the environment its harness needs. */
 export function bridgeEndpoint(endpoint: AntigravityEndpoint): {
-  config: Record<string, string>;
+  config: Record<string, unknown>;
   env: Record<string, string>;
 } {
   switch (endpoint.kind) {
@@ -243,5 +314,17 @@ export function bridgeEndpoint(endpoint: AntigravityEndpoint): {
       return { config: { kind: "vertex", apiKey: endpoint.apiKey }, env: {} };
     case "gemini":
       return { config: { kind: "gemini", apiKey: endpoint.apiKey }, env: {} };
+    case "proxy":
+      // No environment: nothing on the bridge's machine names a project, a key or a credentials file.
+      return {
+        config: {
+          kind: endpoint.api,
+          baseUrl: endpoint.baseUrl,
+          ...(endpoint.httpHeaders ? { httpHeaders: { ...endpoint.httpHeaders } } : {}),
+          ...(endpoint.project ? { project: endpoint.project } : {}),
+          ...(endpoint.location ? { location: endpoint.location } : {}),
+        },
+        env: {},
+      };
   }
 }

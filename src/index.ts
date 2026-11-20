@@ -17,6 +17,15 @@ export {
   type MarshalHostUiOptions,
 } from "./host-options.js";
 export type { RuntimePermissionHandler, RuntimePermissionRequest, RuntimePermissionResult } from "./providers.js";
+// An Antigravity bridge on another machine (createMarshalHost antigravityBridgeFor) and its proxy endpoint.
+export {
+  ANTIGRAVITY_BRIDGE_SOURCE,
+  assertProxyEndpoint,
+  type AntigravityBridgeChild,
+  type AntigravityBridgeSpawnRequest,
+  type AntigravityProxyEndpoint,
+  type AntigravityRemoteBridge,
+} from "./providers.js";
 export {
   ClaudeAgentPort,
   mergeLaunchOptions,

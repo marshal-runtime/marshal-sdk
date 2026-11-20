@@ -16,7 +16,7 @@ import {
 } from "./session-messages.js";
 import type { SessionStore, SessionFork, SessionRecord, TranscriptMessage } from "./session-store.js";
 import { nativeSubagentHook } from "./native-tools.js";
-import { toClaudePermissionResult, toRuntimePermissionRequest, type RuntimePermissionHandler } from "./providers.js";
+import { toClaudePermissionResult, toRuntimePermissionRequest, type AntigravityRemoteBridge, type RuntimePermissionHandler } from "./providers.js";
 
 /**
  * What a turn carries for provider clients beside the Claude Agent SDK's options (which read only string keys): the
@@ -42,6 +42,8 @@ export interface TurnExtras {
    * the process passes options; every user message pushed into the process carries its own turn's id under `TURN_ID`.
    */
   turnId?: string;
+  /** The launch's Antigravity bridge on another machine (AgentLaunchOptions.antigravityBridge). */
+  antigravityBridge?: AntigravityRemoteBridge;
 }
 
 /**
@@ -169,6 +171,11 @@ export interface AgentLaunchOptions {
   outputFormat?: unknown;
   /** Start the Claude Code process yourself (a remote machine, a sandbox user). */
   spawnClaudeCodeProcess?: (options: any) => unknown;
+  /**
+   * Antigravity's counterpart of `spawnClaudeCodeProcess`: run the session's Antigravity bridge on another machine
+   * (a brand VM over ssh) whose model calls go to a credential-holding proxy. Other providers ignore it.
+   */
+  antigravityBridge?: AntigravityRemoteBridge;
   /** MCP servers of this session, added to the host's (or alone, with hostMcpServers false). */
   mcpServers?: Readonly<Record<string, unknown>>;
   /** Give the session the host's MCP servers (the marshal runtime tools, the browser). Default true. */
@@ -876,6 +883,7 @@ export class ClaudeAgentPort {
         ...(surface ? { nativeSubagentAllowlist: [...surface.subagentAllowlist] } : {}),
         ...(launch.env ? { launchEnv: true } : {}),
         ...(live ? { live: true } : {}),
+        ...(launch.antigravityBridge ? { antigravityBridge: launch.antigravityBridge } : {}),
         // The provider's own session id is not the Marshal one; the handler always gets the Marshal session.
         ...(permissionHandler ? { permissionHandler: (request) => permissionHandler(request, { sessionId: agent.id }) } : {}),
       } satisfies TurnExtras,

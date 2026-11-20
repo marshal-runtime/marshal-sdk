@@ -503,6 +503,7 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
       ...(opts.projectContext === false ? { projectContext: false } : {}),
       ...(opts.sandbox ? { sandbox: opts.sandbox } : {}),
       ...(opts.responseSchema ? { responseSchema: opts.responseSchema } : {}),
+      ...(opts.antigravityRemote ? { antigravityRemote: opts.antigravityRemote } : {}),
       onPermissionRequest: permissionHandler,
     };
 
@@ -583,6 +584,7 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
       ...(opts.projectContext === false ? { projectContext: false } : {}),
       ...(opts.sandbox ? { sandbox: opts.sandbox } : {}),
       ...(opts.responseSchema ? { responseSchema: opts.responseSchema } : {}),
+      ...(opts.antigravityRemote ? { antigravityRemote: opts.antigravityRemote } : {}),
       onPermissionRequest: permissionHandler,
     };
 
