@@ -11,14 +11,18 @@ import type {
   RuntimeProcessHandle,
   RuntimeSessionConfig,
 } from "../runtime-contract";
-import { AntigravityBridge } from "./bridge-process";
+import { ANTIGRAVITY_BRIDGE_PROTOCOL, AntigravityBridge } from "./bridge-process";
+import { ANTIGRAVITY_BRIDGE_SOURCE } from "./bridge-source";
 import {
   ANTIGRAVITY_DEFAULT_MODEL_ID,
+  ANTIGRAVITY_FINISH_TOOL,
   ANTIGRAVITY_MARSHAL_OWNED_TOOLS,
+  ANTIGRAVITY_SDK_VERSION,
   type AntigravityProcessEnv,
 } from "./constants";
 import {
   ANTIGRAVITY_AUTH_SETUP_INSTRUCTIONS,
+  assertProxyEndpoint,
   bridgeEndpoint,
   clearAntigravityCredentials,
   describeAntigravityEndpoint,
@@ -28,6 +32,7 @@ import {
 } from "./credentials";
 import { ensureAntigravityEnvironment, type AntigravityPythonEnvironment } from "./environment";
 import { antigravityModels } from "./models";
+import type { AntigravityRemoteBridge } from "./remote";
 import { AntigravityRuntimeSession } from "./session";
 
 const log = createLogger("antigravity:client");
@@ -83,6 +88,8 @@ export class AntigravityRuntimeClient implements RuntimeClient {
   private bridge: AntigravityBridge | undefined;
   private bridgeStarting: Promise<AntigravityBridge> | undefined;
   private endpoint: AntigravityEndpoint | undefined;
+  /** Bridges on other machines (RuntimeSessionConfig.antigravityRemote), one per session, stopped when it closes. */
+  private readonly remoteBridges = new Map<string, AntigravityBridge>();
 
   constructor(private readonly options: AntigravityRuntimeClientOptions) {}
 
@@ -103,6 +110,14 @@ export class AntigravityRuntimeClient implements RuntimeClient {
         ? [result.reason instanceof Error ? result.reason : new Error(String(result.reason))]
         : [],
     );
+    // Every remote bridge stops at once, each within its own bound (AntigravityBridge.stop).
+    const remote = [...this.remoteBridges.values()];
+    this.remoteBridges.clear();
+    for (const result of await Promise.allSettled(remote.map((bridge) => bridge.stop()))) {
+      if (result.status === "rejected") {
+        errors.push(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+      }
+    }
     const bridge = this.bridge;
     this.bridge = undefined;
     this.bridgeStarting = undefined;
@@ -239,7 +254,9 @@ export class AntigravityRuntimeClient implements RuntimeClient {
   private baseConfig(
     config: RuntimeSessionConfig,
     endpoint: AntigravityEndpoint,
+    remote?: AntigravityRemoteBridge,
   ): Record<string, unknown> {
+    if (remote) return this.remoteConfig(config, endpoint, remote);
     const cwd = config.cwd ?? config.workingDirectory ?? this.options.workspaceDir;
     const restricted = config.availableTools !== undefined;
     const allowed = new Set(config.availableTools ?? []);
@@ -277,11 +294,17 @@ export class AntigravityRuntimeClient implements RuntimeClient {
       ),
       ...(restricted
         ? {
-            enabledBuiltinTools: [...allowed].filter(
-              (name) => !config.tools?.some((tool) => tool.name === name),
-            ),
+            enabledBuiltinTools: [
+              ...[...allowed].filter((name) => !config.tools?.some((tool) => tool.name === name)),
+              // Antigravity returns a structured answer only through its built-in `finish` tool, which ends the
+              // turn and runs nothing; an allowlist without it would drop the answer.
+              ...(config.responseSchema && !allowed.has(ANTIGRAVITY_FINISH_TOOL)
+                ? [ANTIGRAVITY_FINISH_TOOL]
+                : []),
+            ],
           }
         : {}),
+      ...(config.responseSchema ? { responseSchema: config.responseSchema } : {}),
       ...(onMarshalSurface
         ? {
             disabledBuiltinTools: [
@@ -293,27 +316,123 @@ export class AntigravityRuntimeClient implements RuntimeClient {
     };
   }
 
+  /**
+   * The open config of a session whose bridge runs on another machine: its paths are that machine's, its built-in
+   * tools run there (minus those Marshal owns, or exactly the caller's allowlist), and the host's MCP servers, which are
+   * commands and URLs of this host, are not passed.
+   */
+  private remoteConfig(
+    config: RuntimeSessionConfig,
+    endpoint: AntigravityEndpoint,
+    remote: AntigravityRemoteBridge,
+  ): Record<string, unknown> {
+    const restricted = config.availableTools !== undefined;
+    const allowed = new Set(config.availableTools ?? []);
+    const exposed = config.exposedHostTools
+      ? new Set([...config.exposedHostTools, ...(config.deferredHostTools ?? [])])
+      : undefined;
+    const hostTools = (config.tools ?? [])
+      .filter(
+        (tool) => (!restricted || allowed.has(tool.name)) && (!exposed || exposed.has(tool.name)),
+      )
+      .map((tool) => ({
+        name: tool.name,
+        ...(tool.description ? { description: tool.description } : {}),
+        ...(tool.parameters ? { parameters: tool.parameters } : {}),
+      }));
+    const finish = (names: readonly string[]) =>
+      config.responseSchema && !names.includes(ANTIGRAVITY_FINISH_TOOL)
+        ? [...names, ANTIGRAVITY_FINISH_TOOL]
+        : [...names];
+    // An exact allowlist: the session's own (restricted) or the caller's; otherwise the built-ins minus the disabled.
+    const enabled = restricted
+      ? finish([...allowed].filter((name) => !config.tools?.some((tool) => tool.name === name)))
+      : remote.enabledBuiltinTools
+        ? finish(remote.enabledBuiltinTools)
+        : undefined;
+    return {
+      ...(remote.workspaceDir ? { workspaces: [remote.workspaceDir] } : {}),
+      ...(remote.homeDir
+        ? {
+            saveDir: path.posix.join(remote.homeDir, "sessions"),
+            appDataDir: path.posix.join(remote.homeDir, "harness"),
+          }
+        : {}),
+      endpoint: bridgeEndpoint(endpoint).config,
+      ...(config.systemMessage?.content
+        ? {
+            system: {
+              mode: config.systemMessage.mode ?? "append",
+              text: config.systemMessage.content,
+            },
+          }
+        : {}),
+      hostTools,
+      mcpServers: [],
+      ...(enabled ? { enabledBuiltinTools: enabled } : {}),
+      ...(config.responseSchema ? { responseSchema: config.responseSchema } : {}),
+      ...(enabled
+        ? {}
+        : {
+            disabledBuiltinTools: [
+              ...new Set([
+                ...ANTIGRAVITY_MARSHAL_OWNED_TOOLS,
+                ...(config.disabledBuiltInTools ?? []),
+                ...(remote.disabledBuiltinTools ?? []),
+              ]),
+            ],
+          }),
+    };
+  }
+
+  /** Starts a session's own bridge on another machine, through the caller's spawner, on a proxy endpoint. */
+  private startRemoteBridge(id: string, remote: AntigravityRemoteBridge): AntigravityBridge {
+    assertProxyEndpoint(remote.endpoint);
+    const child = remote.spawnBridge({
+      sessionId: id,
+      bridgeSource: ANTIGRAVITY_BRIDGE_SOURCE,
+      sdkVersion: ANTIGRAVITY_SDK_VERSION,
+      protocol: ANTIGRAVITY_BRIDGE_PROTOCOL,
+      env: { ...bridgeEndpoint(remote.endpoint).env },
+    });
+    const bridge = new AntigravityBridge({ child });
+    this.remoteBridges.set(id, bridge);
+    return bridge;
+  }
+
+  private stopRemoteBridge(id: string, bridge: AntigravityBridge): void {
+    if (this.remoteBridges.get(id) !== bridge) return;
+    this.remoteBridges.delete(id);
+    void bridge.stop().catch((error: unknown) =>
+      log.warn("remote Antigravity bridge did not stop cleanly", {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
+
   private async startSession(
     id: string,
     config: RuntimeSessionConfig,
     resume: boolean,
   ): Promise<AntigravityRuntimeSession> {
     if (this.sessions.has(id)) throw new Error(`Antigravity session ${id} is already active`);
-    const bridge = await this.ensureBridge();
-    const endpoint = this.endpoint;
+    const remote = config.antigravityRemote;
+    const bridge = remote ? this.startRemoteBridge(id, remote) : await this.ensureBridge();
+    const endpoint = remote ? remote.endpoint : this.endpoint;
     if (!endpoint) throw new Error(ANTIGRAVITY_AUTH_SETUP_INSTRUCTIONS);
     const session = new AntigravityRuntimeSession(
       bridge,
       id,
       config,
       {
-        baseConfig: this.baseConfig(config, endpoint),
+        baseConfig: this.baseConfig(config, endpoint, remote),
         modelId: config.model || ANTIGRAVITY_DEFAULT_MODEL_ID,
         ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
         resume,
       },
       () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id);
+        if (remote) this.stopRemoteBridge(id, bridge);
       },
     );
     this.sessions.set(id, session);
@@ -321,6 +440,7 @@ export class AntigravityRuntimeClient implements RuntimeClient {
       await session.open();
     } catch (error) {
       this.sessions.delete(id);
+      if (remote) this.stopRemoteBridge(id, bridge);
       throw error;
     }
     return session;

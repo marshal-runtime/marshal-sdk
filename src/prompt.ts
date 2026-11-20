@@ -99,7 +99,8 @@ export interface HostPrompts {
  * a lane is `lane`), then the session's own layer.
  */
 export function createHostPrompts(
-  base: PromptLayer,
+  /** The SDK's base layer, or the base layer of each session (a host whose sessions run on different providers). */
+  base: PromptLayer | ((session?: SessionRecord) => PromptLayer),
   host: HostPromptOptions | undefined,
   log: (line: string) => void,
   /** Sections that depend on the session (the skills its agent profile shows), added after the host's layers. */
@@ -116,7 +117,7 @@ export function createHostPrompts(
       const sections = sessionSections?.(session);
       const memories = sessionMemories?.(session);
       const hosted = mergePromptLayers(
-        mergePromptLayers(mergePromptLayers(base, hostLayer), sections?.length ? { sections } : undefined),
+        mergePromptLayers(mergePromptLayers(typeof base === "function" ? base(session) : base, hostLayer), sections?.length ? { sections } : undefined),
         memories ? { sessionContext: { memories } } : undefined,
       );
       // The host's role text is for its top-level sessions; a fork or lane gets its own unless its layer gives one.

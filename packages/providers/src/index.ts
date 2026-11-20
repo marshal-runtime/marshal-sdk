@@ -56,10 +56,18 @@ export {
   type AntigravityClientFactoryOptions,
 } from "./backend/antigravity/factory";
 export {
+  assertProxyEndpoint,
   resolveAntigravityEndpoint,
   saveAntigravityCredential,
   type AntigravityEndpoint,
+  type AntigravityProxyEndpoint,
 } from "./backend/antigravity/credentials";
+export type {
+  AntigravityBridgeSpawnRequest,
+  AntigravityRemoteBridge,
+} from "./backend/antigravity/remote";
+export type { AntigravityBridgeChild } from "./backend/antigravity/bridge-process";
+export { ANTIGRAVITY_BRIDGE_SOURCE } from "./backend/antigravity/bridge-source";
 export {
   ensureAntigravityEnvironment,
   defaultAntigravityHome,

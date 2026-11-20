@@ -118,12 +118,24 @@ export interface BridgeSessionListener {
   onExit(error: Error): void;
 }
 
-export interface AntigravityBridgeOptions {
-  python: string;
-  bridgePath: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-}
+/** What the bridge needs of its process: stdio and an exit. A ChildProcess is one; so is an ssh session to bridge.py. */
+export type AntigravityBridgeChild = Pick<
+  ChildProcessWithoutNullStreams,
+  "stdin" | "stdout" | "stderr" | "pid" | "exitCode" | "killed" | "kill" | "on" | "once"
+>;
+
+export type AntigravityBridgeOptions =
+  | {
+      python: string;
+      bridgePath: string;
+      cwd: string;
+      env: NodeJS.ProcessEnv;
+    }
+  /** A bridge process started elsewhere (AntigravityRemoteBridge.spawnBridge), e.g. bridge.py on another machine. */
+  | { child: AntigravityBridgeChild; stopGraceMs?: number };
+
+/** How long `stop` waits after closing stdin before SIGTERM; SIGKILL follows after twice this, and it gives up at three times. */
+const DEFAULT_STOP_GRACE_MS = 15_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -134,7 +146,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * runtime client. Commands go in on stdin, events come back on stdout.
  */
 export class AntigravityBridge {
-  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly child: AntigravityBridgeChild;
   private readonly listeners = new Map<string, BridgeSessionListener>();
   private readonly opening = new Map<
     string,
@@ -144,14 +156,19 @@ export class AntigravityBridge {
   private readonly ready: Promise<void>;
   private exitError: Error | undefined;
   private stderrTail = "";
+  private readonly stopGraceMs: number;
 
   constructor(options: AntigravityBridgeOptions) {
-    this.child = spawn(options.python, ["-I", options.bridgePath], {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    this.stopGraceMs = ("stopGraceMs" in options ? options.stopGraceMs : undefined) ?? DEFAULT_STOP_GRACE_MS;
+    this.child =
+      "child" in options
+        ? options.child
+        : spawn(options.python, ["-I", options.bridgePath], {
+            cwd: options.cwd,
+            env: options.env,
+            stdio: ["pipe", "pipe", "pipe"],
+            windowsHide: true,
+          });
     let markReady!: () => void;
     let failReady!: (error: Error) => void;
     this.ready = new Promise<void>((resolve, reject) => {
@@ -193,6 +210,8 @@ export class AntigravityBridge {
       this.listeners.clear();
     };
     this.child.on("error", (error) => onGone(error));
+    // A remote bridge's stdin is a connection that can break (EPIPE); that ends the bridge, it does not crash the host.
+    this.child.stdin.on("error", (error) => onGone(error));
     this.child.on("exit", (code, signal) => {
       const detail = this.stderrTail.trim().split("\n").slice(-6).join("\n");
       onGone(
@@ -265,13 +284,27 @@ export class AntigravityBridge {
     this.listeners.delete(sessionId);
   }
 
+  /**
+   * Closes stdin and waits for the bridge to exit: SIGTERM after the grace period, SIGKILL after twice it, and after
+   * three times it stops waiting, so a child that ignores signals or never reports `exit` (a remote channel wrapper)
+   * cannot hang the host's shutdown.
+   */
   async stop(): Promise<void> {
-    if (this.exitError) return;
-    const exited = new Promise<void>((resolve) => this.child.once("exit", () => resolve()));
-    this.child.stdin.end();
-    const timer = setTimeout(() => this.child.kill("SIGTERM"), 15_000);
+    if (this.exitError || this.child.exitCode !== null) return;
+    const timers: NodeJS.Timeout[] = [];
+    const exited = new Promise<void>((resolve) => {
+      this.child.once("exit", () => resolve());
+      timers.push(setTimeout(resolve, this.stopGraceMs * 3));
+    });
+    timers.push(setTimeout(() => this.child.kill("SIGTERM"), this.stopGraceMs));
+    timers.push(setTimeout(() => this.child.kill("SIGKILL"), this.stopGraceMs * 2));
+    try {
+      this.child.stdin.end();
+    } catch {
+      // A broken stdin is fine: the signals still follow.
+    }
     await exited;
-    clearTimeout(timer);
+    for (const timer of timers) clearTimeout(timer);
   }
 
   private write(command: Record<string, unknown>): void {

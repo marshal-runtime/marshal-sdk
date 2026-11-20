@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { TURN_EXTRAS, type QueryFn, type TurnExtras } from "./agent-port.js";
 import { ensureEngineHost } from "./headless-engine.js";
-import { promptText, sessionConfig } from "./provider-query.js";
+import { promptText, sessionConfig, turnResult } from "./provider-query.js";
 import {
   ANTIGRAVITY_ACCOUNT_IDENTITY_PREFIX,
   ANTIGRAVITY_DEFAULT_MODEL_ID,
@@ -150,6 +150,9 @@ export interface EngineQueryOptions {
 
 const DEFAULT_TURN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
+/** Engine runtimes whose client takes a response schema (RuntimeSessionConfig.responseSchema). */
+const STRUCTURED_OUTPUT_RUNTIMES: ReadonlySet<EngineRuntime> = new Set(["antigravity"]);
+
 interface LiveEngineSession {
   backend: EngineBackend;
   backendId: string;
@@ -206,7 +209,12 @@ async function* engineTurn(
   const sessionId = extras?.sessionId ?? randomUUID();
   const cwd = String(turnOptions.cwd ?? process.cwd());
   const backend = backendFor(cwd);
-  const config = sessionConfig(turnOptions, cwd, extras);
+  const config = sessionConfig(turnOptions, cwd, extras, options.runtime);
+  if (config.responseSchema && !STRUCTURED_OUTPUT_RUNTIMES.has(options.runtime)) {
+    // Refused before the model runs: this runtime's client has no response schema, so the turn could only fail after
+    // a billed model call.
+    throw new Error(`Structured output (outputFormat) is not supported on ${options.runtime}; run this turn on Antigravity or the Claude Agent SDK.`);
+  }
   backend.toolsBySession.set(sessionId, [...(config.tools ?? [])]);
   backend.mcpBySession.set(sessionId, { ...config.mcpServers });
   backend.permissionBySession.set(sessionId, extras?.permissionHandler);
@@ -222,6 +230,11 @@ async function* engineTurn(
     ...(config.disabledBuiltInTools?.length ? { disabledBuiltInTools: [...config.disabledBuiltInTools] } : {}),
     ...(config.nativeSubagentAllowlist ? { nativeSubagentAllowlist: [...config.nativeSubagentAllowlist] } : {}),
     ...(config.projectContext === false ? { projectContext: false } : {}),
+    // A session limited to its provider tools (PROVIDER_TOOLS_ONLY): the engine's strict allowlist, so the runtime
+    // gets only these and none of its built-ins.
+    ...(config.availableTools ? { allowedTools: [...config.availableTools] } : {}),
+    ...(config.responseSchema ? { responseSchema: config.responseSchema } : {}),
+    ...(config.antigravityRemote ? { antigravityRemote: config.antigravityRemote } : {}),
     // The host's prompt names the session's tools once; no per-turn availability line.
     hostToolTurnNote: false,
     sandbox: { mode: "danger-full-access" } as never,
@@ -236,12 +249,21 @@ async function* engineTurn(
         disabled: config.disabledBuiltInTools,
         allowlist: config.nativeSubagentAllowlist,
         projectContext: config.projectContext,
+        available: config.availableTools,
+        responseSchema: config.responseSchema,
+        // Where the session's bridge runs; a session moved to another machine re-opens on a new bridge.
+        remoteBridge: config.antigravityRemote?.key,
       }),
     )
     .digest("hex");
 
   let current = live.get(sessionId);
-  if (current && (current.backend !== backend || current.signature !== signature)) {
+  // A session whose runtime ended between turns (its bridge on a brand VM lost its ssh connection, the VM rebooted,
+  // the process was killed) is no longer active in the engine: re-open it from its native id, on a new process.
+  // getActiveSession evicts a handle whose runtime reports itself closed (activeSessionIds would still list it).
+  const ended = current !== undefined && current.backend.getActiveSession(sessionId) === undefined;
+  if (current && (ended || current.backend !== backend || current.signature !== signature)) {
+    if (ended) options.log?.(`engine session ${sessionId} ended between turns; re-opening it from its native id`);
     await current.backend.sessions.disconnect(sessionId).catch(() => undefined);
     live.delete(sessionId);
     current = undefined;
@@ -281,6 +303,7 @@ async function* engineTurn(
   let done = false;
   let failed: string | undefined;
   let lastText = "";
+  let structured: unknown;
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
   let cost = 0;
   let modelCalls = 0;
@@ -295,6 +318,7 @@ async function* engineTurn(
   const unsubscribe = backend.sessions.subscribe(sessionId, (event: BackendEvent) => {
     switch (event.type) {
       case "turn-complete": {
+        if (event.message?.structuredOutput !== undefined) structured = event.message.structuredOutput;
         const content = typeof event.message?.content === "string" ? event.message.content : "";
         if (content) {
           lastText = content;
@@ -342,7 +366,13 @@ async function* engineTurn(
   timer.unref?.();
 
   try {
-    await backend.sessions.send(sessionId, { prompt: text, ...(attachments.length ? { attachments } : {}) } as never);
+    try {
+      await backend.sessions.send(sessionId, { prompt: text, ...(attachments.length ? { attachments } : {}) } as never);
+    } catch (error) {
+      // The turn never started (the runtime session ended just now): a failed turn, so the session re-opens next turn.
+      failed = `The turn could not start: ${error instanceof Error ? error.message : String(error)}`;
+      finish();
+    }
     while (true) {
       while (outbox.length) yield outbox.shift()!;
       if (done) break;
@@ -353,16 +383,7 @@ async function* engineTurn(
     }
     while (outbox.length) yield outbox.shift()!;
     if (abort?.signal.aborted) throw Object.assign(new Error("Turn cancelled."), { name: "AbortError" });
-    yield {
-      type: "result",
-      subtype: failed ? "error_during_execution" : "success",
-      is_error: failed !== undefined,
-      result: failed ?? lastText,
-      usage,
-      total_cost_usd: cost,
-      num_turns: modelCalls,
-      session_id: current.backendId,
-    };
+    yield turnResult({ failed, lastText, structured, wanted: config.responseSchema !== undefined, usage, cost, modelCalls, sessionId: current.backendId });
   } finally {
     clearTimeout(timer);
     abort?.signal.removeEventListener("abort", onAbort);

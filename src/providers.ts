@@ -30,12 +30,16 @@ export type {
 } from "../packages/providers/src/backend/types";
 export { createLocalRuntimeCapabilities } from "../packages/providers/src/backend/local/capabilities";
 export { getRuntimeMetadata } from "../packages/providers/src/common/runtime-config";
+export { detectModelProviderFamily, type ModelProviderFamily } from "../packages/providers/src/common/model-runtime-routing";
 export {
   CURSOR_ACCOUNT_IDENTITY_PREFIX,
   CURSOR_DEFAULT_MODEL_ID,
   CURSOR_PREFERRED_MODEL_IDS,
   CURSOR_SESSION_CONFIG_TRACE_FILENAME,
 } from "../packages/providers/src/backend/cursor/constants";
+// The Antigravity client itself, for an embedder that drives sessions without the engine (and the tests).
+export { AntigravityRuntimeClient } from "../packages/providers/src/backend/antigravity/client";
+export { AntigravityBridge } from "../packages/providers/src/backend/antigravity/bridge-process";
 export {
   ANTIGRAVITY_ACCOUNT_IDENTITY_PREFIX,
   ANTIGRAVITY_DEFAULT_MODEL_ID,

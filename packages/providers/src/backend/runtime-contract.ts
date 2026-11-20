@@ -8,6 +8,7 @@ import type {
   ReasoningEffort,
   SessionSandboxConfig,
 } from "../contract/host-types";
+import type { AntigravityRemoteBridge } from "./antigravity/remote";
 
 export type { RuntimeAuthLoginRequest } from "../common/runtime-auth";
 
@@ -204,6 +205,13 @@ export interface RuntimeSessionConfig {
   availableSkills?: string[];
   /** Built-in tools removed from the model's context while the rest stay available; adapters without such tools ignore it. */
   disabledBuiltInTools?: string[];
+  /**
+   * JSON schema of the session's final answer (a launch's `outputFormat`). Runtimes that support it report the parsed
+   * answer as `structuredOutput` on the turn's last `assistant.message`; the others ignore it.
+   */
+  responseSchema?: Record<string, unknown>;
+  /** Antigravity only: run this session's bridge on another machine (a brand VM); other runtimes ignore it. */
+  antigravityRemote?: AntigravityRemoteBridge;
   /** Host tools registered with the model; the rest stay callable through the runtime catalog (`marshal.tool.<name>`). Undefined = all. */
   exposedHostTools?: string[];
   /** Host tools registered with the model but loaded on demand (tool search); only meaningful with exposedHostTools. */

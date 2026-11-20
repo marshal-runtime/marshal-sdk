@@ -20,6 +20,8 @@ export interface RuntimeSessionEventDataMap {
     messageId?: string;
     content: string;
     reasoningText?: string;
+    /** The parsed answer of a session with a responseSchema (RuntimeSessionConfig.responseSchema). */
+    structuredOutput?: unknown;
   };
   "assistant.reasoning_delta": {
     reasoningId?: string;

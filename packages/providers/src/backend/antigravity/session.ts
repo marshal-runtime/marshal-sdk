@@ -566,6 +566,9 @@ export class AntigravityRuntimeSession implements RuntimeClientSession {
               ? JSON.stringify(end.structured)
               : ""),
           ...(turn.reasoning.length ? { reasoningText: turn.reasoning.join("") } : {}),
+          ...(end.structured !== undefined && end.structured !== null
+            ? { structuredOutput: end.structured }
+            : {}),
         }),
       );
     }
