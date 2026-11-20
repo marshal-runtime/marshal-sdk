@@ -43,6 +43,12 @@ export function sdkBaseLayer(input: {
   directTools?: readonly { name: string; description: string }[];
   /** The backend's own tools sessions keep (for Claude: Bash, Read, Write, Edit...). */
   nativeTools?: readonly { name: string; description: string }[];
+  /**
+   * The backend's own words for v2's runtime spans (desktopSurface's per-provider slots, e.g. ANTIGRAVITY_V2_SLOTS):
+   * the shared long-commands span, plus their runtime-tools rule as a section, since a cloud surface has no tools
+   * section of its own.
+   */
+  runtimeSlots?: Readonly<Record<string, string>>;
 }): PromptLayer {
   return {
     surface: "cloud-headless",
@@ -54,6 +60,9 @@ export function sdkBaseLayer(input: {
       "v2.finding-information.memory-rung": "3. **Your long-term memory.** You have a long-term memory that lasts across sessions: what you and other agents learned before (preferences, decisions, conventions, lessons, how things are done here). Each memory is a node in the Brain's knowledge graph, linked to the code, tickets, sessions and people it is about. Search it with `marshal.tool.recall {query}` whenever earlier knowledge could shape the answer or the work, such as how something is done here; `marshal.tool.recall {since}` lists what was saved since a time. When you learn something meaningful, save it with `marshal.tool.remember` and link it to the graph nodes it is about (files and symbols, tickets, sessions, people), so the next agent finds it from those nodes.",
       "v2.memory-and-records.personal": "  - What you learn about the people you work for and their world (preferences, decisions, facts, context): `marshal.tool.remember {fact, category, home, appliesTo?, replaces?, links?}` writes a memory node into the Brain graph at once; nobody approves it, so write only what is true and useful. It has one of two homes; always name it: `home: \"personal\"` is the person's own, private and in every workspace (preferences, always on; private facts such as a birthday); `home: \"workspace\"` is this workspace's own Brain, where links reach its real code (conventions, gotchas, why code is the way it is). Link it to what it is about: `links: [{nodeId} | {path, symbol?} | {sessionId} | {personId}]`. `recall` searches both homes; `appliesTo` names a scope (recall lists them), `replaces: <id>` supersedes an older memory. `marshal.tool.linkMemory {id, links}` adds links, `marshal.tool.updateMemory {id, fact?, category?, alwaysOn?}` fixes one in place, `marshal.tool.forget {id}` deletes one. A save that fails comes back as a failed call starting `MEMORY NOT SAVED:`: nothing was stored, so tell the user it was not saved and why, and never report it as remembered.",
       "v2.memory-and-records.correct": "fix it (`marshal.tool.updateMemory`, or `marshal.tool.remember` with `replaces`), relink it (`marshal.tool.linkMemory`) or delete it (`marshal.tool.forget`)",
+      ...(input.runtimeSlots?.["v2.communication-and-code.long-commands"]
+        ? { "v2.communication-and-code.long-commands": input.runtimeSlots["v2.communication-and-code.long-commands"] }
+        : {}),
     },
     tools: [
       ...(input.runtimeTools === false
@@ -67,6 +76,9 @@ export function sdkBaseLayer(input: {
     ],
     sections: [
       ...input.sections,
+      ...(input.runtimeSlots?.["v2.tools.runtime-usage"]
+        ? [{ id: "runtime-tools", text: `## Runtime tools\n\n${input.runtimeSlots["v2.tools.runtime-usage"].replace(/^\*\*Runtime tools:\*\* /, "")}` }]
+        : []),
       ...(input.extensionGuidance.length
         ? [{ id: "extensions", text: `## Installed extensions\n\n${input.extensionGuidance.join("\n")}` }]
         : []),

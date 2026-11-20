@@ -71,3 +71,19 @@ export const CLAUDE_NATIVE_PROMPT_TOOLS: readonly { name: string; description: s
   { name: "WebSearch", description: "Search the web for facts that live outside the organization's systems." },
   { name: "Task", description: `Only the ${NATIVE_SUBAGENT_ALLOWLIST.join(", ")} subagent, to read a web page; split other work with marshal.tool.forkSubagents.` },
 ];
+
+/**
+ * The built-in tools an Antigravity session on this host keeps (its subagent, messaging, workflow, question and
+ * timer tools are Marshal's), each line the opening of Google's own tool description as the harness sends it to
+ * Vertex (desktop electron/prompt/v2/antigravity-vanilla-prompt.txt was captured from the same request).
+ */
+export const ANTIGRAVITY_NATIVE_PROMPT_TOOLS: readonly { name: string; description: string }[] = [
+  { name: "run_command", description: "Run a command on the user's system (zsh). A command that outlives WaitMsBeforeAsync goes to the background; the system notifies you when it finishes, so don't poll." },
+  { name: "manage_task", description: "Manage background tasks: list running tasks, kill one, check its status and log file, or send it input." },
+  { name: "view_file", description: "View the contents of a file from the local filesystem: text (up to 800 lines at a time), image, pdf, video or audio." },
+  { name: "write_to_file", description: "Create a new file (Overwrite to replace one, Append to add to one); parent directories are created." },
+  { name: "replace_file_content", description: "Edit an existing file by replacing a single contiguous block of text." },
+  { name: "search_web", description: "Perform a web search; returns a summary with URL citations." },
+  { name: "read_url_content", description: "Fetch content from a URL via HTTP request and convert it to markdown (no JavaScript, no authentication)." },
+  { name: "generate_image", description: "Generate an image or edit existing images from a text prompt; the result is saved as an artifact." },
+];

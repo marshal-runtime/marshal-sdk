@@ -1,5 +1,10 @@
 import type { RuntimeInteractiveAuthMethod } from "./runtime-auth";
-import { CLAUDE_RUNTIME_ID, CODEX_RUNTIME_ID, CURSOR_RUNTIME_ID } from "./runtime-config";
+import {
+  ANTIGRAVITY_RUNTIME_ID,
+  CLAUDE_RUNTIME_ID,
+  CODEX_RUNTIME_ID,
+  CURSOR_RUNTIME_ID,
+} from "./runtime-config";
 
 /** The account a runtime used before accounts existed; its credentials keep their original home. */
 export const DEFAULT_RUNTIME_ACCOUNT_ID = "default";
@@ -10,6 +15,7 @@ export const ACCOUNT_RUNTIME_IDS = [
   CLAUDE_RUNTIME_ID,
   CODEX_RUNTIME_ID,
   CURSOR_RUNTIME_ID,
+  ANTIGRAVITY_RUNTIME_ID,
 ] as const;
 export type AccountRuntimeId = (typeof ACCOUNT_RUNTIME_IDS)[number];
 
@@ -23,6 +29,7 @@ export const RUNTIME_ACCOUNT_AUTH_METHODS: Readonly<
   [CLAUDE_RUNTIME_ID]: ["browser"],
   [CODEX_RUNTIME_ID]: ["browser", "device-code", "api-key"],
   [CURSOR_RUNTIME_ID]: ["browser", "api-key"],
+  [ANTIGRAVITY_RUNTIME_ID]: ["api-key"],
 };
 
 const ACCOUNT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;

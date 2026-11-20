@@ -28,7 +28,7 @@ interface DesktopCase {
   expected: string;
 }
 
-// Rendered by the desktop's own assembleMarshalSystemPromptV2 (OmerMachluf/marshal 78cb29dd8, runtime pack marshal-host-94); see docs/prompt.md
+// Rendered by the desktop's own assembleMarshalSystemPromptV2 (OmerMachluf/marshal ca582472e, runtime pack marshal-host-97); see docs/prompt.md
 // for how to regenerate it.
 const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, "test", "fixtures", "desktop-v2-prompt.json"), "utf8")) as {
   slots: Record<string, string>;
@@ -64,6 +64,17 @@ test("desktopSurface() holds the slots the desktop's renderer was fixtured with,
     const rendered = assembleHostPrompt({ ...desktopLayer(input), surface: desktopSurface() }).content;
     assert.equal(rendered, expected, name);
   }
+});
+
+test("desktopSurface(\"antigravity\") names Antigravity's tools, not Claude Code's", () => {
+  const core = { delegation: true, runtime: "trusted" as const, hostTools: true };
+  const agy = assembleHostPrompt({ surface: desktopSurface("antigravity"), core }).content;
+  for (const claudeOnly of ["run_in_background", "ToolSearch", "TaskOutput", "`Monitor`", "web-fetch", "Bash, Read"]) {
+    assert.ok(!agy.includes(claudeOnly), claudeOnly);
+  }
+  assert.ok(agy.includes("`run_command`"));
+  assert.ok(agy.includes("automatically resumes your execution"));
+  assert.equal(assembleHostPrompt({ surface: desktopSurface("claude"), core }).content, assembleHostPrompt({ surface: desktopSurface(), core }).content);
 });
 
 test("base is identical across hosts: every surface shares the v2 core's shared sections", () => {

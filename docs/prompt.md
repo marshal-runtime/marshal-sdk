@@ -56,7 +56,7 @@ deltas, `knowledge`, `extensions: {notable}`, its browser guidance as an added s
 `sessionContext.text`. No override. `test/prompt.test.ts` proves it: for five desktop sessions (workspace main, fork
 with trusted Node, orchestrator without runtime, tool-free, swarm worker), the SDK's output equals the desktop's own
 `assembleMarshalSystemPromptV2` byte for byte. The expected prompts are in `test/fixtures/desktop-v2-prompt.json`,
-rendered from desktop `78cb29dd8` (runtime pack marshal-host-94); `node scripts/desktop-prompt-fixture.mjs [desktop checkout]` regenerates them
+rendered from desktop `ca582472e` (runtime pack marshal-host-97); `node scripts/desktop-prompt-fixture.mjs [desktop checkout]` regenerates them
 (it bundles the desktop's assembler with the desktop's own esbuild and runs it in that checkout).
 
 `desktopSurface()` (`src/prompt-desktop.ts`) is that same layer's slots as a ready surface, so a host can run the
