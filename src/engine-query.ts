@@ -150,6 +150,9 @@ export interface EngineQueryOptions {
 
 const DEFAULT_TURN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
+/** Engine runtimes whose client takes a response schema (RuntimeSessionConfig.responseSchema). */
+const STRUCTURED_OUTPUT_RUNTIMES: ReadonlySet<EngineRuntime> = new Set(["antigravity"]);
+
 interface LiveEngineSession {
   backend: EngineBackend;
   backendId: string;
@@ -207,6 +210,11 @@ async function* engineTurn(
   const cwd = String(turnOptions.cwd ?? process.cwd());
   const backend = backendFor(cwd);
   const config = sessionConfig(turnOptions, cwd, extras, options.runtime);
+  if (config.responseSchema && !STRUCTURED_OUTPUT_RUNTIMES.has(options.runtime)) {
+    // Refused before the model runs: this runtime's client has no response schema, so the turn could only fail after
+    // a billed model call.
+    throw new Error(`Structured output (outputFormat) is not supported on ${options.runtime}; run this turn on Antigravity or the Claude Agent SDK.`);
+  }
   backend.toolsBySession.set(sessionId, [...(config.tools ?? [])]);
   backend.mcpBySession.set(sessionId, { ...config.mcpServers });
   backend.permissionBySession.set(sessionId, extras?.permissionHandler);
@@ -250,7 +258,12 @@ async function* engineTurn(
     .digest("hex");
 
   let current = live.get(sessionId);
-  if (current && (current.backend !== backend || current.signature !== signature)) {
+  // A session whose runtime ended between turns (its bridge on a brand VM lost its ssh connection, the VM rebooted,
+  // the process was killed) is no longer active in the engine: re-open it from its native id, on a new process.
+  // getActiveSession evicts a handle whose runtime reports itself closed (activeSessionIds would still list it).
+  const ended = current !== undefined && current.backend.getActiveSession(sessionId) === undefined;
+  if (current && (ended || current.backend !== backend || current.signature !== signature)) {
+    if (ended) options.log?.(`engine session ${sessionId} ended between turns; re-opening it from its native id`);
     await current.backend.sessions.disconnect(sessionId).catch(() => undefined);
     live.delete(sessionId);
     current = undefined;
@@ -353,7 +366,13 @@ async function* engineTurn(
   timer.unref?.();
 
   try {
-    await backend.sessions.send(sessionId, { prompt: text, ...(attachments.length ? { attachments } : {}) } as never);
+    try {
+      await backend.sessions.send(sessionId, { prompt: text, ...(attachments.length ? { attachments } : {}) } as never);
+    } catch (error) {
+      // The turn never started (the runtime session ended just now): a failed turn, so the session re-opens next turn.
+      failed = `The turn could not start: ${error instanceof Error ? error.message : String(error)}`;
+      finish();
+    }
     while (true) {
       while (outbox.length) yield outbox.shift()!;
       if (done) break;

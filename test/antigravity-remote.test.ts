@@ -10,7 +10,9 @@ import { TURN_EXTRAS, type QueryFn } from "../src/agent-port.js";
 import { createMarshalHost, type MarshalHostOptions } from "../src/host.js";
 import { PROVIDER_TOOLS, PROVIDER_TOOLS_ONLY, sessionConfig } from "../src/provider-query.js";
 import { providerForModelFamily } from "../src/provider-selection.js";
+import { createEngineQuery } from "../src/engine-query.js";
 import {
+  AntigravityBridge,
   AntigravityRuntimeClient,
   ANTIGRAVITY_BRIDGE_SOURCE,
   assertProxyEndpoint,
@@ -816,4 +818,111 @@ test("AntigravityRuntimeClient: a remote bridge's session gets no host MCP serve
   } finally {
     await client.stop();
   }
+});
+
+test("B1 brand VM: a bridge that dies between turns (ssh drop, VM reboot, kill) is replaced on the next turn, which resumes the conversation", async () => {
+  const proxy = await fakeProxy();
+  const vm = vmRuntime();
+  let spawned: ReturnType<typeof vmBridge> | undefined;
+  const { host, fake } = await vmHost((agy, root) => {
+    spawned = vmBridge(agy, { kind: "proxy", api: "vertex", baseUrl: proxy.baseUrl });
+    return {
+      env: hostWithoutGoogleCredentials(agy, root).env,
+      provider: { id: "antigravity", home: agy.home },
+      remoteRuntime: () => vm,
+      remoteHostToolsFor: () => [],
+      antigravityBridgeFor: () => spawned!.bridge,
+    };
+  });
+  const lastIsOk = (id: string) => {
+    const last = host.sessions.messages(id).at(-1)!;
+    assert.equal(last.role, "assistant");
+    assert.notEqual(last.error, true, `turn failed: ${last.content}`);
+    return last.content;
+  };
+  try {
+    const neon = host.agents.launch({ task: "first", idempotencyKey: "b1", model: "gemini-4-neon" });
+    await host.agents.wait(neon.id, 60_000);
+    lastIsOk(neon.id);
+    // The VM's bridge dies while the session is idle.
+    const first = spawned!.children[0]!;
+    const gone = new Promise((resolve) => first.once("exit", resolve));
+    first.kill("SIGKILL");
+    await gone;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    host.agents.send(neon.id, "second, after the bridge died");
+    await host.agents.wait(neon.id, 60_000);
+    assert.match(lastIsOk(neon.id), /model: proxy answer/, "the next turn ran, on a new bridge");
+    assert.equal(spawned!.requests.length, 2, "one new bridge");
+    const opens = fake.entries().filter((entry) => entry.op === "open");
+    assert.equal(opens.length, 2);
+    assert.equal(opens[1]!.config!.resume, true, "the new bridge resumes the session");
+    assert.equal(opens[1]!.config!.conversationId, opens[0]!.config!.conversationId, "the same conversation");
+    host.agents.send(neon.id, "third");
+    await host.agents.wait(neon.id, 60_000);
+    lastIsOk(neon.id);
+    assert.equal(spawned!.requests.length, 2, "and keeps it for later turns");
+  } finally {
+    await host.dispose();
+    await proxy.close();
+  }
+});
+
+test("N1: a turn asking for structured output on a runtime that cannot give it is refused before any model or client runs", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "marshal-sdk-engine-n1-"));
+  let clients = 0;
+  const query = createEngineQuery({
+    runtime: "codex",
+    factory: async () => {
+      clients += 1;
+      throw new Error("no client should be made");
+    },
+    appDataDir: root,
+  });
+  try {
+    const turn = query({
+      prompt: "x",
+      options: { cwd: root, outputFormat: { type: "json_schema", schema: VERDICT_SCHEMA }, [TURN_EXTRAS]: { sessionId: "n1", attachments: [] } },
+    });
+    await assert.rejects(async () => {
+      for await (const _event of turn) void _event;
+    }, /not supported on codex/);
+    assert.equal(clients, 0);
+  } finally {
+    await query.dispose();
+  }
+});
+
+test("N2: a proxy endpoint carries no credential header and no query string", () => {
+  const base = { kind: "proxy", api: "vertex", baseUrl: "http://127.0.0.1:1/vertex" };
+  for (const name of ["Authorization", "proxy-authorization", "X-Goog-Api-Key", "cookie"]) {
+    assert.throws(() => assertProxyEndpoint({ ...base, httpHeaders: { [name]: "secret" } }), /carry no credential/, name);
+  }
+  assert.throws(() => assertProxyEndpoint({ ...base, baseUrl: "http://127.0.0.1:1/vertex?key=AIza" }), /no query string/);
+  assert.doesNotThrow(() => assertProxyEndpoint({ ...base, httpHeaders: { "x-zs-session-key": "dummy" } }));
+});
+
+test("N3: stopping a bridge whose process ignores SIGTERM ends in SIGKILL, and one that never reports exit does not hang", async () => {
+  const stubborn = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); process.stdin.resume(); process.stdin.on('end', () => {}); process.stdout.write(JSON.stringify({ ev: 'ready', protocol: 1 }) + '\\n'); setInterval(() => {}, 1000);"], { stdio: ["pipe", "pipe", "pipe"] });
+  const killed = new Promise<NodeJS.Signals | null>((resolve) => stubborn.once("exit", (_code, signal) => resolve(signal)));
+  await new Promise((resolve) => stubborn.stdout.once("data", resolve));
+  const started = Date.now();
+  await new AntigravityBridge({ child: stubborn, stopGraceMs: 150 }).stop();
+  assert.equal(await killed, "SIGKILL");
+  assert.ok(Date.now() - started < 2_000);
+  // A child wrapper that never emits exit and whose kill does nothing (a remote channel): stop gives up after 3x grace.
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const silent = Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    pid: undefined,
+    exitCode: null,
+    killed: false,
+    kill: () => false,
+  });
+  const begun = Date.now();
+  await new AntigravityBridge({ child: silent as never, stopGraceMs: 100 }).stop();
+  assert.ok(Date.now() - begun < 1_500, "stop returned instead of hanging");
 });

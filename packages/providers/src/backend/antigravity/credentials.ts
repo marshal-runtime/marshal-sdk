@@ -51,6 +51,13 @@ export interface AntigravityProxyEndpoint {
 }
 
 const PROXY_ENDPOINT_FIELDS = new Set(["kind", "api", "baseUrl", "httpHeaders", "project", "location"]);
+/** Headers that carry a Google or HTTP credential: the proxy adds the credential, the bridge's machine never holds one. */
+const PROXY_CREDENTIAL_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-goog-api-key",
+  "cookie",
+]);
 
 /**
  * Checks a proxy endpoint before any bridge starts: an http(s) base URL, string headers, and nothing else, so a key
@@ -77,12 +84,22 @@ export function assertProxyEndpoint(endpoint: unknown): asserts endpoint is Anti
     throw new Error("A proxy endpoint's baseUrl is http or https.");
   }
   if (url.username || url.password) throw new Error("A proxy endpoint's baseUrl carries no user or password.");
+  // A query string is where a Google key rides (?key=...); the bridge's calls need none.
+  if (url.search) throw new Error("A proxy endpoint's baseUrl carries no query string.");
   const headers = endpoint["httpHeaders"];
   if (
     headers !== undefined &&
     (!isRecord(headers) || Object.values(headers).some((value) => typeof value !== "string"))
   ) {
     throw new Error("A proxy endpoint's httpHeaders map names to strings.");
+  }
+  const credentialHeaders = Object.keys(headers ?? {}).filter((name) =>
+    PROXY_CREDENTIAL_HEADERS.has(name.toLowerCase()),
+  );
+  if (credentialHeaders.length) {
+    throw new Error(
+      `A proxy endpoint's httpHeaders carry no credential (${credentialHeaders.join(", ")}); the proxy adds it.`,
+    );
   }
   for (const key of ["project", "location"] as const) {
     if (endpoint[key] !== undefined && typeof endpoint[key] !== "string") {

@@ -110,13 +110,12 @@ export class AntigravityRuntimeClient implements RuntimeClient {
         ? [result.reason instanceof Error ? result.reason : new Error(String(result.reason))]
         : [],
     );
+    // Every remote bridge stops at once, each within its own bound (AntigravityBridge.stop).
     const remote = [...this.remoteBridges.values()];
     this.remoteBridges.clear();
-    for (const bridge of remote) {
-      try {
-        await bridge.stop();
-      } catch (error) {
-        errors.push(error instanceof Error ? error : new Error(String(error)));
+    for (const result of await Promise.allSettled(remote.map((bridge) => bridge.stop()))) {
+      if (result.status === "rejected") {
+        errors.push(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
       }
     }
     const bridge = this.bridge;

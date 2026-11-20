@@ -150,10 +150,14 @@ checked out beside this repo).
   `bridgeSource`) and returns its stdio as a `ChildProcess`-like handle; the host keeps the session over it, so tool
   decisions, the marshal tools (still run through the remote adapter) and events cross that connection. Nothing is
   provisioned on this host: no venv, no local Python, no stored credentials. One bridge per session, kept across turns
-  while `key` is the same and stopped when the session closes; a new `key` re-opens the session on a new bridge.
+  while `key` is the same and stopped when the session closes (SIGTERM, then SIGKILL, with a bound on the wait); a
+  new `key` re-opens the session on a new bridge. A bridge that dies between turns (an ssh drop, a VM reboot, a kill)
+  is replaced on the next turn, which resumes the conversation from the machine's saved sessions; a turn whose
+  session ended just as it started fails, and the next one re-opens it.
   - **No credential on that machine.** `endpoint` must be a proxy, `{kind: "proxy", api: "vertex" | "gemini",
-    baseUrl, httpHeaders?, project?, location?}`, checked before anything is spawned (an http(s) URL with no user or
-    password, string headers, and no other field: an `apiKey` or `credentialsFile` is refused). The bridge builds
+    baseUrl, httpHeaders?, project?, location?}`, checked before anything is spawned (an http(s) URL with no user,
+    password or query string, string headers that carry no credential (`Authorization`, `Proxy-Authorization`,
+    `x-goog-api-key`, `Cookie` are refused), and no other field: an `apiKey` or `credentialsFile` is refused). The bridge builds
     `VertexEndpoint(base_url, http_headers)` (or `GeminiAPIEndpoint`), with which google-antigravity skips its
     credential checks and ignores ambient `GOOGLE_CLOUD_PROJECT`/`LOCATION`; `env` is empty. The proxy adds the real
     credential. The harness calls `<baseUrl>/v1beta1/publishers/google/models/<model>:streamGenerateContent?alt=sse`
@@ -193,8 +197,9 @@ The agent port's `query` is `createProviderQuery` (src/provider-query.ts), a `Qu
 Not yet on Codex and Cursor:
 
 - Forking a session: it needs a client that keeps native state (Claude) and otherwise fails with a clear message.
-- Structured output: a turn that asks for it (`outputFormat`) fails with `error_max_structured_output_retries`
-  instead of succeeding without its answer.
+- Structured output: a turn that asks for it (`outputFormat`) is refused before the model runs, instead of
+  succeeding without its answer. (`createProviderQuery`, which drives any client, fails such a turn after it with
+  `error_max_structured_output_retries`.)
 
 A remote session (`remoteRuntime`) on any of these providers gets only its marshal tools (`PROVIDER_TOOLS_ONLY`): the
 provider's strict allowlist is exactly those tools, and no MCP server is passed.
