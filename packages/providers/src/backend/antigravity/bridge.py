@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import sys
 import traceback
 import uuid
@@ -27,6 +28,13 @@ PROTOCOL_VERSION = 1
 CANCEL_GRACE_SECONDS = 5
 CLOSE_SECONDS = 10
 CANCELLED = "The turn was cancelled"
+
+# Step types in a conversation's trajectory database (<saveDir>/<conversationId>.db, table `steps`), as
+# google-antigravity 0.1.24's harness numbers them.
+STEP_USER_INPUT = 14
+STEP_PLANNER_RESPONSE = 15
+STEP_ERROR_MESSAGE = 17
+STEP_SYSTEM_MESSAGE = 101
 
 _out_lock = asyncio.Lock()
 # request id -> (session id, request kind, future the host's reply resolves)
@@ -52,6 +60,54 @@ async def emit(event: dict) -> None:
   async with _out_lock:
     sys.stdout.write(line + "\n")
     sys.stdout.flush()
+
+
+def _repair_trajectory(db_path: str, drop_failed_input: bool) -> bool:
+  """Moves each unanswered system message that landed after a tool call's results back before those results.
+
+  A background task that finishes while the model's next tool call runs is announced by a SYSTEM_MESSAGE step
+  written after that call's result. With custom system instructions (Marshal's prompt) the harness can no
+  longer build a request from that layout ("tool call id ... not found in map"), and every later turn of the
+  conversation fails the same way (2026-11-20, conversation cf3f4022). The same message placed between the
+  model's call and its result replays fine. With `drop_failed_input`, the failed attempt's own user input and
+  error step are removed too, so the turn can be sent again without a duplicate.
+  """
+  if not os.path.exists(db_path):
+    return False
+  con = sqlite3.connect(db_path)
+  try:
+    rows = con.execute("SELECT idx, step_type FROM steps ORDER BY idx").fetchall()
+    order = [idx for idx, _ in rows]
+    kinds = {idx: kind for idx, kind in rows}
+    boundaries = {STEP_USER_INPUT, STEP_PLANNER_RESPONSE, STEP_ERROR_MESSAGE, STEP_SYSTEM_MESSAGE}
+    moved = False
+    for pos in range(len(order)):
+      if kinds[order[pos]] != STEP_SYSTEM_MESSAGE:
+        continue
+      start = pos
+      while start > 0 and kinds[order[start - 1]] not in boundaries:
+        start -= 1
+      if start == pos or start == 0 or kinds[order[start - 1]] != STEP_PLANNER_RESPONSE:
+        continue
+      if pos + 1 < len(order) and kinds[order[pos + 1]] == STEP_PLANNER_RESPONSE:
+        continue  # The model already answered the message: this layout replays fine.
+      order[start:pos + 1] = [order[pos]] + order[start:pos]
+      moved = True
+    if not moved:
+      return False
+    slots = [idx for idx, _ in rows]
+    with con:
+      for slot, idx in zip(slots, order):
+        if slot != idx:
+          con.execute("UPDATE steps SET idx = ? WHERE idx = ?", (-1 - slot, idx))
+      con.execute("UPDATE steps SET idx = -1 - idx WHERE idx < 0")
+      if drop_failed_input and len(rows) >= 2:
+        last = con.execute("SELECT idx, step_type FROM steps ORDER BY idx DESC LIMIT 2").fetchall()
+        if [kind for _, kind in last] == [STEP_ERROR_MESSAGE, STEP_USER_INPUT]:
+          con.execute("DELETE FROM steps WHERE idx >= ?", (last[1][0],))
+    return True
+  finally:
+    con.close()
 
 
 async def ask_host(session: str, kind: str, payload: dict):
@@ -326,7 +382,7 @@ class BridgeSession:
       event["code"] = "auth"
     await emit(event)
 
-  async def run_turn(self, turn: str, prompt: str, media: list[dict]) -> None:
+  async def run_turn(self, turn: str, prompt: str, media: list[dict], retried: bool = False) -> None:
     if self.needs_reopen or self.agent is None:
       await self._stop_agent()
       try:
@@ -347,10 +403,13 @@ class BridgeSession:
       for item in media:
         parts.append(types.from_file(item["path"], description=item.get("description")))
       content = parts
+    produced = False
+    failure: Exception | None = None
     try:
       response = await self.agent.chat(content)
       self.response = response
       async for chunk in response.chunks:
+        produced = True
         if isinstance(chunk, types.Thought):
           await emit({"ev": "chunk", "session": self.id, "turn": turn, "kind": "thought", "text": chunk.text})
         elif isinstance(chunk, types.Text):
@@ -386,9 +445,39 @@ class BridgeSession:
       logging.error("turn failed: %s", traceback.format_exc())
       # The harness may be mid-turn or disconnected (a closed websocket ends every later turn too).
       self.needs_reopen = True
-      await self._turn_error(turn, error)
+      failure = error
     finally:
       self.response = None
+    if failure is None:
+      return
+    if not retried and isinstance(failure, types.AntigravityExecutionError):
+      try:
+        healed = await self._heal_trajectory(drop_failed_input=not produced)
+      except asyncio.CancelledError:
+        await emit({"ev": "turn_end", "session": self.id, "turn": turn, "cancelled": True})
+        return
+      if healed and not produced:
+        # The request never reached the model: send the same turn again on the repaired conversation.
+        await self.run_turn(turn, prompt, media, retried=True)
+        return
+    await self._turn_error(turn, failure)
+
+  async def _heal_trajectory(self, drop_failed_input: bool) -> bool:
+    save_dir = self.config.get("saveDir")
+    conversation_id = self.config.get("conversationId")
+    if not save_dir or not conversation_id:
+      return False
+    # The harness owns the database while the Agent runs; the next turn reopens it (needs_reopen is set).
+    await self._stop_agent()
+    db_path = os.path.join(save_dir, conversation_id + ".db")
+    try:
+      healed = await asyncio.to_thread(_repair_trajectory, db_path, drop_failed_input)
+    except sqlite3.Error:
+      logging.warning("repairing the trajectory failed: %s", traceback.format_exc())
+      return False
+    if healed:
+      logging.warning("repaired the trajectory of %s (a system message after a tool result)", conversation_id)
+    return healed
 
   async def cancel(self) -> None:
     _release_pending(self.id)
