@@ -72,6 +72,12 @@ export interface RuntimeMetadata {
    * keep their legacy or append-only delivery.
    */
   supportsNativePromptReplacement?: boolean;
+  /**
+   * Sessions on this runtime may render Marshal agent prompt v2 (under prompt
+   * replacement). The host fills v2's runtime spans (built-in tools, skills,
+   * long commands) with this runtime's own words.
+   */
+  supportsAgentPromptV2?: boolean;
   auth: {
     surface: RuntimeAuthSurface;
     methods: readonly RuntimeAuthMethodMetadata[];
@@ -129,6 +135,7 @@ const BUILTIN_RUNTIME_METADATA_BY_ID = {
     rendererRoot: "local",
     selectable: true,
     supportsNativePromptReplacement: true,
+    supportsAgentPromptV2: true,
     auth: {
       surface: "runtime",
       methods: [
@@ -196,6 +203,7 @@ const BUILTIN_RUNTIME_METADATA_BY_ID = {
     rendererRoot: "local",
     selectable: true,
     supportsNativePromptReplacement: true,
+    supportsAgentPromptV2: true,
     auth: {
       surface: "runtime",
       methods: [{ type: "api-key", label: ANTIGRAVITY_API_KEY_SIGN_IN_LABEL }],

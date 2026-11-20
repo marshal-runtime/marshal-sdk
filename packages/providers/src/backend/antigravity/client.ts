@@ -243,7 +243,10 @@ export class AntigravityRuntimeClient implements RuntimeClient {
     const cwd = config.cwd ?? config.workingDirectory ?? this.options.workspaceDir;
     const restricted = config.availableTools !== undefined;
     const allowed = new Set(config.availableTools ?? []);
-    const exposed = config.exposedHostTools ? new Set(config.exposedHostTools) : undefined;
+    // Antigravity has no deferred-tool loading, so tools Marshal defers elsewhere are registered up front.
+    const exposed = config.exposedHostTools
+      ? new Set([...config.exposedHostTools, ...(config.deferredHostTools ?? [])])
+      : undefined;
     const hostTools = (config.tools ?? [])
       .filter(
         (tool) => (!restricted || allowed.has(tool.name)) && (!exposed || exposed.has(tool.name)),
