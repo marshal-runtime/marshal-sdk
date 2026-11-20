@@ -29,6 +29,16 @@ Choose an account or a key, not both. The host checks the choice before it start
 can't work: an unknown provider, an account that is neither in the desktop registry nor on disk, or a key variable
 that isn't set.
 
+### A provider per session: `providerFor`
+
+`providerFor(session: {model?})` (code only) picks another provider for a session by its model; undefined keeps the
+host's `provider`. `providerForModelFamily({google: {id: "antigravity"}})` routes Gemini models to Antigravity and
+leaves Claude models on the host's provider, so one host can run `gemini-4-neon` and `claude-sonnet-5-5` sessions side
+by side. Each routed provider is resolved once, on first use, from the host's `env` and `secrets`; it can only be a
+provider other than the host's own (naming the host's id with an account or key is refused). A session keeps the
+provider it was created on: its native session lives there, so a later model that routes elsewhere fails the turn with
+a message to start a new session. Each session's prompt describes its own provider's tools.
+
 ## Where credentials come from
 
 | Provider | Subscription (account) | API key |
@@ -128,6 +138,15 @@ checked out beside this repo).
   `url`, `mcp`, `custom-tool`). Marshal's host tools run in the host and are registered with their JSON schemas; stdio
   and HTTP MCP servers pass through. On Marshal's tool surface `ask_question`, `invoke_subagent` and `schedule` are
   off, since Marshal owns those jobs.
+- **Remote sessions** (`remoteRuntime`). The session's marshal tools are its only tools: they reach Antigravity as host
+  tools whose calls run on the session's remote runtime, and the session gets `enabledBuiltinTools: []` (no
+  `run_command`, file or web built-in, which would run on the host) and no MCP server. Its prompt names none of
+  Antigravity's built-ins.
+- **Structured output.** A launch's `outputFormat: {type: "json_schema", schema}` becomes Antigravity's
+  `response_schema`; the answer comes back through its built-in `finish` tool (which ends the turn and runs nothing),
+  so a session limited to an allowlist keeps `finish` when it asks for a schema. The parsed answer is the turn's
+  `structured_output`. A turn that asked for one and got none fails (`error_max_structured_output_retries`), as on the
+  Claude Agent SDK.
 - **Prompt.** Marshal's prompt is a section appended to Antigravity's own instructions, or the whole system prompt when
   a launch replaces it (`systemMessage.mode: "replace"`). Image, PDF, audio and video attachments go in as media.
 - Usage reports input, cached, output and thinking tokens; cost is not reported (0). Antigravity compacts on its own,
@@ -150,7 +169,11 @@ The agent port's `query` is `createProviderQuery` (src/provider-query.ts), a `Qu
 Not yet on Codex and Cursor:
 
 - Forking a session: it needs a client that keeps native state (Claude) and otherwise fails with a clear message.
-- Structured output.
+- Structured output: a turn that asks for it (`outputFormat`) fails with `error_max_structured_output_retries`
+  instead of succeeding without its answer.
+
+A remote session (`remoteRuntime`) on any of these providers gets only its marshal tools (`PROVIDER_TOOLS_ONLY`): the
+provider's strict allowlist is exactly those tools, and no MCP server is passed.
 
 Attachments go to the client as files; whether it reads images is the client's own behaviour.
 

@@ -12,8 +12,9 @@ import { createRuntimeServiceContainer } from "@marshal/runtime/host";
 import { createRuntimeToolAdapter, RUNTIME_MCP_TOOLS } from "@marshal/runtime/mcp";
 import { z } from "zod";
 
-import { ClaudeAgentPort, type AgentPortOptions, type QueryFn } from "./agent-port.js";
-import { marshalProviderTools, PROVIDER_TOOLS, resolveProvider, type ProviderSelection } from "./provider-selection.js";
+import { ClaudeAgentPort, TURN_EXTRAS, type AgentPortOptions, type QueryFn, type TurnExtras } from "./agent-port.js";
+import { marshalProviderTools, PROVIDER_TOOLS, resolveProvider, type ProviderSelection, type ResolvedProvider } from "./provider-selection.js";
+import { PROVIDER_TOOLS_ONLY } from "./provider-query.js";
 import { callerSessionId, createAgentProvider, createSessionToolsProvider } from "./agent-provider.js";
 import { createAutomationsProvider, HostAutomations, type AgentExtensionSource, type AutomationStore, type HostAutomationsOptions, type JobHandler } from "./automations.js";
 import { createDecisionsProvider, DecisionDesk, type PersonRoute } from "./decisions.js";
@@ -121,7 +122,15 @@ export interface MarshalHostOptions extends MarshalHostPorts {
   browser?: boolean | MarshalHostBrowser;
   /** The model provider of this host's sessions and its credentials: Claude, Codex or Cursor, subscription or API key (docs/providers.md). Default: Claude on the desktop's Claude client with `env` as given. */
   provider?: ProviderSelection;
-  /** Test hook: every turn runs on this instead of a provider. */
+  /**
+   * Another provider for some sessions, so one host runs several (Gemini on Antigravity for one role, Claude for the
+   * rest). Asked with a new session's model when the session is created; its answer is recorded as the session's
+   * runtime and its turns run on that provider from then on. Undefined, or the host's own provider id with nothing
+   * else, keeps the session on `provider`. `providerForModelFamily` builds one from model families. The selection is
+   * resolved on first use, with the host's env and secrets.
+   */
+  providerFor?: (session: { model?: string }) => ProviderSelection | undefined;
+  /** Test hook: every turn of the host's own provider runs on this instead of it (sessions `providerFor` routes elsewhere keep theirs). */
   query?: QueryFn;
   /**
    * Load the workspace's repository rules the way the desktop does: the provider reads its own convention (Claude:
@@ -431,10 +440,57 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
   const hostEnv = options.env ?? definedEnv(process.env);
   const provider = selection ? resolveProvider(selection, { env: withSecrets(hostEnv, options.secrets), privateRoot, log }) : undefined;
   if (provider) log(provider.description);
+  const hostRuntime = provider?.id ?? "claude";
+  const hostQuery = options.query ?? provider?.query ?? (claudeQuery as unknown as QueryFn);
+  // providerFor: the providers it routes sessions to, each resolved once on first use.
+  const routedProviders = new Map<string, ResolvedProvider>();
+  const routedSelection = (model: string | undefined): ProviderSelection | undefined => {
+    const chosen = options.providerFor?.(model ? { model } : {});
+    if (!chosen) return undefined;
+    if (chosen.id !== hostRuntime) return chosen;
+    if (Object.entries(chosen).some(([key, value]) => key !== "id" && value !== undefined)) {
+      throw new Error(`providerFor: sessions on ${chosen.id} run on the host's own provider (\`provider\`); route only to other providers.`);
+    }
+    return undefined;
+  };
+  const routedProvider = (chosen: ProviderSelection): ResolvedProvider => {
+    const key = JSON.stringify([chosen.id, chosen.account, chosen.apiKeyEnv, chosen.home, chosen.engine]);
+    let resolved = routedProviders.get(key);
+    if (!resolved) {
+      resolved = resolveProvider(chosen, { env: withSecrets(hostEnv, options.secrets), privateRoot, log });
+      log(`providerFor: ${resolved.description}`);
+      routedProviders.set(key, resolved);
+    }
+    return resolved;
+  };
+  /** The runtime a session's turns run on: recorded when it was created (providerFor), else the host's. */
+  const runtimeOfSession = (session: SessionRecord | undefined): string =>
+    session && options.providerFor ? (session.runtimeId ?? session.runtime) : hostRuntime;
+  // Each turn runs on its session's provider. A session keeps the provider it was created on: its native session
+  // lives there, so a model that now routes elsewhere fails the turn instead of starting over on another provider.
+  const routedQuery: QueryFn = (params) => {
+    try {
+      const extras = (params.options as Record<symbol, unknown>)[TURN_EXTRAS] as TurnExtras | undefined;
+      const session = extras?.sessionId ? sessions.get(extras.sessionId) : undefined;
+      const chosen = routedSelection(session?.model);
+      const wanted = chosen?.id ?? hostRuntime;
+      const runtime = runtimeOfSession(session);
+      if (wanted !== runtime) {
+        throw new Error(`Session ${session?.id ?? "?"} runs on ${runtime}, and its model ${session?.model || "(default)"} routes to ${wanted}; a session keeps its provider, so start a new session for that model.`);
+      }
+      if (!chosen) return hostQuery(params);
+      return (routedProvider(chosen).query ?? (claudeQuery as unknown as QueryFn))(params);
+    } catch (error) {
+      return (async function* () {
+        throw error;
+      })();
+    }
+  };
   const repoRules = options.repoRules !== false;
   const agents = new ClaudeAgentPort({
-    query: options.query ?? provider?.query ?? (claudeQuery as unknown as QueryFn),
-    runtimeId: provider?.id ?? "claude",
+    query: options.providerFor ? routedQuery : hostQuery,
+    runtimeId: hostRuntime,
+    ...(options.providerFor ? { runtimeIdFor: (model: string | undefined) => routedSelection(model)?.id ?? hostRuntime } : {}),
     projectSettings: repoRules,
     ...(options.nativeSubagentGuard === false ? {} : { nativeTools: { disabled: DISABLED_NATIVE_TOOLS, subagentAllowlist: NATIVE_SUBAGENT_ALLOWLIST } }),
     store: sessions,
@@ -665,24 +721,40 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     options.browser === false
       ? undefined
       : playwrightServer(typeof options.browser === "object" ? options.browser : {}, log, options.nodeExecutable);
-  const rulesSection = repoRules ? repositoryRulesPrompt(workspacePath, options.provider?.id ?? "claude") : "";
   const directTools = options.directTools ?? [];
   const runtimeTools = options.runtimeTools !== false;
   const forksCall =
     !runtimeTools && directTools.some((direct) => direct.name === "runtimeInvoke")
       ? "mcp__marshal__runtimeInvoke {capability: '<name>', input}"
       : undefined;
+  // The base prompt names the session's own runtime's tools, so it depends on the session's provider (providerFor).
+  const baseLayers = new Map<string, PromptLayer>();
+  const baseLayerOf = (runtimeId: string, remote: boolean): PromptLayer => {
+    const key = `${runtimeId}:${remote}`;
+    let layer = baseLayers.get(key);
+    if (!layer) {
+      const rulesSection = repoRules ? repositoryRulesPrompt(workspacePath, runtimeId) : "";
+      layer = sdkBaseLayer({
+        browser: browserServer !== undefined,
+        extensionGuidance: guidance,
+        sections: [...(kit?.promptSection ? [kit.promptSection] : []), forksPromptSection(forksCall)],
+        ...(rulesSection ? { repoRules: rulesSection } : {}),
+        runtimeTools,
+        directTools,
+        // The test hook's query stands in for the host's own provider, which then has no native tools.
+        ...(runtimeId === "claude" && (runtimeId !== hostRuntime || !options.query) ? { nativeTools: CLAUDE_NATIVE_PROMPT_TOOLS } : {}),
+        // A remote Antigravity session has none of Antigravity's built-ins (serversFor), so its prompt names none.
+        ...(runtimeId === "antigravity" && !remote ? { nativeTools: ANTIGRAVITY_NATIVE_PROMPT_TOOLS, runtimeSlots: ANTIGRAVITY_V2_SLOTS } : {}),
+      });
+      baseLayers.set(key, layer);
+    }
+    return layer;
+  };
   prompts = createHostPrompts(
-    sdkBaseLayer({
-      browser: browserServer !== undefined,
-      extensionGuidance: guidance,
-      sections: [...(kit?.promptSection ? [kit.promptSection] : []), forksPromptSection(forksCall)],
-      ...(rulesSection ? { repoRules: rulesSection } : {}),
-      runtimeTools,
-      directTools,
-      ...((provider?.id ?? "claude") === "claude" && !options.query ? { nativeTools: CLAUDE_NATIVE_PROMPT_TOOLS } : {}),
-      ...(provider?.id === "antigravity" ? { nativeTools: ANTIGRAVITY_NATIVE_PROMPT_TOOLS, runtimeSlots: ANTIGRAVITY_V2_SLOTS } : {}),
-    }),
+    (session) => {
+      const runtimeId = runtimeOfSession(session);
+      return baseLayerOf(runtimeId, runtimeId === "antigravity" && session !== undefined && options.remoteRuntime?.(session) !== undefined);
+    },
     options.prompt,
     log,
     (session) => {
@@ -720,6 +792,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
           callTool: (name: string, args: unknown) => hostAdapterOfSession.callTool(name, args, undefined as never),
           readResource: (uri: string) => hostAdapterOfSession.readResource(uri),
         };
+    const execNote = remote && allowedHostTools.size ? remoteExecNote(allowedHostTools) : "";
     const { server: marshal, call, readContents, runDirect } = sessionMarshalTools({
       session,
       runtime: adapter as never,
@@ -727,12 +800,24 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       directTools,
       runtimeTools: runtimeTools || remote !== undefined,
       trustedTypeScript: !remote && importPolicy !== undefined,
-      execNote: remote && allowedHostTools.size ? remoteExecNote(allowedHostTools) : "",
+      execNote,
       descriptions: { search: RUNTIME_MCP_TOOLS[0]!.description ?? "", exec: RUNTIME_MCP_TOOLS[1]!.description ?? "" },
       ...(options.toolCall ? { toolCall: options.toolCall } : {}),
     });
-    // A remote session gets only its `marshal` server: no host browser, no host runtime for other providers.
-    if (remote) return { marshal };
+    // A remote session gets only its `marshal` tools: no host browser, no other MCP server. On the Claude Agent SDK
+    // they are the `marshal` server; a provider client (Antigravity, Codex, Cursor) runs in this process, so it takes
+    // the same tools as provider tools, whose calls still go to the remote runtime, and nothing else: none of its own
+    // built-ins (a shell, file tools) may run on this machine (SB01).
+    if (remote) {
+      const schemas = RUNTIME_MCP_TOOLS.map((schema) =>
+        schema.name === "runtime_exec" && execNote ? { ...schema, description: `${schema.description ?? ""}${execNote}` } : schema,
+      );
+      return {
+        marshal,
+        [PROVIDER_TOOLS]: [...marshalProviderTools(call as never, readContents, schemas as never), ...directProviderTools(directTools, runDirect)],
+        [PROVIDER_TOOLS_ONLY]: true,
+      };
+    }
     return {
       marshal,
       ...(browserServer ? { playwright: browserServer } : {}),
@@ -885,6 +970,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       // Brain before the runtime takes its capabilities down (2026-11-16: capability_not_found on the last upload).
       await publisher?.close();
       await provider?.query?.dispose();
+      for (const routed of routedProviders.values()) await routed.query?.dispose().catch((error: unknown) => log(`providerFor dispose: ${String(error)}`));
       await runtime.dispose();
       // After the runtime: the org extension publishes its last turns through it while it closes.
       if (innerLink) await (await innerLink).server.close();

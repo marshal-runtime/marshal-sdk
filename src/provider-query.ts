@@ -17,6 +17,13 @@ import { systemPromptText, TURN_EXTRAS, type QueryFn, type TurnExtras } from "./
  */
 export const PROVIDER_TOOLS: unique symbol = Symbol.for("marshal-sdk.provider-tools");
 
+/**
+ * Set beside PROVIDER_TOOLS when those tools are all the session may call: no built-in tool of the provider and no
+ * other MCP server. A remote session's tools run on another machine, while a provider client's built-ins (a shell,
+ * file tools) would run in this process's machine, so the host sets it on every remote session (SB01).
+ */
+export const PROVIDER_TOOLS_ONLY: unique symbol = Symbol.for("marshal-sdk.provider-tools-only");
+
 export interface ProviderQueryOptions {
   /** The provider's client factory (createClaudeClientFactory, createCodexClientFactory, createCursorClientFactory). */
   factory: RuntimeClientFactory;
@@ -96,6 +103,7 @@ async function* turn(
   let done = false;
   let failed: string | undefined;
   let lastText = "";
+  let structured: unknown;
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
   let cost = 0;
   let modelCalls = 0;
@@ -110,6 +118,7 @@ async function* turn(
   const unsubscribe = session.on((event: RuntimeSessionEvent) => {
     switch (event.type) {
       case "assistant.message":
+        if (event.data.structuredOutput !== undefined) structured = event.data.structuredOutput;
         if (event.data.content) {
           lastText = event.data.content;
           push({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: event.data.content }] } });
@@ -163,16 +172,7 @@ async function* turn(
     }
     while (outbox.length) yield outbox.shift()!;
     if (abort?.signal.aborted) throw Object.assign(new Error("Turn cancelled."), { name: "AbortError" });
-    yield {
-      type: "result",
-      subtype: failed ? "error_during_execution" : "success",
-      is_error: failed !== undefined,
-      result: failed ?? lastText,
-      usage,
-      total_cost_usd: cost,
-      num_turns: modelCalls,
-      session_id: session.sessionId,
-    };
+    yield turnResult({ failed, lastText, structured, wanted: config.responseSchema !== undefined, usage, cost, modelCalls, sessionId: session.sessionId });
   } finally {
     clearTimeout(timer);
     abort?.signal.removeEventListener("abort", onAbort);
@@ -181,15 +181,57 @@ async function* turn(
   }
 }
 
+/** The turn's final `result` message, in the Claude Agent SDK's shape (structured_output included). */
+export function turnResult(turn: {
+  failed: string | undefined;
+  lastText: string;
+  structured: unknown;
+  /** The turn asked for structured output (outputFormat). */
+  wanted: boolean;
+  usage: Record<string, number>;
+  cost: number;
+  modelCalls: number;
+  sessionId: string;
+}): Record<string, any> {
+  // As on the Claude Agent SDK, a turn that asked for structured output and got none is an error, never a success
+  // without its answer.
+  const missing = !turn.failed && turn.wanted && (turn.structured === undefined || turn.structured === null);
+  const failed = turn.failed ?? (missing ? "The model finished without the structured output the turn asked for." : undefined);
+  return {
+    type: "result",
+    subtype: turn.failed ? "error_during_execution" : missing ? "error_max_structured_output_retries" : "success",
+    is_error: failed !== undefined,
+    result: failed ?? turn.lastText,
+    ...(failed === undefined && turn.wanted ? { structured_output: turn.structured } : {}),
+    usage: turn.usage,
+    total_cost_usd: turn.cost,
+    num_turns: turn.modelCalls,
+    session_id: turn.sessionId,
+  };
+}
+
+/** The JSON schema of a launch's `outputFormat` (`{type: "json_schema", schema}`), as the provider's response schema. */
+export function responseSchemaOf(outputFormat: unknown): Record<string, unknown> | undefined {
+  if (outputFormat === undefined || outputFormat === null) return undefined;
+  const format = outputFormat as { type?: unknown; schema?: unknown };
+  if (format.type !== "json_schema" || !format.schema || typeof format.schema !== "object" || Array.isArray(format.schema)) {
+    throw new Error('outputFormat must be {type: "json_schema", schema: {...}} on this provider.');
+  }
+  return format.schema as Record<string, unknown>;
+}
+
 export function sessionConfig(turnOptions: Record<string, unknown>, cwd: string, extras: TurnExtras | undefined): RuntimeSessionConfig {
   const servers = (turnOptions.mcpServers ?? {}) as Record<string | symbol, unknown>;
   const tools = (servers[PROVIDER_TOOLS] as RuntimeTool[] | undefined) ?? [];
+  const toolsOnly = servers[PROVIDER_TOOLS_ONLY] === true;
   const mcpServers: Record<string, RuntimeMcpServerConfig> = {};
-  for (const [name, server] of Object.entries(servers)) {
+  // A session limited to its provider tools gets no MCP server either.
+  for (const [name, server] of toolsOnly ? [] : Object.entries(servers)) {
     const converted = mcpServerConfig(server);
     if (converted) mcpServers[name] = converted;
   }
   const systemPrompt = systemPromptText(turnOptions.systemPrompt);
+  const responseSchema = responseSchemaOf(turnOptions.outputFormat);
   return {
     // An empty model lets the provider pick its own default.
     ...(typeof turnOptions.model === "string" && turnOptions.model ? { model: turnOptions.model } : {}),
@@ -199,6 +241,9 @@ export function sessionConfig(turnOptions: Record<string, unknown>, cwd: string,
     streaming: true,
     ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
     ...(tools.length ? { tools } : {}),
+    // The provider's strict allowlist: exactly these tools, so none of its built-ins.
+    ...(toolsOnly ? { availableTools: tools.map((tool) => tool.name) } : {}),
+    ...(responseSchema ? { responseSchema } : {}),
     ...(typeof systemPrompt === "string" ? { systemMessage: { content: systemPrompt, mode: "replace" as const } } : {}),
     ...(Array.isArray(turnOptions.disallowedTools) && turnOptions.disallowedTools.length
       ? { disabledBuiltInTools: turnOptions.disallowedTools.map(String) }

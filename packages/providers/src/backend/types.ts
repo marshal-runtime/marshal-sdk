@@ -296,6 +296,8 @@ interface CommittedMessage {
   toolCalls?: MessageToolCall[];
   toolProvenance?: Array<Record<string, unknown>>;
   question?: { title?: string; options?: string[]; type?: string };
+  /** The parsed answer of a session with a responseSchema. */
+  structuredOutput?: unknown;
 }
 
 // ── BackendCapabilities ─────────────────────────────────────────────────
@@ -332,6 +334,8 @@ export interface CreateSessionOpts {
   projectContext?: boolean;
   /** Native built-in tools to remove from the model's context; adapters without such tools ignore it. */
   disabledBuiltInTools?: readonly string[];
+  /** See RuntimeSessionConfig.responseSchema. */
+  responseSchema?: Record<string, unknown>;
   /** False drops the per-turn host-tool availability line (the v2 prompt states it once); undefined = sent. */
   hostToolTurnNote?: boolean;
   /** See RuntimeSessionConfig.exposedHostTools. */

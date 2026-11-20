@@ -14,6 +14,7 @@ import type {
 import { AntigravityBridge } from "./bridge-process";
 import {
   ANTIGRAVITY_DEFAULT_MODEL_ID,
+  ANTIGRAVITY_FINISH_TOOL,
   ANTIGRAVITY_MARSHAL_OWNED_TOOLS,
   type AntigravityProcessEnv,
 } from "./constants";
@@ -277,11 +278,17 @@ export class AntigravityRuntimeClient implements RuntimeClient {
       ),
       ...(restricted
         ? {
-            enabledBuiltinTools: [...allowed].filter(
-              (name) => !config.tools?.some((tool) => tool.name === name),
-            ),
+            enabledBuiltinTools: [
+              ...[...allowed].filter((name) => !config.tools?.some((tool) => tool.name === name)),
+              // Antigravity returns a structured answer only through its built-in `finish` tool, which ends the
+              // turn and runs nothing; an allowlist without it would drop the answer.
+              ...(config.responseSchema && !allowed.has(ANTIGRAVITY_FINISH_TOOL)
+                ? [ANTIGRAVITY_FINISH_TOOL]
+                : []),
+            ],
           }
         : {}),
+      ...(config.responseSchema ? { responseSchema: config.responseSchema } : {}),
       ...(onMarshalSurface
         ? {
             disabledBuiltinTools: [

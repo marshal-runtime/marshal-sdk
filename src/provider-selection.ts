@@ -20,6 +20,7 @@ import {
   createCursorClientFactory,
   CURSOR_API_KEY_ENV,
   defaultCodexHome,
+  detectModelProviderFamily,
   listRuntimeAccounts,
   marshalCursorCredentialStorePath,
   normalizeRuntimeAccounts,
@@ -27,11 +28,27 @@ import {
   type ClaudeClientFactoryOptions,
   type CodexClientFactoryOptions,
   type CursorClientFactoryOptions,
+  type ModelProviderFamily,
   type RuntimeClientFactory,
   type RuntimeTool,
 } from "./providers.js";
 
 export { PROVIDER_TOOLS };
+export type { ModelProviderFamily };
+
+/**
+ * A host's `providerFor` by model family (the desktop's own family detection: `claude-*`/`opus`... anthropic, `gpt-*`
+ * openai, `gemini-*` google): `providerForModelFamily({google: {id: "antigravity"}})` runs Gemini models on Antigravity
+ * and every other model on the host's own provider.
+ */
+export function providerForModelFamily(
+  routes: Partial<Record<ModelProviderFamily, ProviderSelection>>,
+): (session: { model?: string }) => ProviderSelection | undefined {
+  return (session) => {
+    const family = detectModelProviderFamily(session.model);
+    return family ? routes[family] : undefined;
+  };
+}
 
 export const PROVIDER_IDS = ["claude", "openai", "codex", "cursor", "antigravity"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];

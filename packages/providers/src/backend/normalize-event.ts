@@ -84,7 +84,7 @@ export function normalizeEvent(event: RuntimeSessionEvent): BackendEvent[] {
       ];
 
     case "assistant.message": {
-      const { content, messageId, reasoningText } = event.data;
+      const { content, messageId, reasoningText, structuredOutput } = event.data;
       // Empty mid-turn messages are NOT suppressed here because TurnAccumulator
       // needs them to commit question-only messages (askUser). The suppression
       // of truly empty turn-complete events lives in TurnAccumulator.handleTurnComplete()
@@ -97,6 +97,7 @@ export function normalizeEvent(event: RuntimeSessionEvent): BackendEvent[] {
             role: "assistant",
             content,
             reasoning: reasoningText ? { text: reasoningText, durationSeconds: null } : undefined,
+            ...(structuredOutput !== undefined ? { structuredOutput } : {}),
           },
         },
       ];

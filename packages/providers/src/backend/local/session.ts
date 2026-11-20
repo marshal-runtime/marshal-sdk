@@ -502,6 +502,7 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
       ...(systemMessage ? { systemMessage } : {}),
       ...(opts.projectContext === false ? { projectContext: false } : {}),
       ...(opts.sandbox ? { sandbox: opts.sandbox } : {}),
+      ...(opts.responseSchema ? { responseSchema: opts.responseSchema } : {}),
       onPermissionRequest: permissionHandler,
     };
 
@@ -581,6 +582,7 @@ export class LocalSessionBackend implements ISessionBackend, IExecutionBackend {
       ...(systemMessage ? { systemMessage } : {}),
       ...(opts.projectContext === false ? { projectContext: false } : {}),
       ...(opts.sandbox ? { sandbox: opts.sandbox } : {}),
+      ...(opts.responseSchema ? { responseSchema: opts.responseSchema } : {}),
       onPermissionRequest: permissionHandler,
     };
 

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { TURN_EXTRAS, type QueryFn, type TurnExtras } from "./agent-port.js";
 import { ensureEngineHost } from "./headless-engine.js";
-import { promptText, sessionConfig } from "./provider-query.js";
+import { promptText, sessionConfig, turnResult } from "./provider-query.js";
 import {
   ANTIGRAVITY_ACCOUNT_IDENTITY_PREFIX,
   ANTIGRAVITY_DEFAULT_MODEL_ID,
@@ -222,6 +222,10 @@ async function* engineTurn(
     ...(config.disabledBuiltInTools?.length ? { disabledBuiltInTools: [...config.disabledBuiltInTools] } : {}),
     ...(config.nativeSubagentAllowlist ? { nativeSubagentAllowlist: [...config.nativeSubagentAllowlist] } : {}),
     ...(config.projectContext === false ? { projectContext: false } : {}),
+    // A session limited to its provider tools (PROVIDER_TOOLS_ONLY): the engine's strict allowlist, so the runtime
+    // gets only these and none of its built-ins.
+    ...(config.availableTools ? { allowedTools: [...config.availableTools] } : {}),
+    ...(config.responseSchema ? { responseSchema: config.responseSchema } : {}),
     // The host's prompt names the session's tools once; no per-turn availability line.
     hostToolTurnNote: false,
     sandbox: { mode: "danger-full-access" } as never,
@@ -236,6 +240,8 @@ async function* engineTurn(
         disabled: config.disabledBuiltInTools,
         allowlist: config.nativeSubagentAllowlist,
         projectContext: config.projectContext,
+        available: config.availableTools,
+        responseSchema: config.responseSchema,
       }),
     )
     .digest("hex");
@@ -281,6 +287,7 @@ async function* engineTurn(
   let done = false;
   let failed: string | undefined;
   let lastText = "";
+  let structured: unknown;
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
   let cost = 0;
   let modelCalls = 0;
@@ -295,6 +302,7 @@ async function* engineTurn(
   const unsubscribe = backend.sessions.subscribe(sessionId, (event: BackendEvent) => {
     switch (event.type) {
       case "turn-complete": {
+        if (event.message?.structuredOutput !== undefined) structured = event.message.structuredOutput;
         const content = typeof event.message?.content === "string" ? event.message.content : "";
         if (content) {
           lastText = content;
@@ -353,16 +361,7 @@ async function* engineTurn(
     }
     while (outbox.length) yield outbox.shift()!;
     if (abort?.signal.aborted) throw Object.assign(new Error("Turn cancelled."), { name: "AbortError" });
-    yield {
-      type: "result",
-      subtype: failed ? "error_during_execution" : "success",
-      is_error: failed !== undefined,
-      result: failed ?? lastText,
-      usage,
-      total_cost_usd: cost,
-      num_turns: modelCalls,
-      session_id: current.backendId,
-    };
+    yield turnResult({ failed, lastText, structured, wanted: config.responseSchema !== undefined, usage, cost, modelCalls, sessionId: current.backendId });
   } finally {
     clearTimeout(timer);
     abort?.signal.removeEventListener("abort", onAbort);

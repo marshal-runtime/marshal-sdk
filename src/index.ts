@@ -192,12 +192,14 @@ export {
 } from "./rooms-route.js";
 export { linkPersonRoute, readDecisions } from "./link/decisions.js";
 export { DEFAULT_KEY_ENV, providerKey, readSecret, requireProviderKey, type CredentialEnv, type KeyProvider, type ResolvedKey } from "./credentials.js";
-export { createProviderQuery, PROVIDER_TOOLS, type ProviderQueryOptions } from "./provider-query.js";
+export { createProviderQuery, PROVIDER_TOOLS, PROVIDER_TOOLS_ONLY, type ProviderQueryOptions } from "./provider-query.js";
 export { createOpenAIAgentsQuery, localEditor, localShell, type OpenAIAgentsQueryOptions } from "./openai-agents-query.js";
 export {
   DEFAULT_CLAUDE_ENGINE,
   PROVIDER_IDS,
+  providerForModelFamily,
   resolveProvider,
+  type ModelProviderFamily,
   type ClaudeEngine,
   type ProviderCredential,
   type ProviderId,

@@ -30,6 +30,7 @@ export type {
 } from "../packages/providers/src/backend/types";
 export { createLocalRuntimeCapabilities } from "../packages/providers/src/backend/local/capabilities";
 export { getRuntimeMetadata } from "../packages/providers/src/common/runtime-config";
+export { detectModelProviderFamily, type ModelProviderFamily } from "../packages/providers/src/common/model-runtime-routing";
 export {
   CURSOR_ACCOUNT_IDENTITY_PREFIX,
   CURSOR_DEFAULT_MODEL_ID,
