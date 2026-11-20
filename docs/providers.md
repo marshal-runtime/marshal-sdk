@@ -19,7 +19,7 @@ exactly as given (a test's own `query` replaces the provider altogether).
 
 | Field | Meaning |
 |---|---|
-| `id` | `claude`, `openai`, `codex` or `cursor` |
+| `id` | `claude`, `openai`, `codex`, `cursor` or `antigravity` |
 | `account` | An account from the Marshal desktop's registry (Settings, Accounts), e.g. `omer-max`. It uses the same credential home the desktop uses. |
 | `apiKeyEnv` | Run on an API key read from this environment variable (or the file `<name>_FILE` names). A key never goes in the manifest. `openai` always runs on a key: default `OPENAI_API_KEY`. |
 | `home` | Overrides the credential home: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or the folder holding Cursor's credential store (a container's mounted login). |
@@ -37,6 +37,7 @@ that isn't set.
 | Codex | `CODEX_HOME=~/.marshal/marshal-codex-accounts/<id>`; without an account, `~/.marshal/marshal-codex` | A private `CODEX_HOME` under the host's state, signed in with the key once per client |
 | OpenAI | None: the Agents SDK runs on the OpenAI API (a ChatGPT login is the `codex` provider) | `OPENAI_API_KEY`, or `apiKeyEnv` |
 | Cursor | The account's credential store under the desktop's data folder (`~/.marshal`, or `~/.marshal-dev` when the login lives there) | `CURSOR_API_KEY` with an empty private store, so the key is the one in use |
+| Antigravity | `~/.marshal/antigravity/credentials.json` (an account: `~/.marshal/antigravity/accounts/<id>/`), else the launch environment: `GOOGLE_GENAI_USE_VERTEXAI` with `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` (gcloud ADC or `GOOGLE_APPLICATION_CREDENTIALS`), or `GEMINI_API_KEY` | `apiKeyEnv` holding a Gemini API key, a Vertex service-account JSON or `{"project","location"}`, signed into a private home |
 
 The registry is read from `marshal-settings.json` (`runtimeAccounts`) in `~/.marshal` and `~/.marshal-dev`, without
 writing to it. The desktop's default account is not adopted: without `account`, a host keeps its environment.
@@ -105,6 +106,32 @@ checked out beside this repo).
 - Usage counts input, output and cached tokens. Cost is not reported (0).
 - Tracing to OpenAI's trace viewer is off.
 - With no model set, the Agents SDK's default model is used (`OPENAI_DEFAULT_MODEL` overrides it).
+
+## Antigravity: Google's agent SDK on Vertex or the Gemini API
+
+`provider: {"id": "antigravity"}` runs each session on Google Antigravity (PyPI `google-antigravity`, pinned in
+`packages/providers/src/backend/antigravity/constants.ts`). The SDK is Python only, so the provider drives it through
+`bridge.py`: one Python process per client, JSON lines on stdin/stdout, one `Agent` per session.
+
+- **Python.** On first use the provider makes a private venv at `~/.marshal/antigravity/venv` with uv (else a system
+  Python 3.10+) and installs the pinned SDK; `MARSHAL_ANTIGRAVITY_PYTHON` names a prepared interpreter instead. The
+  bridge ships inside any bundle as `bridge-source.ts`, regenerated from `bridge.py` by
+  `node scripts/antigravity-bridge-source.mjs` (`--check` fails when it is stale).
+- **Credentials.** Vertex on a project (gcloud ADC or a service-account key file), Vertex express (API key), or the
+  Gemini API (API key); see the table above. The desktop's sign-in, "Use Vertex or Gemini credentials", takes the same
+  values.
+- **Sessions.** The native id is Antigravity's `conversation_id`. Conversations are saved under `<home>/sessions`, so
+  later turns, a restart and `resumeSession` continue them. A model or effort change restarts the Agent on the same
+  conversation. Reasoning effort maps to Gemini's thinking level (`max` becomes `xhigh`).
+- **Tools.** Every tool call (Antigravity's built-ins, MCP, Marshal's host tools) passes the host first: the pre-tool
+  hook, then the permission handler with the request kinds Claude uses (`shell` for `run_command`, `write`, `read`,
+  `url`, `mcp`, `custom-tool`). Marshal's host tools run in the host and are registered with their JSON schemas; stdio
+  and HTTP MCP servers pass through. On Marshal's tool surface `ask_question`, `invoke_subagent` and `schedule` are
+  off, since Marshal owns those jobs.
+- **Prompt.** Marshal's prompt is a section appended to Antigravity's own instructions, or the whole system prompt when
+  a launch replaces it (`systemMessage.mode: "replace"`). Image, PDF, audio and video attachments go in as media.
+- Usage reports input, cached, output and thinking tokens; cost is not reported (0). Antigravity compacts on its own,
+  reported as `session.compaction_complete`.
 
 ## How a turn runs on Codex and Cursor
 

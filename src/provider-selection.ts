@@ -12,6 +12,8 @@ import { createEngineQuery, type EngineRuntime } from "./engine-query.js";
 import { PROVIDER_TOOLS } from "./provider-query.js";
 import {
   claudeAccountConfigDir,
+  createAntigravityClientFactory,
+  type AntigravityClientFactoryOptions,
   codexAccountHome,
   createClaudeClientFactory,
   createCodexClientFactory,
@@ -31,7 +33,7 @@ import {
 
 export { PROVIDER_TOOLS };
 
-export const PROVIDER_IDS = ["claude", "openai", "codex", "cursor"] as const;
+export const PROVIDER_IDS = ["claude", "openai", "codex", "cursor", "antigravity"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 /** Which model provider runs a host's sessions, and on whose credentials (docs/providers.md). */
@@ -87,6 +89,7 @@ export interface ResolveProviderOptions {
     claude?: (options: ClaudeClientFactoryOptions) => RuntimeClientFactory;
     codex?: (options: CodexClientFactoryOptions) => RuntimeClientFactory;
     cursor?: (options: CursorClientFactoryOptions) => RuntimeClientFactory;
+    antigravity?: (options: AntigravityClientFactoryOptions) => RuntimeClientFactory;
     /** The OpenAI Agents SDK model provider for a key. */
     openai?: (options: { apiKey: string }) => ModelProvider;
     /** The Claude Agent SDK's query, for turns the Claude client doesn't take. */
@@ -249,6 +252,32 @@ export function resolveProvider(selection: ProviderSelection, options: ResolvePr
         description: describe(home),
       };
     }
+    case "antigravity": {
+      // Google Antigravity (its Python SDK through the providers' bridge) on Vertex AI or the Gemini API. The default
+      // home and an account's home hold credentials the desktop stored; a key (a Gemini API key, a Vertex
+      // service-account JSON or {"project","location"}) goes into a private home of the host's own.
+      const make = factories.antigravity ?? createAntigravityClientFactory;
+      const home =
+        selection.home ??
+        (apiKey !== undefined ? fresh("antigravity") : antigravityAccountHome(account, homeDir, dataDirs));
+      const factory = make({ env: options.env, homeDir: home });
+      const prepare =
+        apiKey === undefined
+          ? undefined
+          : async (client: Parameters<NonNullable<Parameters<typeof createEngineQuery>[0]["prepare"]>>[0]) => {
+              if (!client.login) throw new Error("This Antigravity client cannot take credentials.");
+              await client.login({ type: "api-key", apiKey });
+            };
+      return {
+        id: "antigravity",
+        credential,
+        ...(account ? { account } : {}),
+        env: options.env,
+        query: providerQuery("antigravity", factory, prepare),
+        defaultModel: "",
+        description: describe(home),
+      };
+    }
   }
 }
 
@@ -337,6 +366,7 @@ function readApiKey(env: Record<string, string>, name: string): string {
 function accountHome(id: ProviderId, account: string, homeDir: string, dataDirs: readonly string[]): string {
   if (id === "claude") return claudeAccountConfigDir(account, homeDir);
   if (id === "codex") return codexAccountHome(account, homeDir);
+  if (id === "antigravity") return antigravityAccountHome(account, homeDir, dataDirs);
   return path.dirname(marshalCursorCredentialStorePath(cursorDataDir(dataDirs, account), account));
 }
 
@@ -363,6 +393,12 @@ function checkAccount(id: ProviderId, account: string, dataDirs: readonly string
   throw new Error(
     `No ${id} account "${account}" in the Marshal desktop's accounts${known.length ? ` (${known.join(", ")})` : ""}, and ${home} does not exist. Add the account in Marshal, Settings, Accounts.`,
   );
+}
+
+/** The desktop's Antigravity home (`<data>/antigravity`), or an account's home under it. */
+function antigravityAccountHome(account: string | undefined, homeDir: string, dataDirs: readonly string[]): string {
+  const base = path.join(dataDirs[0] ?? path.join(homeDir, ".marshal"), "antigravity");
+  return account ? path.join(base, "accounts", account) : base;
 }
 
 /** The desktop data folder whose Cursor credential store exists, else the first (production) one. */

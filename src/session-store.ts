@@ -457,7 +457,7 @@ export function backendOriginOf(runtimeId: string): string {
 }
 
 // common/runtime-config.ts: the local adapters keep the legacy Copilot transport family for persisted-row compatibility.
-const LOCAL_RUNTIME_ORIGINS: Record<string, string> = { claude: "copilot", codex: "copilot", cursor: "copilot", copilot: "copilot", gateway: "gateway" };
+const LOCAL_RUNTIME_ORIGINS: Record<string, string> = { claude: "copilot", codex: "copilot", cursor: "copilot", antigravity: "copilot", copilot: "copilot", gateway: "gateway" };
 
 function withPartition(record: SessionRecord): SessionRecord {
   const runtimeId = record.runtimeId ?? record.runtime;

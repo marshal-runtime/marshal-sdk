@@ -25,7 +25,12 @@ export {
   type RuntimeAccount,
   type RuntimeAccountsSettings,
 } from "./common/runtime-accounts";
-export { CLAUDE_RUNTIME_ID, CODEX_RUNTIME_ID, CURSOR_RUNTIME_ID } from "./common/runtime-config";
+export {
+  ANTIGRAVITY_RUNTIME_ID,
+  CLAUDE_RUNTIME_ID,
+  CODEX_RUNTIME_ID,
+  CURSOR_RUNTIME_ID,
+} from "./common/runtime-config";
 
 export { claudeAccountConfigDir, withoutLaunchCredentials } from "./backend/claude/accounts";
 export {
@@ -44,5 +49,17 @@ export {
   createCursorClientFactory,
   type CursorClientFactoryOptions,
 } from "./backend/cursor/factory";
+
+export {
+  antigravityHomeDir,
+  createAntigravityClientFactory,
+  type AntigravityClientFactoryOptions,
+} from "./backend/antigravity/factory";
+export {
+  resolveAntigravityEndpoint,
+  saveAntigravityCredential,
+  type AntigravityEndpoint,
+} from "./backend/antigravity/credentials";
+export { ensureAntigravityEnvironment, defaultAntigravityHome } from "./backend/antigravity/environment";
 
 export { addLogSink, createLogger, type LogEntry } from "./common/marshal-logger";

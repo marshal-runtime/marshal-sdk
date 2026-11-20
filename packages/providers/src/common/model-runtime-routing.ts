@@ -24,7 +24,7 @@ export const MODEL_ROUTING_RUNTIME_IDS = [
 ] as const;
 
 /** A routing value: a peer runtime, optionally with an account (`claude@work`). */
-export const MODEL_ROUTING_TARGET_PATTERN = /^(claude|codex|cursor)(@[a-z0-9][a-z0-9-]{0,31})?$/;
+export const MODEL_ROUTING_TARGET_PATTERN = /^(claude|codex|cursor|antigravity)(@[a-z0-9][a-z0-9-]{0,31})?$/;
 
 /** Which local runtime (and account) runs plain (unqualified) model ids of each provider family. */
 export type ModelRuntimeRouting = Partial<Record<ModelProviderFamily, string>>;
