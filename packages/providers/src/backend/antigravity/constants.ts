@@ -30,15 +30,23 @@ export const ANTIGRAVITY_READ_TOOLS = new Set([
   "find_file",
   "search_directory",
 ]);
-export const ANTIGRAVITY_WRITE_TOOLS = new Set(["edit_file", "create_file"]);
+// The model calls the declared names (write_to_file, replace_file_content); the SDK enum says create_file/edit_file.
+export const ANTIGRAVITY_WRITE_TOOLS = new Set([
+  "write_to_file",
+  "replace_file_content",
+  "edit_file",
+  "create_file",
+]);
 export const ANTIGRAVITY_URL_TOOLS = new Set(["read_url_content", "search_web"]);
 export const ANTIGRAVITY_SHELL_TOOL = "run_command";
 /**
- * Built-in tools whose job Marshal owns (askUser, forkSubagents, automations),
- * kept out of a session on Marshal's tool surface like Claude's disabled tools.
+ * Built-in tools whose job Marshal owns (askUser, forkSubagents, workflows,
+ * automations), kept out of a session on Marshal's tool surface like Claude's
+ * disabled tools.
  */
 export const ANTIGRAVITY_MARSHAL_OWNED_TOOLS = [
   "ask_question",
   "invoke_subagent",
+  "run_workflow",
   "schedule",
 ] as const;

@@ -4789,7 +4789,10 @@ export class SessionManager
   }
 
   private usesAgentPromptV2(sessionData: PersistedSession | null | undefined): boolean {
-    return this.usesLeanFlag(sessionData, isAgentPromptV2Session, "agentPromptV2");
+    if (!sessionData) return false;
+    const runtimeId = resolveSessionExecutionRuntimeId(sessionData);
+    if (getRuntimeMetadata(runtimeId).supportsAgentPromptV2 !== true) return false;
+    return isAgentPromptV2Session(sessionData.agentPromptV2);
   }
 
   /** Tool-surface trims and per-turn notes that follow the session's prompt stamps. */
@@ -4915,6 +4918,7 @@ export class SessionManager
     if (v2) {
       return {
         content: assembleMarshalSystemPromptV2({
+          ...(runtimeId ? { runtimeId } : {}),
           role: {
             runtimeAgentRole: sessionData?.runtimeAgentRole,
             isSubagent: opts.isSubagent,
