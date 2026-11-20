@@ -22,8 +22,15 @@ from google.antigravity.tools import tool_runner as agy_tool_runner
 
 PROTOCOL_VERSION = 1
 
+# A cancel that the harness doesn't honour within this many seconds (a dead connection, a hook still waiting on
+# the host) is finished by cancelling the turn's task; the Agent is then restarted on the same conversation.
+CANCEL_GRACE_SECONDS = 5
+CLOSE_SECONDS = 10
+CANCELLED = "The turn was cancelled"
+
 _out_lock = asyncio.Lock()
-_pending: dict[str, asyncio.Future] = {}
+# request id -> (session id, request kind, future the host's reply resolves)
+_pending: dict[str, tuple[str, str, asyncio.Future]] = {}
 _sessions: dict[str, "BridgeSession"] = {}
 
 
@@ -50,12 +57,44 @@ async def emit(event: dict) -> None:
 async def ask_host(session: str, kind: str, payload: dict):
   request_id = uuid.uuid4().hex
   future = asyncio.get_running_loop().create_future()
-  _pending[request_id] = future
+  _pending[request_id] = (session, kind, future)
   try:
     await emit({"ev": "request", "id": request_id, "session": session, "kind": kind, **payload})
     return await future
   finally:
     _pending.pop(request_id, None)
+
+
+def _release_pending(session: str) -> None:
+  """Answers the session's open host requests so hooks blocked on them return and the turn can stop."""
+  for _, (owner, kind, future) in list(_pending.items()):
+    if owner != session or future.done():
+      continue
+    future.set_result({"allow": False, "message": CANCELLED} if kind == "pre_tool" else {"error": CANCELLED})
+
+
+def _auth_problem(config: dict) -> str | None:
+  """Says why Vertex credentials can't be used (an expired gcloud login, say), or None when they work."""
+  endpoint = config.get("endpoint") or {}
+  if endpoint.get("kind") != "vertex" or endpoint.get("apiKey"):
+    return None
+  try:
+    import google.auth  # pylint: disable=import-outside-toplevel
+    import google.auth.exceptions  # pylint: disable=import-outside-toplevel
+    import google.auth.transport.requests  # pylint: disable=import-outside-toplevel
+  except ImportError:
+    return None
+  try:
+    credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    credentials.refresh(google.auth.transport.requests.Request())
+    return None
+  except (google.auth.exceptions.RefreshError, google.auth.exceptions.DefaultCredentialsError) as error:
+    return (
+        f"Vertex AI credentials are not valid ({error}). Sign in again with "
+        "`gcloud auth login --update-adc` (or `gcloud auth application-default login`), then send the message again."
+    )
+  except Exception:  # pylint: disable=broad-except
+    return None
 
 
 def _usage(usage) -> dict | None:
@@ -138,7 +177,15 @@ class BridgeSession:
     self.host_tool_names: set[str] = set()
     self.response = None
     self.turn_task: asyncio.Task | None = None
+    # Set when the harness may be stuck mid-turn or its connection is gone: the next turn restarts the Agent on
+    # the same conversation (RESUME) instead of sending into it.
+    self.needs_reopen = False
     self._call_ids: dict[str, list[str]] = {}
+
+  def __deepcopy__(self, memo):
+    # The SDK deep-copies the Agent config, hooks included: the hooks must keep this live session (its call ids
+    # and turn task), and a running turn task can't be copied at all.
+    return self
 
   def remember_call(self, name: str, args, call_id: str) -> None:
     self._call_ids.setdefault(self._call_key(name, args), []).append(call_id)
@@ -257,9 +304,42 @@ class BridgeSession:
     agent = Agent(LocalAgentConfig(**{k: v for k, v in kwargs.items() if v is not None}))
     await agent.__aenter__()
     self.agent = agent
+    self.needs_reopen = False
+    # Every later open continues the same conversation.
+    self.config["resume"] = True
     return agent.conversation_id or self.config["conversationId"]
 
+  async def _stop_agent(self) -> None:
+    agent, self.agent = self.agent, None
+    if agent is None:
+      return
+    try:
+      await asyncio.wait_for(agent.__aexit__(None, None, None), timeout=CLOSE_SECONDS)
+    except BaseException:  # pylint: disable=broad-except
+      logging.warning("stopping the agent failed: %s", traceback.format_exc())
+
+  async def _turn_error(self, turn: str, error: BaseException) -> None:
+    message = str(error) or type(error).__name__
+    auth = await asyncio.to_thread(_auth_problem, self.config)
+    event = {"ev": "turn_error", "session": self.id, "turn": turn, "error": auth or message}
+    if auth:
+      event["code"] = "auth"
+    await emit(event)
+
   async def run_turn(self, turn: str, prompt: str, media: list[dict]) -> None:
+    if self.needs_reopen or self.agent is None:
+      await self._stop_agent()
+      try:
+        await self.open()
+      except asyncio.CancelledError:
+        self.needs_reopen = True
+        await emit({"ev": "turn_end", "session": self.id, "turn": turn, "cancelled": True})
+        return
+      except Exception as error:  # pylint: disable=broad-except
+        logging.error("reopen failed: %s", traceback.format_exc())
+        self.needs_reopen = True
+        await self._turn_error(turn, error)
+        return
     assert self.agent is not None
     content = prompt
     if media:
@@ -304,31 +384,34 @@ class BridgeSession:
       await emit({"ev": "turn_end", "session": self.id, "turn": turn, "cancelled": True})
     except Exception as error:  # pylint: disable=broad-except
       logging.error("turn failed: %s", traceback.format_exc())
-      await emit({"ev": "turn_error", "session": self.id, "turn": turn, "error": str(error) or type(error).__name__})
+      # The harness may be mid-turn or disconnected (a closed websocket ends every later turn too).
+      self.needs_reopen = True
+      await self._turn_error(turn, error)
     finally:
       self.response = None
 
   async def cancel(self) -> None:
+    _release_pending(self.id)
+    task = self.turn_task
+    if task is None or task.done():
+      return
     response = self.response
     if response is not None:
       try:
-        await response.cancel()
-      except Exception:  # pylint: disable=broad-except
+        await asyncio.wait_for(response.cancel(), timeout=CANCEL_GRACE_SECONDS)
+      except BaseException:  # pylint: disable=broad-except
         logging.warning("cancel failed: %s", traceback.format_exc())
+      await asyncio.wait({task}, timeout=CANCEL_GRACE_SECONDS)
+    if not task.done():
+      # The harness didn't stop the turn: end it here (run_turn reports it cancelled) and restart the Agent
+      # before the next turn, since the SDK would otherwise wait for the stuck turn to go idle.
+      self.needs_reopen = True
+      task.cancel()
+      await asyncio.wait({task}, timeout=CANCEL_GRACE_SECONDS)
 
   async def close(self) -> None:
     await self.cancel()
-    if self.turn_task is not None:
-      try:
-        await asyncio.wait_for(self.turn_task, timeout=10)
-      except Exception:  # pylint: disable=broad-except
-        self.turn_task.cancel()
-    if self.agent is not None:
-      try:
-        await self.agent.__aexit__(None, None, None)
-      except Exception:  # pylint: disable=broad-except
-        logging.warning("close failed: %s", traceback.format_exc())
-      self.agent = None
+    await self._stop_agent()
 
 
 async def handle(command: dict) -> None:
@@ -348,7 +431,11 @@ async def handle(command: dict) -> None:
     except Exception as error:  # pylint: disable=broad-except
       logging.error("open failed: %s", traceback.format_exc())
       await session.close()
-      await emit({"ev": "open_failed", "session": session_id, "error": str(error) or type(error).__name__})
+      auth = await asyncio.to_thread(_auth_problem, session.config)
+      failed = {"ev": "open_failed", "session": session_id, "error": auth or str(error) or type(error).__name__}
+      if auth:
+        failed["code"] = "auth"
+      await emit(failed)
     return
   session = _sessions.get(session_id)
   if session is None:

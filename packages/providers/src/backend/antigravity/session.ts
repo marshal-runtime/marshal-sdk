@@ -11,6 +11,7 @@ import type {
   RuntimeSessionEventDataMap,
   RuntimeSessionEventType,
 } from "../../common/runtime-events";
+import { AUTH_REQUIRED_ERROR_CODE } from "../../common/foundation/auth/auth-errors";
 import type { ReasoningEffort } from "../../contract/host-types";
 import { cleanContextUserText, validateConversationState } from "../conversation-state";
 import type {
@@ -22,13 +23,14 @@ import type {
   RuntimeSessionConfig,
   RuntimeTool,
 } from "../runtime-contract";
-import type {
-  AntigravityBridge,
-  BridgeEvent,
-  BridgeRequest,
-  BridgeUsage,
-  HostToolReply,
-  PreToolReply,
+import {
+  AntigravityBridgeError,
+  type AntigravityBridge,
+  type BridgeEvent,
+  type BridgeRequest,
+  type BridgeUsage,
+  type HostToolReply,
+  type PreToolReply,
 } from "./bridge-process";
 import {
   ANTIGRAVITY_READ_TOOLS,
@@ -36,6 +38,12 @@ import {
   ANTIGRAVITY_URL_TOOLS,
   ANTIGRAVITY_WRITE_TOOLS,
 } from "./constants";
+
+/**
+ * How long abort waits for the bridge to report the turn cancelled. The bridge ends a turn the harness won't stop
+ * within ~10s; past this the bridge itself is stuck, so the turn ends here and the Agent restarts on the next turn.
+ */
+const ABORT_WAIT_MS = 15_000;
 
 /** File types the SDK takes as media parts of a prompt (types.from_file). */
 const MEDIA_EXTENSIONS = new Set([
@@ -163,6 +171,13 @@ function permissionRequest(
   return null;
 }
 
+function sessionErrorData(error: unknown): { message: string; errorType?: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  return error instanceof AntigravityBridgeError && error.code === "auth"
+    ? { message, errorType: AUTH_REQUIRED_ERROR_CODE }
+    : { message };
+}
+
 function deniedHookReason(value: unknown): string | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
@@ -263,9 +278,7 @@ export class AntigravityRuntimeSession implements RuntimeClientSession {
     this.queue = run.catch(() => undefined);
     void run.catch((error: unknown) => {
       if (this.closed) return;
-      this.emit(
-        event("session.error", { message: error instanceof Error ? error.message : String(error) }),
-      );
+      this.emit(event("session.error", sessionErrorData(error)));
     });
     return turnId;
   }
@@ -314,7 +327,23 @@ export class AntigravityRuntimeSession implements RuntimeClientSession {
     if (turn) {
       turn.cancelled = true;
       this.bridge.cancel(this.sessionId);
-      await turn.completion.catch(() => undefined);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settled = await Promise.race([
+        turn.completion.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), ABORT_WAIT_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (!settled) {
+        // The bridge never answered: drop its Agent so the next turn starts a fresh one on this conversation.
+        this.opened = false;
+        await this.bridge.close(this.sessionId).catch(() => undefined);
+        turn.resolve();
+      }
     }
     this.emit(event("abort", {}));
     await this.config.hooks?.onSessionEnd?.({ reason: "abort" }, { sessionId: this.sessionId });
@@ -508,7 +537,7 @@ export class AntigravityRuntimeSession implements RuntimeClientSession {
             { sessionId: this.sessionId },
           ),
         );
-        turn.reject(new Error(bridgeEvent.error));
+        turn.reject(new AntigravityBridgeError(bridgeEvent.error, bridgeEvent.code));
         return;
       }
       case "error":
