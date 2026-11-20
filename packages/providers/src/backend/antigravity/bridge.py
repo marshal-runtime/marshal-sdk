@@ -417,7 +417,8 @@ class BridgeSession:
 async def handle(command: dict) -> None:
   op = command.get("op")
   if op == "reply":
-    future = _pending.get(command.get("id", ""))
+    pending = _pending.get(command.get("id", ""))
+    future = pending[2] if pending is not None else None
     if future is not None and not future.done():
       future.set_result(command.get("result") or {})
     return
