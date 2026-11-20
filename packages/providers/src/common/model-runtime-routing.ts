@@ -5,7 +5,12 @@ import {
   runtimeTargetKey,
   type RuntimeAccountsSettings,
 } from "./runtime-accounts";
-import { CLAUDE_RUNTIME_ID, CODEX_RUNTIME_ID, CURSOR_RUNTIME_ID } from "./runtime-config";
+import {
+  ANTIGRAVITY_RUNTIME_ID,
+  CLAUDE_RUNTIME_ID,
+  CODEX_RUNTIME_ID,
+  CURSOR_RUNTIME_ID,
+} from "./runtime-config";
 import {
   PEER_RUNTIME_IDS,
   RUNTIME_MODEL_SEPARATOR,
@@ -21,6 +26,7 @@ export const MODEL_ROUTING_RUNTIME_IDS = [
   CLAUDE_RUNTIME_ID,
   CODEX_RUNTIME_ID,
   CURSOR_RUNTIME_ID,
+  ANTIGRAVITY_RUNTIME_ID,
 ] as const;
 
 /** A routing value: a peer runtime, optionally with an account (`claude@work`). */
