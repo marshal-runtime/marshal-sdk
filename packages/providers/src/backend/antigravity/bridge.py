@@ -9,7 +9,10 @@ Marshal (the pre-tool hook asks the host) and whose host tools run in Marshal.
 import asyncio
 import json
 import logging
+import collections
 import os
+import re
+import sqlite3
 import sys
 import traceback
 import uuid
@@ -22,8 +25,22 @@ from google.antigravity.tools import tool_runner as agy_tool_runner
 
 PROTOCOL_VERSION = 1
 
+# A cancel that the harness doesn't honour within this many seconds (a dead connection, a hook still waiting on
+# the host) is finished by cancelling the turn's task; the Agent is then restarted on the same conversation.
+CANCEL_GRACE_SECONDS = 5
+CLOSE_SECONDS = 10
+CANCELLED = "The turn was cancelled"
+
+# Step types in a conversation's trajectory database (<saveDir>/<conversationId>.db, table `steps`), as
+# google-antigravity 0.1.24's harness numbers them.
+STEP_USER_INPUT = 14
+STEP_PLANNER_RESPONSE = 15
+STEP_ERROR_MESSAGE = 17
+STEP_SYSTEM_MESSAGE = 101
+
 _out_lock = asyncio.Lock()
-_pending: dict[str, asyncio.Future] = {}
+# request id -> (session id, request kind, future the host's reply resolves)
+_pending: dict[str, tuple[str, str, asyncio.Future]] = {}
 _sessions: dict[str, "BridgeSession"] = {}
 
 
@@ -47,15 +64,131 @@ async def emit(event: dict) -> None:
     sys.stdout.flush()
 
 
+# The harness error for a tool result whose call it can't find while building the next model request; the
+# id is the model's call id (a Go format string in the localharness binary).
+MISSING_CALL_ERROR = re.compile(r"tool call id (\S+) not found in map")
+
+# The SDK logs each failed system step (local_connection.py) with its harness status code and error; the bridge
+# keeps the latest ones so a failed turn can report them.
+STEP_ERROR_LOG_FORMAT = "System step error (HTTP %s): %s"
+_step_errors: collections.deque = collections.deque(maxlen=32)
+
+
+class _StepErrorRecorder(logging.Handler):
+
+  def emit(self, record: logging.LogRecord) -> None:
+    if record.msg == STEP_ERROR_LOG_FORMAT and isinstance(record.args, tuple) and len(record.args) == 2:
+      _step_errors.append({"httpCode": record.args[0], "stepError": str(record.args[1])})
+
+
+def _step_error_for(message: str) -> dict | None:
+  for entry in reversed(_step_errors):
+    if message and message in entry["stepError"]:
+      return entry
+  return None
+
+
+def _repair_trajectory(db_path: str, call_id: str, drop_failed_input: bool) -> dict | None:
+  """Moves the system message that landed after `call_id`'s tool result back before that result.
+
+  A background task that finishes while the model's next tool call runs is announced by a SYSTEM_MESSAGE step
+  written after that call's result. With custom system instructions (Marshal's prompt) the harness can no
+  longer build a request from that layout ("tool call id <call_id> not found in map"), and every later turn of
+  the conversation fails the same way (2026-11-20, conversation cf3f4022). The same message placed between the
+  model's call and its result replays fine. With `drop_failed_input`, the failed attempt's own user input and
+  error step are removed too, so the turn can be sent again without a duplicate. Returns what changed, or None.
+  The failed attempts' gen_metadata/executor_metadata rows stay: they are keyed by their own counters, not by
+  step, and a conversation that keeps them replays fine.
+  """
+  if not os.path.exists(db_path):
+    return None
+  con = sqlite3.connect(db_path)
+  try:
+    rows = con.execute("SELECT idx, step_type FROM steps ORDER BY idx").fetchall()
+    order = [idx for idx, _ in rows]
+    kinds = dict(rows)
+    boundaries = {STEP_USER_INPUT, STEP_PLANNER_RESPONSE, STEP_ERROR_MESSAGE, STEP_SYSTEM_MESSAGE}
+    holders = {
+        idx
+        for (idx,) in con.execute("SELECT idx FROM steps WHERE instr(step_payload, ?) > 0", (call_id.encode(),))
+        if kinds.get(idx) not in boundaries
+    }
+    if not holders:
+      return None
+    result_pos = order.index(max(holders))
+    start = result_pos
+    while start > 0 and kinds[order[start - 1]] not in boundaries:
+      start -= 1
+    stop = result_pos + 1
+    while stop < len(order) and kinds[order[stop]] not in boundaries:
+      stop += 1
+    if start == 0 or kinds[order[start - 1]] != STEP_PLANNER_RESPONSE:
+      return None
+    late = stop
+    while late < len(order) and kinds[order[late]] == STEP_SYSTEM_MESSAGE:
+      late += 1
+    if late == stop:
+      return None
+    moved = order[stop:late]
+    results = order[start:stop]
+    order[start:late] = moved + results
+    with con:
+      for slot, idx in zip([idx for idx, _ in rows], order):
+        if slot != idx:
+          con.execute("UPDATE steps SET idx = ? WHERE idx = ?", (-1 - slot, idx))
+      con.execute("UPDATE steps SET idx = -1 - idx WHERE idx < 0")
+      dropped: list[int] = []
+      if drop_failed_input:
+        last = con.execute("SELECT idx, step_type FROM steps ORDER BY idx DESC LIMIT 2").fetchall()
+        if [kind for _, kind in last] == [STEP_ERROR_MESSAGE, STEP_USER_INPUT]:
+          dropped = sorted(idx for idx, _ in last)
+          con.execute("DELETE FROM steps WHERE idx >= ?", (dropped[0],))
+    return {"systemMessageSteps": moved, "toolResultSteps": results, "droppedSteps": dropped}
+  finally:
+    con.close()
+
+
 async def ask_host(session: str, kind: str, payload: dict):
   request_id = uuid.uuid4().hex
   future = asyncio.get_running_loop().create_future()
-  _pending[request_id] = future
+  _pending[request_id] = (session, kind, future)
   try:
     await emit({"ev": "request", "id": request_id, "session": session, "kind": kind, **payload})
     return await future
   finally:
     _pending.pop(request_id, None)
+
+
+def _release_pending(session: str) -> None:
+  """Answers the session's open host requests so hooks blocked on them return and the turn can stop."""
+  for _, (owner, kind, future) in list(_pending.items()):
+    if owner != session or future.done():
+      continue
+    future.set_result({"allow": False, "message": CANCELLED} if kind == "pre_tool" else {"error": CANCELLED})
+
+
+def _auth_problem(config: dict) -> str | None:
+  """Says why Vertex credentials can't be used (an expired gcloud login, say), or None when they work."""
+  endpoint = config.get("endpoint") or {}
+  if endpoint.get("kind") != "vertex" or endpoint.get("apiKey"):
+    return None
+  try:
+    import google.auth  # pylint: disable=import-outside-toplevel
+    import google.auth.exceptions  # pylint: disable=import-outside-toplevel
+    import google.auth.transport.requests  # pylint: disable=import-outside-toplevel
+  except ImportError:
+    return None
+  try:
+    credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    credentials.refresh(google.auth.transport.requests.Request())
+    return None
+  except (google.auth.exceptions.RefreshError, google.auth.exceptions.DefaultCredentialsError) as error:
+    return (
+        f"Vertex AI credentials are not valid ({error}). Sign in again with "
+        "`gcloud auth login --update-adc` (or `gcloud auth application-default login`), then send the message again."
+    )
+  except Exception:  # pylint: disable=broad-except
+    return None
 
 
 def _usage(usage) -> dict | None:
@@ -138,7 +271,15 @@ class BridgeSession:
     self.host_tool_names: set[str] = set()
     self.response = None
     self.turn_task: asyncio.Task | None = None
+    # Set when the harness may be stuck mid-turn or its connection is gone: the next turn restarts the Agent on
+    # the same conversation (RESUME) instead of sending into it.
+    self.needs_reopen = False
     self._call_ids: dict[str, list[str]] = {}
+
+  def __deepcopy__(self, memo):
+    # The SDK deep-copies the Agent config, hooks included: the hooks must keep this live session (its call ids
+    # and turn task), and a running turn task can't be copied at all.
+    return self
 
   def remember_call(self, name: str, args, call_id: str) -> None:
     self._call_ids.setdefault(self._call_key(name, args), []).append(call_id)
@@ -264,9 +405,57 @@ class BridgeSession:
     agent = Agent(LocalAgentConfig(**{k: v for k, v in kwargs.items() if v is not None}))
     await agent.__aenter__()
     self.agent = agent
+    self.needs_reopen = False
+    # Every later open continues the same conversation.
+    self.config["resume"] = True
     return agent.conversation_id or self.config["conversationId"]
 
-  async def run_turn(self, turn: str, prompt: str, media: list[dict]) -> None:
+  async def _stop_agent(self) -> None:
+    agent, self.agent = self.agent, None
+    if agent is None:
+      return
+    try:
+      await asyncio.wait_for(agent.__aexit__(None, None, None), timeout=CLOSE_SECONDS)
+    except BaseException:  # pylint: disable=broad-except
+      logging.warning("stopping the agent failed: %s", traceback.format_exc())
+
+  @staticmethod
+  def _error_fields(error: BaseException) -> dict:
+    fields = {"errorType": type(error).__name__, "details": [_jsonable(arg) for arg in error.args]}
+    step_error = _step_error_for(str(error))
+    if step_error:
+      fields.update(step_error)
+    return fields
+
+  async def _turn_error(
+      self, turn: str, error: BaseException, recovery: str | None = None, repair: dict | None = None
+  ) -> None:
+    message = str(error) or type(error).__name__
+    auth = await asyncio.to_thread(_auth_problem, self.config)
+    event = {"ev": "turn_error", "session": self.id, "turn": turn, "error": auth or message, **self._error_fields(error)}
+    if auth:
+      event["code"] = "auth"
+    if recovery:
+      event["recovery"] = recovery
+    if repair:
+      event["repair"] = repair
+    logging.error("turn %s failed: %s", turn, json.dumps({k: v for k, v in event.items() if k != "ev"}, default=str))
+    await emit(event)
+
+  async def run_turn(self, turn: str, prompt: str, media: list[dict], retried: bool = False) -> None:
+    if self.needs_reopen or self.agent is None:
+      await self._stop_agent()
+      try:
+        await self.open()
+      except asyncio.CancelledError:
+        self.needs_reopen = True
+        await emit({"ev": "turn_end", "session": self.id, "turn": turn, "cancelled": True})
+        return
+      except Exception as error:  # pylint: disable=broad-except
+        logging.error("reopen failed: %s", traceback.format_exc())
+        self.needs_reopen = True
+        await self._turn_error(turn, error)
+        return
     assert self.agent is not None
     content = prompt
     if media:
@@ -274,10 +463,13 @@ class BridgeSession:
       for item in media:
         parts.append(types.from_file(item["path"], description=item.get("description")))
       content = parts
+    produced = False
+    failure: Exception | None = None
     try:
       response = await self.agent.chat(content)
       self.response = response
       async for chunk in response.chunks:
+        produced = True
         if isinstance(chunk, types.Thought):
           await emit({"ev": "chunk", "session": self.id, "turn": turn, "kind": "thought", "text": chunk.text})
         elif isinstance(chunk, types.Text):
@@ -311,37 +503,87 @@ class BridgeSession:
       await emit({"ev": "turn_end", "session": self.id, "turn": turn, "cancelled": True})
     except Exception as error:  # pylint: disable=broad-except
       logging.error("turn failed: %s", traceback.format_exc())
-      await emit({"ev": "turn_error", "session": self.id, "turn": turn, "error": str(error) or type(error).__name__})
+      # The harness may be mid-turn or disconnected (a closed websocket ends every later turn too).
+      self.needs_reopen = True
+      failure = error
     finally:
       self.response = None
+    if failure is None:
+      return
+    missing = MISSING_CALL_ERROR.search(str(failure)) if isinstance(failure, types.AntigravityExecutionError) else None
+    if missing is None:
+      await self._turn_error(turn, failure)
+      return
+    if retried:
+      await self._turn_error(turn, failure, recovery="failed: the repaired conversation failed again")
+      return
+    try:
+      repair = await self._heal_trajectory(missing.group(1), drop_failed_input=not produced)
+    except asyncio.CancelledError:
+      await emit({"ev": "turn_end", "session": self.id, "turn": turn, "cancelled": True})
+      return
+    if repair is None:
+      await self._turn_error(turn, failure, recovery="failed: no late system message to move")
+      return
+    if produced:
+      await self._turn_error(turn, failure, recovery="repaired; the next turn continues", repair=repair)
+      return
+    # The request never reached the model: send the same turn again on the repaired conversation.
+    await emit({
+        "ev": "recovered",
+        "session": self.id,
+        "turn": turn,
+        **self._error_fields(failure),
+        "recovery": "repaired and retried",
+        "repair": repair,
+    })
+    await self.run_turn(turn, prompt, media, retried=True)
+
+  async def _heal_trajectory(self, call_id: str, drop_failed_input: bool) -> dict | None:
+    save_dir = self.config.get("saveDir")
+    conversation_id = self.config.get("conversationId")
+    if not save_dir or not conversation_id:
+      return None
+    # The harness owns the database while the Agent runs; the next turn reopens it (needs_reopen is set).
+    await self._stop_agent()
+    db_path = os.path.join(save_dir, conversation_id + ".db")
+    try:
+      repair = await asyncio.to_thread(_repair_trajectory, db_path, call_id, drop_failed_input)
+    except sqlite3.Error:
+      logging.warning("repairing the trajectory failed: %s", traceback.format_exc())
+      return None
+    logging.warning("trajectory repair of %s for call %s: %s", conversation_id, call_id, repair)
+    return repair
 
   async def cancel(self) -> None:
+    _release_pending(self.id)
+    task = self.turn_task
+    if task is None or task.done():
+      return
     response = self.response
     if response is not None:
       try:
-        await response.cancel()
-      except Exception:  # pylint: disable=broad-except
+        await asyncio.wait_for(response.cancel(), timeout=CANCEL_GRACE_SECONDS)
+      except BaseException:  # pylint: disable=broad-except
         logging.warning("cancel failed: %s", traceback.format_exc())
+      await asyncio.wait({task}, timeout=CANCEL_GRACE_SECONDS)
+    if not task.done():
+      # The harness didn't stop the turn: end it here (run_turn reports it cancelled) and restart the Agent
+      # before the next turn, since the SDK would otherwise wait for the stuck turn to go idle.
+      self.needs_reopen = True
+      task.cancel()
+      await asyncio.wait({task}, timeout=CANCEL_GRACE_SECONDS)
 
   async def close(self) -> None:
     await self.cancel()
-    if self.turn_task is not None:
-      try:
-        await asyncio.wait_for(self.turn_task, timeout=10)
-      except Exception:  # pylint: disable=broad-except
-        self.turn_task.cancel()
-    if self.agent is not None:
-      try:
-        await self.agent.__aexit__(None, None, None)
-      except Exception:  # pylint: disable=broad-except
-        logging.warning("close failed: %s", traceback.format_exc())
-      self.agent = None
+    await self._stop_agent()
 
 
 async def handle(command: dict) -> None:
   op = command.get("op")
   if op == "reply":
-    future = _pending.get(command.get("id", ""))
+    pending = _pending.get(command.get("id", ""))
+    future = pending[2] if pending is not None else None
     if future is not None and not future.done():
       future.set_result(command.get("result") or {})
     return
@@ -355,7 +597,11 @@ async def handle(command: dict) -> None:
     except Exception as error:  # pylint: disable=broad-except
       logging.error("open failed: %s", traceback.format_exc())
       await session.close()
-      await emit({"ev": "open_failed", "session": session_id, "error": str(error) or type(error).__name__})
+      auth = await asyncio.to_thread(_auth_problem, session.config)
+      failed = {"ev": "open_failed", "session": session_id, "error": auth or str(error) or type(error).__name__}
+      if auth:
+        failed["code"] = "auth"
+      await emit(failed)
     return
   session = _sessions.get(session_id)
   if session is None:
@@ -375,6 +621,7 @@ async def handle(command: dict) -> None:
 
 async def main() -> None:
   logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="[antigravity-bridge] %(message)s")
+  logging.getLogger().addHandler(_StepErrorRecorder())
   loop = asyncio.get_running_loop()
   reader = asyncio.StreamReader(limit=64 * 1024 * 1024)
   await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)

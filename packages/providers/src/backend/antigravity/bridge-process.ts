@@ -12,7 +12,7 @@ export const ANTIGRAVITY_BRIDGE_PROTOCOL = 1;
 export type BridgeEvent =
   | { ev: "ready"; protocol: number }
   | { ev: "opened"; session: string; conversationId: string }
-  | { ev: "open_failed"; session: string; error: string }
+  | { ev: "open_failed"; session: string; error: string; code?: BridgeErrorCode }
   | { ev: "closed"; session: string }
   | { ev: "error"; session: string; error: string }
   | {
@@ -44,8 +44,36 @@ export type BridgeEvent =
       stopReason?: string;
       structured?: unknown;
     }
-  | { ev: "turn_error"; session: string; turn: string; error: string }
+  | ({ ev: "turn_error"; session: string; turn: string; error: string; code?: BridgeErrorCode } & BridgeErrorReport)
+  | ({ ev: "recovered"; session: string; turn: string } & BridgeErrorReport)
   | BridgeRequest;
+
+/**
+ * What the bridge knows about a failed turn: the SDK exception's type and arguments, the harness step's status
+ * code and error when it logged one, and what the bridge did about it (a repaired conversation).
+ */
+export interface BridgeErrorReport {
+  errorType?: string;
+  details?: unknown[];
+  httpCode?: number;
+  stepError?: string;
+  recovery?: string;
+  repair?: { systemMessageSteps: number[]; toolResultSteps: number[]; droppedSteps: number[] };
+}
+
+/** "auth": the Vertex credentials can't be refreshed (an expired gcloud login); the message says how to sign in. */
+export type BridgeErrorCode = "auth";
+
+/** A bridge failure that carries the bridge's error code. */
+export class AntigravityBridgeError extends Error {
+  constructor(
+    message: string,
+    readonly code?: BridgeErrorCode,
+  ) {
+    super(message);
+    this.name = "AntigravityBridgeError";
+  }
+}
 
 export interface BridgeUsage {
   inputTokens?: number | null;
@@ -291,7 +319,7 @@ export class AntigravityBridge {
         this.opening.delete(event.session);
         return;
       case "open_failed":
-        this.opening.get(event.session)?.reject(new Error(event.error));
+        this.opening.get(event.session)?.reject(new AntigravityBridgeError(event.error, event.code));
         this.opening.delete(event.session);
         return;
       case "closed":
@@ -319,6 +347,17 @@ export class AntigravityBridge {
       }
       case "ready":
         return;
+      case "recovered": {
+        const { ev: _ev, ...report } = event;
+        log.warn("Antigravity turn recovered", report);
+        return;
+      }
+      case "turn_error": {
+        const { ev: _ev, ...report } = event;
+        log.warn("Antigravity turn failed", report);
+        this.listeners.get(event.session)?.onEvent(event);
+        return;
+      }
       default:
         this.listeners.get(event.session)?.onEvent(event);
     }
