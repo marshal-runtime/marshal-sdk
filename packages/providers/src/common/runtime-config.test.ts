@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ANTIGRAVITY_RUNTIME_ID,
   BUILTIN_RUNTIME_IDS,
   CLAUDE_RUNTIME_ID,
   CODEX_RUNTIME_ID,
@@ -23,6 +24,7 @@ describe("runtime metadata", () => {
       "claude",
       "codex",
       "cursor",
+      "antigravity",
       "marshal-cloud",
     ]);
     expect(getRuntimeMetadata(CLAUDE_RUNTIME_ID)).toMatchObject({
@@ -74,6 +76,17 @@ describe("runtime metadata", () => {
     expect(cursor.auth.setupInstructions).toContain("cursor.com/dashboard/api");
   });
 
+  it("lets Antigravity take Vertex or Gemini credentials as one pasted value", () => {
+    const antigravity = getRuntimeMetadata(ANTIGRAVITY_RUNTIME_ID);
+    expect(antigravity).toMatchObject({
+      displayName: "Antigravity",
+      rendererRoot: "local",
+      selectable: true,
+    });
+    expect(antigravity.auth.methods.map((method) => method.type)).toEqual(["api-key"]);
+    expect(antigravity.auth.setupInstructions).toContain("Vertex");
+  });
+
   it("keeps unknown adapter IDs open-ended and routes them through generic local auth", () => {
     expect(getRuntimeMetadata("custom-runtime")).toMatchObject({
       id: "custom-runtime",
@@ -87,6 +100,7 @@ describe("runtime metadata", () => {
       "claude",
       "codex",
       "cursor",
+      "antigravity",
       "marshal-cloud",
       "custom-runtime",
     ]);
@@ -98,6 +112,7 @@ describe("runtime metadata", () => {
     expect(canSwitchRuntimeLive("codex", "claude")).toBe(true);
     expect(canSwitchRuntimeLive("cursor", "copilot")).toBe(true);
     expect(canSwitchRuntimeLive("codex", "cursor")).toBe(true);
+    expect(canSwitchRuntimeLive("claude", "antigravity")).toBe(true);
     expect(canSwitchRuntimeLive("copilot", "gateway")).toBe(false);
     expect(canSwitchRuntimeLive("gateway", "codex")).toBe(false);
   });
