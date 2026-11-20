@@ -1,4 +1,5 @@
 import { scrubSecrets } from "../../common/secret-scrub";
+import { concatBytes, jsonlLines } from "./jsonl-lines";
 
 /** Base64 payloads (images, files) above this many characters become a placeholder. */
 const MAX_INLINE_BASE64_CHARS = 2048;
@@ -96,8 +97,9 @@ function isDroppedEntry(entry: unknown): boolean {
  * valid JSON is dropped rather than copied unredacted.
  */
 export function sanitizeClaudeJsonl(bytes: Uint8Array): Uint8Array {
-  const kept: string[] = [];
-  for (const line of Buffer.from(bytes).toString("utf8").split("\n")) {
+  const encoder = new TextEncoder();
+  const kept: Uint8Array[] = [];
+  for (const line of jsonlLines(bytes)) {
     if (!line.trim()) continue;
     let entry: unknown;
     try {
@@ -106,7 +108,7 @@ export function sanitizeClaudeJsonl(bytes: Uint8Array): Uint8Array {
       continue;
     }
     if (isDroppedEntry(entry)) continue;
-    kept.push(JSON.stringify(cleanValue(dropChangedThinking(entry))));
+    kept.push(encoder.encode(`${JSON.stringify(cleanValue(dropChangedThinking(entry)))}\n`));
   }
-  return new TextEncoder().encode(kept.length > 0 ? `${kept.join("\n")}\n` : "");
+  return concatBytes(kept);
 }

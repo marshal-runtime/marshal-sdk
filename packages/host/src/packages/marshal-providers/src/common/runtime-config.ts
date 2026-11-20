@@ -6,6 +6,8 @@ export const GATEWAY_RUNTIME_ID = "gateway";
 export const CLAUDE_RUNTIME_ID = "claude";
 export const CODEX_RUNTIME_ID = "codex";
 export const CURSOR_RUNTIME_ID = "cursor";
+export const ANTIGRAVITY_RUNTIME_ID = "antigravity";
+export const ANTIGRAVITY_API_KEY_SIGN_IN_LABEL = "Use Vertex or Gemini credentials";
 export const DEFAULT_RUNTIME_ID = CLAUDE_RUNTIME_ID;
 export const CLAUDE_AUTH_SETUP_INSTRUCTIONS =
   "Sign in with your Claude subscription in the browser, use an Anthropic API key (ANTHROPIC_API_KEY), or configure supported cloud-provider credentials.";
@@ -24,12 +26,18 @@ export const CURSOR_AUTH_SETUP_INSTRUCTIONS =
   "Sign in with Cursor in the browser, or paste an existing user API key from " +
   `${CURSOR_API_KEYS_URL}. Team Admin keys are not supported.`;
 
+export const ANTIGRAVITY_AUTH_SETUP_INSTRUCTIONS =
+  "Antigravity runs Gemini on Vertex AI or the Gemini API. Paste a Vertex service-account key (JSON), " +
+  'a Vertex project as {"project": "<id>", "location": "global"} to use your gcloud Application Default Credentials, ' +
+  "or a Gemini API key. GOOGLE_GENAI_USE_VERTEXAI with GOOGLE_CLOUD_PROJECT, or GEMINI_API_KEY, in the launch environment also work.";
+
 export const BUILTIN_RUNTIME_IDS = [
   COPILOT_RUNTIME_ID,
   GATEWAY_RUNTIME_ID,
   CLAUDE_RUNTIME_ID,
   CODEX_RUNTIME_ID,
   CURSOR_RUNTIME_ID,
+  ANTIGRAVITY_RUNTIME_ID,
   MARSHAL_CLOUD_RUNTIME_ID,
 ] as const;
 export type BuiltinRuntimeId = (typeof BUILTIN_RUNTIME_IDS)[number];
@@ -39,6 +47,7 @@ const LIVE_SWITCHABLE_RUNTIME_IDS = new Set<string>([
   CLAUDE_RUNTIME_ID,
   CODEX_RUNTIME_ID,
   CURSOR_RUNTIME_ID,
+  ANTIGRAVITY_RUNTIME_ID,
 ]);
 
 export type RuntimeCompatibilityOrigin = "copilot" | "gateway";
@@ -63,6 +72,12 @@ export interface RuntimeMetadata {
    * keep their legacy or append-only delivery.
    */
   supportsNativePromptReplacement?: boolean;
+  /**
+   * Sessions on this runtime may render Marshal agent prompt v2 (under prompt
+   * replacement). The host fills v2's runtime spans (built-in tools, skills,
+   * long commands) with this runtime's own words.
+   */
+  supportsAgentPromptV2?: boolean;
   auth: {
     surface: RuntimeAuthSurface;
     methods: readonly RuntimeAuthMethodMetadata[];
@@ -120,6 +135,7 @@ const BUILTIN_RUNTIME_METADATA_BY_ID = {
     rendererRoot: "local",
     selectable: true,
     supportsNativePromptReplacement: true,
+    supportsAgentPromptV2: true,
     auth: {
       surface: "runtime",
       methods: [
@@ -176,6 +192,28 @@ const BUILTIN_RUNTIME_METADATA_BY_ID = {
         title: "Sign out of Cursor?",
         description:
           "Signing out removes the Cursor API key stored by Marshal. You can sign in or paste a key again.",
+        confirmLabel: "Sign out",
+      },
+    },
+  },
+  [ANTIGRAVITY_RUNTIME_ID]: {
+    id: ANTIGRAVITY_RUNTIME_ID,
+    displayName: "Antigravity",
+    compatibilityOrigin: "copilot",
+    rendererRoot: "local",
+    selectable: true,
+    supportsNativePromptReplacement: true,
+    supportsAgentPromptV2: true,
+    auth: {
+      surface: "runtime",
+      methods: [{ type: "api-key", label: ANTIGRAVITY_API_KEY_SIGN_IN_LABEL }],
+      setupInstructions: ANTIGRAVITY_AUTH_SETUP_INSTRUCTIONS,
+      verificationFailureInstructions:
+        "Check the Vertex project, location and credentials (or the Gemini API key), then try again.",
+      signOut: {
+        title: "Sign out of Antigravity?",
+        description:
+          "Signing out removes the Vertex or Gemini credentials stored by Marshal. Credentials from the launch environment still apply.",
         confirmLabel: "Sign out",
       },
     },

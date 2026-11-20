@@ -1,7 +1,7 @@
 {
   "repository": "OmerMachluf/marshal",
   "entry": "electron/marshal-runtime",
-  "commit": "78cb29dd8557dc6e7e747e4632e05fb0ffd424d9",
-  "files": 287,
-  "sha256": "89c6cce60eb41a2337f56b269e50db3528f1140c1efa7b636d5a3123c86185f2"
+  "commit": "ca582472e75c54510067605bbcbb919971d627e5",
+  "files": 288,
+  "sha256": "0a95dc2590487101acc6c54be3225b9f5842cb011d3dcd7dec1f57c1b7c4dd3d"
 }

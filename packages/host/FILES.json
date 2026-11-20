@@ -251,6 +251,7 @@
   "packages/marshal-permissions/src/policy/permission-patterns.ts",
   "packages/marshal-permissions/src/policy/sensitive-path-permission-guard.ts",
   "packages/marshal-permissions/src/policy/shell-syntax-permission-utils.ts",
+  "packages/marshal-providers/src/backend/claude/jsonl-lines.ts",
   "packages/marshal-providers/src/backend/claude/native-state-history.ts",
   "packages/marshal-providers/src/backend/claude/native-state-sanitizer.ts",
   "packages/marshal-providers/src/backend/claude/native-state.ts",

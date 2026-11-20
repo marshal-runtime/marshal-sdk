@@ -5,6 +5,7 @@ import {
   type RuntimeTarget,
 } from "./runtime-accounts";
 import {
+  ANTIGRAVITY_RUNTIME_ID,
   MARSHAL_CLOUD_RUNTIME_ID,
   CLAUDE_RUNTIME_ID,
   CODEX_RUNTIME_ID,
@@ -20,6 +21,7 @@ export const PEER_RUNTIME_IDS: ReadonlySet<string> = new Set([
   CLAUDE_RUNTIME_ID,
   CODEX_RUNTIME_ID,
   CURSOR_RUNTIME_ID,
+  ANTIGRAVITY_RUNTIME_ID,
 ]);
 
 export interface RuntimeQualifiedModel extends RuntimeTarget {

@@ -33,7 +33,8 @@ import {
   type MarshalHostPorts,
   type MarshalHostTelemetryEvent,
 } from "./host-options.js";
-import { CLAUDE_NATIVE_PROMPT_TOOLS, DISABLED_NATIVE_TOOLS, NATIVE_SUBAGENT_ALLOWLIST } from "./native-tools.js";
+import { ANTIGRAVITY_NATIVE_PROMPT_TOOLS, CLAUDE_NATIVE_PROMPT_TOOLS, DISABLED_NATIVE_TOOLS, NATIVE_SUBAGENT_ALLOWLIST } from "./native-tools.js";
+import { ANTIGRAVITY_V2_SLOTS } from "./prompt-antigravity-slots.js";
 import { repositoryRulesPrompt } from "./repo-rules.js";
 import { createHostPrompts, sdkBaseLayer, type HostPromptOptions, type HostPrompts, type PromptLayer } from "./prompt.js";
 import { type ForkPointOf, SessionForks, forksPromptSection } from "./forks.js";
@@ -680,6 +681,7 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       runtimeTools,
       directTools,
       ...((provider?.id ?? "claude") === "claude" && !options.query ? { nativeTools: CLAUDE_NATIVE_PROMPT_TOOLS } : {}),
+      ...(provider?.id === "antigravity" ? { nativeTools: ANTIGRAVITY_NATIVE_PROMPT_TOOLS, runtimeSlots: ANTIGRAVITY_V2_SLOTS } : {}),
     }),
     options.prompt,
     log,
