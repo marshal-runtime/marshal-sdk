@@ -36,3 +36,9 @@ export {
   CURSOR_PREFERRED_MODEL_IDS,
   CURSOR_SESSION_CONFIG_TRACE_FILENAME,
 } from "../packages/providers/src/backend/cursor/constants";
+export {
+  ANTIGRAVITY_ACCOUNT_IDENTITY_PREFIX,
+  ANTIGRAVITY_DEFAULT_MODEL_ID,
+  ANTIGRAVITY_PREFERRED_MODEL_IDS,
+  ANTIGRAVITY_SESSION_CONFIG_TRACE_FILENAME,
+} from "../packages/providers/src/backend/antigravity/constants";

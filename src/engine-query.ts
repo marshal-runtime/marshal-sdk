@@ -4,6 +4,11 @@ import { TURN_EXTRAS, type QueryFn, type TurnExtras } from "./agent-port.js";
 import { ensureEngineHost } from "./headless-engine.js";
 import { promptText, sessionConfig } from "./provider-query.js";
 import {
+  ANTIGRAVITY_ACCOUNT_IDENTITY_PREFIX,
+  ANTIGRAVITY_DEFAULT_MODEL_ID,
+  ANTIGRAVITY_PREFERRED_MODEL_IDS,
+  ANTIGRAVITY_RUNTIME_ID,
+  ANTIGRAVITY_SESSION_CONFIG_TRACE_FILENAME,
   CLAUDE_RUNTIME_ID,
   CODEX_RUNTIME_ID,
   createLocalRuntimeCapabilities,
@@ -25,7 +30,7 @@ import {
   type RuntimeTool,
 } from "./providers.js";
 
-export type EngineRuntime = "claude" | "codex" | "cursor";
+export type EngineRuntime = "claude" | "codex" | "cursor" | "antigravity";
 
 /**
  * The desktop's runtime strategies (electron/backend/<runtime>/strategy.ts) for a headless host: the same runtime ids,
@@ -75,6 +80,20 @@ export function engineStrategy(runtime: EngineRuntime): LocalRuntimeStrategy {
         capabilities: createLocalRuntimeCapabilities({ sessionCompaction: true, busyTurnSteer: true }),
         loadWorkspaceFiles: () => null,
         defaultClientLoginRequest: { type: "browser" },
+      };
+    }
+    case "antigravity": {
+      const metadata = getRuntimeMetadata(ANTIGRAVITY_RUNTIME_ID);
+      return {
+        runtimeId: ANTIGRAVITY_RUNTIME_ID,
+        origin: metadata.compatibilityOrigin as LocalRuntimeStrategy["origin"],
+        displayName: metadata.displayName,
+        sessionConfigTraceFilename: ANTIGRAVITY_SESSION_CONFIG_TRACE_FILENAME,
+        defaultInferenceModel: ANTIGRAVITY_DEFAULT_MODEL_ID,
+        preferredDefaultModelIds: ANTIGRAVITY_PREFERRED_MODEL_IDS,
+        accountIdentityPrefix: ANTIGRAVITY_ACCOUNT_IDENTITY_PREFIX,
+        capabilities: createLocalRuntimeCapabilities(),
+        loadWorkspaceFiles: () => null,
       };
     }
   }
