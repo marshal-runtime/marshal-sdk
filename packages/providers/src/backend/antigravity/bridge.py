@@ -9,7 +9,9 @@ Marshal (the pre-tool hook asks the host) and whose host tools run in Marshal.
 import asyncio
 import json
 import logging
+import collections
 import os
+import re
 import sqlite3
 import sys
 import traceback
@@ -62,50 +64,86 @@ async def emit(event: dict) -> None:
     sys.stdout.flush()
 
 
-def _repair_trajectory(db_path: str, drop_failed_input: bool) -> bool:
-  """Moves each unanswered system message that landed after a tool call's results back before those results.
+# The harness error for a tool result whose call it can't find while building the next model request; the
+# id is the model's call id (a Go format string in the localharness binary).
+MISSING_CALL_ERROR = re.compile(r"tool call id (\S+) not found in map")
+
+# The SDK logs each failed system step (local_connection.py) with its harness status code and error; the bridge
+# keeps the latest ones so a failed turn can report them.
+STEP_ERROR_LOG_FORMAT = "System step error (HTTP %s): %s"
+_step_errors: collections.deque = collections.deque(maxlen=32)
+
+
+class _StepErrorRecorder(logging.Handler):
+
+  def emit(self, record: logging.LogRecord) -> None:
+    if record.msg == STEP_ERROR_LOG_FORMAT and isinstance(record.args, tuple) and len(record.args) == 2:
+      _step_errors.append({"httpCode": record.args[0], "stepError": str(record.args[1])})
+
+
+def _step_error_for(message: str) -> dict | None:
+  for entry in reversed(_step_errors):
+    if message and message in entry["stepError"]:
+      return entry
+  return None
+
+
+def _repair_trajectory(db_path: str, call_id: str, drop_failed_input: bool) -> dict | None:
+  """Moves the system message that landed after `call_id`'s tool result back before that result.
 
   A background task that finishes while the model's next tool call runs is announced by a SYSTEM_MESSAGE step
   written after that call's result. With custom system instructions (Marshal's prompt) the harness can no
-  longer build a request from that layout ("tool call id ... not found in map"), and every later turn of the
-  conversation fails the same way (2026-11-20, conversation cf3f4022). The same message placed between the
+  longer build a request from that layout ("tool call id <call_id> not found in map"), and every later turn of
+  the conversation fails the same way (2026-11-20, conversation cf3f4022). The same message placed between the
   model's call and its result replays fine. With `drop_failed_input`, the failed attempt's own user input and
-  error step are removed too, so the turn can be sent again without a duplicate.
+  error step are removed too, so the turn can be sent again without a duplicate. Returns what changed, or None.
+  The failed attempts' gen_metadata/executor_metadata rows stay: they are keyed by their own counters, not by
+  step, and a conversation that keeps them replays fine.
   """
   if not os.path.exists(db_path):
-    return False
+    return None
   con = sqlite3.connect(db_path)
   try:
     rows = con.execute("SELECT idx, step_type FROM steps ORDER BY idx").fetchall()
     order = [idx for idx, _ in rows]
-    kinds = {idx: kind for idx, kind in rows}
+    kinds = dict(rows)
     boundaries = {STEP_USER_INPUT, STEP_PLANNER_RESPONSE, STEP_ERROR_MESSAGE, STEP_SYSTEM_MESSAGE}
-    moved = False
-    for pos in range(len(order)):
-      if kinds[order[pos]] != STEP_SYSTEM_MESSAGE:
-        continue
-      start = pos
-      while start > 0 and kinds[order[start - 1]] not in boundaries:
-        start -= 1
-      if start == pos or start == 0 or kinds[order[start - 1]] != STEP_PLANNER_RESPONSE:
-        continue
-      if pos + 1 < len(order) and kinds[order[pos + 1]] == STEP_PLANNER_RESPONSE:
-        continue  # The model already answered the message: this layout replays fine.
-      order[start:pos + 1] = [order[pos]] + order[start:pos]
-      moved = True
-    if not moved:
-      return False
-    slots = [idx for idx, _ in rows]
+    holders = {
+        idx
+        for (idx,) in con.execute("SELECT idx FROM steps WHERE instr(step_payload, ?) > 0", (call_id.encode(),))
+        if kinds.get(idx) not in boundaries
+    }
+    if not holders:
+      return None
+    result_pos = order.index(max(holders))
+    start = result_pos
+    while start > 0 and kinds[order[start - 1]] not in boundaries:
+      start -= 1
+    stop = result_pos + 1
+    while stop < len(order) and kinds[order[stop]] not in boundaries:
+      stop += 1
+    if start == 0 or kinds[order[start - 1]] != STEP_PLANNER_RESPONSE:
+      return None
+    late = stop
+    while late < len(order) and kinds[order[late]] == STEP_SYSTEM_MESSAGE:
+      late += 1
+    if late == stop:
+      return None
+    moved = order[stop:late]
+    results = order[start:stop]
+    order[start:late] = moved + results
     with con:
-      for slot, idx in zip(slots, order):
+      for slot, idx in zip([idx for idx, _ in rows], order):
         if slot != idx:
           con.execute("UPDATE steps SET idx = ? WHERE idx = ?", (-1 - slot, idx))
       con.execute("UPDATE steps SET idx = -1 - idx WHERE idx < 0")
-      if drop_failed_input and len(rows) >= 2:
+      dropped: list[int] = []
+      if drop_failed_input:
         last = con.execute("SELECT idx, step_type FROM steps ORDER BY idx DESC LIMIT 2").fetchall()
         if [kind for _, kind in last] == [STEP_ERROR_MESSAGE, STEP_USER_INPUT]:
-          con.execute("DELETE FROM steps WHERE idx >= ?", (last[1][0],))
-    return True
+          dropped = sorted(idx for idx, _ in last)
+          con.execute("DELETE FROM steps WHERE idx >= ?", (dropped[0],))
+    return {"systemMessageSteps": moved, "toolResultSteps": results, "droppedSteps": dropped}
   finally:
     con.close()
 
@@ -374,12 +412,27 @@ class BridgeSession:
     except BaseException:  # pylint: disable=broad-except
       logging.warning("stopping the agent failed: %s", traceback.format_exc())
 
-  async def _turn_error(self, turn: str, error: BaseException) -> None:
+  @staticmethod
+  def _error_fields(error: BaseException) -> dict:
+    fields = {"errorType": type(error).__name__, "details": [_jsonable(arg) for arg in error.args]}
+    step_error = _step_error_for(str(error))
+    if step_error:
+      fields.update(step_error)
+    return fields
+
+  async def _turn_error(
+      self, turn: str, error: BaseException, recovery: str | None = None, repair: dict | None = None
+  ) -> None:
     message = str(error) or type(error).__name__
     auth = await asyncio.to_thread(_auth_problem, self.config)
-    event = {"ev": "turn_error", "session": self.id, "turn": turn, "error": auth or message}
+    event = {"ev": "turn_error", "session": self.id, "turn": turn, "error": auth or message, **self._error_fields(error)}
     if auth:
       event["code"] = "auth"
+    if recovery:
+      event["recovery"] = recovery
+    if repair:
+      event["repair"] = repair
+    logging.error("turn %s failed: %s", turn, json.dumps({k: v for k, v in event.items() if k != "ev"}, default=str))
     await emit(event)
 
   async def run_turn(self, turn: str, prompt: str, media: list[dict], retried: bool = False) -> None:
@@ -450,34 +503,50 @@ class BridgeSession:
       self.response = None
     if failure is None:
       return
-    if not retried and isinstance(failure, types.AntigravityExecutionError):
-      try:
-        healed = await self._heal_trajectory(drop_failed_input=not produced)
-      except asyncio.CancelledError:
-        await emit({"ev": "turn_end", "session": self.id, "turn": turn, "cancelled": True})
-        return
-      if healed and not produced:
-        # The request never reached the model: send the same turn again on the repaired conversation.
-        await self.run_turn(turn, prompt, media, retried=True)
-        return
-    await self._turn_error(turn, failure)
+    missing = MISSING_CALL_ERROR.search(str(failure)) if isinstance(failure, types.AntigravityExecutionError) else None
+    if missing is None:
+      await self._turn_error(turn, failure)
+      return
+    if retried:
+      await self._turn_error(turn, failure, recovery="failed: the repaired conversation failed again")
+      return
+    try:
+      repair = await self._heal_trajectory(missing.group(1), drop_failed_input=not produced)
+    except asyncio.CancelledError:
+      await emit({"ev": "turn_end", "session": self.id, "turn": turn, "cancelled": True})
+      return
+    if repair is None:
+      await self._turn_error(turn, failure, recovery="failed: no late system message to move")
+      return
+    if produced:
+      await self._turn_error(turn, failure, recovery="repaired; the next turn continues", repair=repair)
+      return
+    # The request never reached the model: send the same turn again on the repaired conversation.
+    await emit({
+        "ev": "recovered",
+        "session": self.id,
+        "turn": turn,
+        **self._error_fields(failure),
+        "recovery": "repaired and retried",
+        "repair": repair,
+    })
+    await self.run_turn(turn, prompt, media, retried=True)
 
-  async def _heal_trajectory(self, drop_failed_input: bool) -> bool:
+  async def _heal_trajectory(self, call_id: str, drop_failed_input: bool) -> dict | None:
     save_dir = self.config.get("saveDir")
     conversation_id = self.config.get("conversationId")
     if not save_dir or not conversation_id:
-      return False
+      return None
     # The harness owns the database while the Agent runs; the next turn reopens it (needs_reopen is set).
     await self._stop_agent()
     db_path = os.path.join(save_dir, conversation_id + ".db")
     try:
-      healed = await asyncio.to_thread(_repair_trajectory, db_path, drop_failed_input)
+      repair = await asyncio.to_thread(_repair_trajectory, db_path, call_id, drop_failed_input)
     except sqlite3.Error:
       logging.warning("repairing the trajectory failed: %s", traceback.format_exc())
-      return False
-    if healed:
-      logging.warning("repaired the trajectory of %s (a system message after a tool result)", conversation_id)
-    return healed
+      return None
+    logging.warning("trajectory repair of %s for call %s: %s", conversation_id, call_id, repair)
+    return repair
 
   async def cancel(self) -> None:
     _release_pending(self.id)
@@ -545,6 +614,7 @@ async def handle(command: dict) -> None:
 
 async def main() -> None:
   logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="[antigravity-bridge] %(message)s")
+  logging.getLogger().addHandler(_StepErrorRecorder())
   loop = asyncio.get_running_loop()
   reader = asyncio.StreamReader(limit=64 * 1024 * 1024)
   await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)

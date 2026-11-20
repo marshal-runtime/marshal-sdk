@@ -44,8 +44,22 @@ export type BridgeEvent =
       stopReason?: string;
       structured?: unknown;
     }
-  | { ev: "turn_error"; session: string; turn: string; error: string; code?: BridgeErrorCode }
+  | ({ ev: "turn_error"; session: string; turn: string; error: string; code?: BridgeErrorCode } & BridgeErrorReport)
+  | ({ ev: "recovered"; session: string; turn: string } & BridgeErrorReport)
   | BridgeRequest;
+
+/**
+ * What the bridge knows about a failed turn: the SDK exception's type and arguments, the harness step's status
+ * code and error when it logged one, and what the bridge did about it (a repaired conversation).
+ */
+export interface BridgeErrorReport {
+  errorType?: string;
+  details?: unknown[];
+  httpCode?: number;
+  stepError?: string;
+  recovery?: string;
+  repair?: { systemMessageSteps: number[]; toolResultSteps: number[]; droppedSteps: number[] };
+}
 
 /** "auth": the Vertex credentials can't be refreshed (an expired gcloud login); the message says how to sign in. */
 export type BridgeErrorCode = "auth";
@@ -300,6 +314,17 @@ export class AntigravityBridge {
       }
       case "ready":
         return;
+      case "recovered": {
+        const { ev: _ev, ...report } = event;
+        log.warn("Antigravity turn recovered", report);
+        return;
+      }
+      case "turn_error": {
+        const { ev: _ev, ...report } = event;
+        log.warn("Antigravity turn failed", report);
+        this.listeners.get(event.session)?.onEvent(event);
+        return;
+      }
       default:
         this.listeners.get(event.session)?.onEvent(event);
     }
