@@ -30,7 +30,7 @@ export const ANTIGRAVITY_READ_TOOLS = new Set([
   "find_file",
   "search_directory",
 ]);
-// The model calls the declared names (write_to_file, replace_file_content); the SDK enum says create_file/edit_file.
+// Hooks report the SDK enum names (create_file, edit_file); the model-facing names are write_to_file and replace_file_content.
 export const ANTIGRAVITY_WRITE_TOOLS = new Set([
   "write_to_file",
   "replace_file_content",
