@@ -17,7 +17,7 @@ if (group !== "storage") process.exit(2);
 if (verb === "ls") {
   const pattern = args[0];
   const base = pattern.slice(0, pattern.search(/\\*/));
-  const re = new RegExp("^" + pattern.replace(/[.+?^\${}()|[\\]\\\\]/g, "\\\\$&").replace(/\\*\\*\\//g, "(?:.*/)?").replace(/\\*/g, "[^/]*") + "$");
+  const re = new RegExp("^" + pattern.replace(/[.+?^\${}()|[\\]\\\\]/g, "\\\\$&").replace(/\\*\\*\\//g, "(?:.{0,}/)?").replace(/\\*/g, "[^/]*") + "$");
   const hits = walk(local(base.replace(/\\/[^/]*$/, ""))).map((file) => "gs://" + path.relative(root, file)).filter((uri) => re.test(uri));
   if (!hits.length) { process.stderr.write("ERROR: One or more URLs matched no objects.\\n"); process.exit(1); }
   process.stdout.write(hits.join("\\n") + "\\n");
