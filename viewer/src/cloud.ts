@@ -18,7 +18,7 @@ import os from "os";
 import path from "path";
 import { pathToFileURL } from "url";
 
-import { finishPage } from "../../src/page-finish";
+import { finishPage } from "./page-finish";
 import { commitPageVersion, extendRunJson, type ArtifactRef, type NewPicture } from "./artifacts";
 import { gcloud, gcsCat, gcsGlob, gcsRead, gcsWrite, PreconditionFailed, pool } from "./gcs";
 import { folderHost, type Host } from "./hosts";
@@ -67,7 +67,8 @@ export function rootOfState(stateLocation: string): { root: string; conversation
 const EDITS = "agent/edits";
 const HOST_ID = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const SYNC_EVERY_MS = 20_000;
-const MAX_RUNS = 40;
+// Published pages are runs too, so the list grows with what people share.
+const MAX_RUNS = 150;
 
 const home = (p: string) => (p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p);
 const safe = (value: string) => value.replace(/^gs:\/\//, "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-120);
@@ -672,6 +673,47 @@ export async function pushToCloud(input: PushInput): Promise<PushResult | PushRe
     artifact: { id: input.cloudPageId, version: committed.version, dir: committed.dir, seeded: committed.seeded, uploaded: committed.uploaded, reused: committed.reused },
     warnings,
   };
+}
+
+// ---- Publish a page made in this Marshal as a new cloud run ----
+
+export interface PublishInput extends Omit<PushInput, "outputRoot" | "cloudPageId" | "baseVersion"> {
+  /** The cloud host's prefix (gs://bucket/prefix); the run goes under <uri>/published/<runId>. */
+  uri: string;
+  /** The page's id here; the cloud page keeps it. */
+  pageId: string;
+  title?: string;
+  brand?: string;
+  /** Who published it: the run's requester. */
+  requester: string | null;
+  now?: () => Date;
+}
+
+export type PublishResult = (PushResult & { outputRoot: string; runId: string; cloudPageId: string }) | (PushRefused & { outputRoot: string; runId: string });
+
+/**
+ * A page made in this Marshal (not opened from a cloud run) becomes a run of its own under the cloud prefix: a manifest
+ * (run.json, status done, the person as requester), then the same push an edit takes, which writes the page as artifact
+ * version 1, its preview, pictures and record. Every Marshal listing that prefix shows it; pushes after this are version n+1.
+ */
+export async function publishToCloud(input: PublishInput): Promise<PublishResult> {
+  const now = (input.now ?? (() => new Date()))();
+  const slug = input.pageId.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "page";
+  const runId = `${slug}-${now.getTime().toString(36)}`;
+  const root = `${trim(input.uri)}/published/${runId}`;
+  const cloudPageId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(input.pageId) ? input.pageId : slug;
+  const title = input.title || String(input.pageDoc.title ?? input.pageId);
+  const brand = input.brand || (typeof input.pageDoc.brand?.name === "string" ? input.pageDoc.brand.name : undefined);
+  const manifest = {
+    ...extendRunJson(
+      { title, ...(brand ? { brand } : {}), pageId: cloudPageId, startedAt: now.toISOString(), finishedAt: now.toISOString(), source: "published" },
+      { runId, title, workspace: "pages", workflow: "page-publish", visibility: "team", requester: input.requester, status: "done", labels: brand ? { brand } : {}, stateLocation: stateOf(root) },
+    ),
+  };
+  await gcsWrite(`${stateOf(root)}/run.json`, JSON.stringify(manifest, null, 2), { contentType: "application/json", cacheControl: "no-cache", ifGenerationMatch: "0" });
+  const { uri: _uri, pageId: _pageId, title: _title, brand: _brand, requester: _requester, now: _now, ...push } = input;
+  const pushed = await pushToCloud({ ...push, outputRoot: root, cloudPageId, baseVersion: 0, summary: input.summary ?? "Published from Marshal" });
+  return pushed.ok ? { ...pushed, outputRoot: root, runId, cloudPageId } : { ...pushed, outputRoot: root, runId };
 }
 
 /** Records the page's current version in the run manifest (run.json), upgrading a run that had none; a lost race is only a warning. */

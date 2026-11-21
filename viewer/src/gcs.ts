@@ -68,7 +68,7 @@ export async function gcsCat(uri: string): Promise<string> {
   return (await restGet(`https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}?alt=media`)).toString("utf8");
 }
 
-const globRegExp = (pattern: string) => new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(?:.*/)?").replace(/\*/g, "[^/]*") + "$");
+export const globRegExp = (pattern: string) => new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(?:.{0,}/)?").replace(/\*/g, "[^/]*") + "$");
 
 /** Object URIs matching a gs:// glob (* within a folder, **\/ across folders); [] when none match. */
 export async function gcsGlob(pattern: string): Promise<string[]> {

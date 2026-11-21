@@ -11,7 +11,7 @@ import { configuredProcedures, listProcedureRuns, ProcedureCache, procedureTrans
 import { configuredReview } from "./review";
 import { CloudCache, defaultCacheRoot, DEFAULT_CAP_BYTES } from "./cache";
 import { filterRows, openPage, pageRows } from "./cloud-pages";
-import { cloudHost, configuredClouds, rootOfState, consoleUrl, listEdits, previewHtml, pushToCloud, readLinks, readRunJson, stateOf, writeLink } from "./cloud";
+import { cloudHost, configuredClouds, rootOfState, consoleUrl, listEdits, previewHtml, publishToCloud, pushToCloud, readLinks, readRunJson, stateOf, writeLink } from "./cloud";
 import { gcsRead } from "./gcs";
 import { configuredLinks, folderHost, linkedHost, linkProblem, LOCAL_HOST_ID, type Host } from "./hosts";
 import { expandHome } from "./store";
@@ -679,6 +679,46 @@ export function createExtension(context: Context) {
       },
     },
     {
+      name: "sdksessions.publishToCloud",
+      title: "Publish a page to the cloud",
+      description:
+        "Puts a page made in this Marshal's Page Studio in the cloud as a new run of its own (under the cloud host's prefix, published/<runId>), so everyone whose Marshal lists that cloud sees it in sdksessions.cloudPages and can open, edit and push it. The page becomes version 1 there and stays linked: later edits go through sdksessions.pushToCloud. A page that already came from a cloud run is pushed instead. hostId picks the cloud host when there are several.",
+      input: obj({ pageId: str, hostId, title: str, brand: str, summary: str }, ["pageId"]),
+      read: false,
+      handler: async (input, invocation) => {
+        const pageId = String(input.pageId);
+        const existing = readLinks(pullRoot())[pageId];
+        if (existing) return { ok: false, reason: "already-in-cloud", outputRoot: existing.outputRoot, message: `This page is already in the cloud (${existing.outputRoot}); sdksessions.pushToCloud sends your edits there.` };
+        const hosts = clouds.clouds;
+        const config = typeof input.hostId === "string" && input.hostId ? hosts.find((entry) => entry.id === input.hostId) : hosts[0];
+        if (!config) return { ok: false, reason: "no-cloud", message: `No cloud host${typeof input.hostId === "string" && input.hostId ? ` "${input.hostId}"` : ""} is configured. Add one with runtimeConfigureExtension {identity: "${EXTENSION_ID}", configuration: {cloud: [{id, name, uri: "gs://bucket/prefix"}]}} (keep the rest of the configuration).` };
+        const rendered = await pageStudio("pagestudio.render", { pageId }, invocation);
+        if (!rendered.ok) return rendered;
+        const file = String(rendered.value.file ?? rendered.value.path ?? "");
+        const doc = await pageStudio("pagestudio.page.get", { pageId }, invocation);
+        if (!doc.ok) return doc;
+        const me = person();
+        const email = typeof context.configuration?.person?.email === "string" ? context.configuration.person.email : undefined;
+        const published = await publishToCloud({
+          uri: config.uri,
+          pageId,
+          ...(typeof input.title === "string" && input.title ? { title: input.title } : {}),
+          ...(typeof input.brand === "string" && input.brand ? { brand: input.brand } : {}),
+          requester: email ?? me.name ?? null,
+          renderedHtml: fs.readFileSync(file, "utf8"),
+          pageDoc: doc.value,
+          studioDir: path.dirname(path.dirname(file)),
+          by: { ...(me.name ? { name: me.name } : {}), ...(email ? { email } : {}) },
+          ...(typeof input.summary === "string" && input.summary ? { summary: input.summary } : {}),
+          workDir: path.join(expandHome(pullRoot()), ".push"),
+        });
+        if (!published.ok) return { ...published, pageId };
+        writeLink(pullRoot(), pageId, { hostId: config.id, outputRoot: published.outputRoot, cloudPageId: published.cloudPageId, runId: published.runId, linkedAt: new Date().toISOString(), pushedAt: new Date().toISOString(), baseVersion: published.artifact.version, artifactId: published.cloudPageId });
+        for (const host of cloud().values()) void host.cloudRuns(true).catch(() => undefined);
+        return { ...published, pageId, message: `Published to ${published.outputRoot} as version ${published.artifact.version}; it is in the cloud pages list of every Marshal that lists ${config.uri}. Later edits: sdksessions.pushToCloud {pageId: "${pageId}"}.${published.warnings.length ? ` ${published.warnings.join(" ")}` : ""}` };
+      },
+    },
+    {
       name: "sdksessions.cloudPages",
       title: "List cloud pages",
       description:
@@ -1032,6 +1072,7 @@ export const CAPABILITY_NAMES = [
   "sdksessions.cloudEdits",
   "sdksessions.cloudLink",
   "sdksessions.pushToCloud",
+  "sdksessions.publishToCloud",
   "sdksessions.importCloudPage",
   "sdksessions.cloudPages",
   "sdksessions.openCloudPage",

@@ -1,6 +1,6 @@
 {
   "name": "@omer/marshal-sdk-sessions",
-  "version": "0.3.29",
+  "version": "0.3.31",
   "private": true,
   "description": "Marshal extension: runs, sessions and transcripts of headless Marshal hosts (marshal-sdk).",
   "scripts": {

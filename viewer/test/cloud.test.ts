@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { FileSessionStore } from "../../src/session-store";
-import { cloudHost, listEdits, previewHtml, pushToCloud, readLinks, writeLink } from "../src/cloud";
+import { cloudHost, listEdits, previewHtml, publishToCloud, pushToCloud, readLinks, writeLink } from "../src/cloud";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 const PAGE_ID = "rawdog--headless-quick-6dqua";
@@ -26,7 +26,7 @@ if (group !== "storage") process.exit(2);
 if (verb === "ls") {
   const pattern = args[0];
   const base = pattern.slice(0, pattern.search(/\\*/));
-  const re = new RegExp("^" + pattern.replace(/[.+?^\${}()|[\\]\\\\]/g, "\\\\$&").replace(/\\*\\*\\//g, "(?:.*/)?").replace(/\\*/g, "[^/]*") + "$");
+  const re = new RegExp("^" + pattern.replace(/[.+?^\${}()|[\\]\\\\]/g, "\\\\$&").replace(/\\*\\*\\//g, "(?:.{0,}/)?").replace(/\\*/g, "[^/]*") + "$");
   const hits = walk(local(base.replace(/\\/[^/]*$/, ""))).map((file) => "gs://" + path.relative(root, file)).filter((uri) => re.test(uri));
   if (!hits.length) { process.stderr.write("ERROR: One or more URLs matched no objects.\\n"); process.exit(1); }
   process.stdout.write(hits.join("\\n") + "\\n");
@@ -395,5 +395,36 @@ test("a push from a copy that is behind the cloud page is refused and leaves the
   // The run manifest follows: the page's current version is recorded in run.json, their own fields kept.
   const runJson = JSON.parse(fs.readFileSync(path.join(runRoot, "agent", "marshal-state", "run.json"), "utf8"));
   assert.deepEqual([runJson.title, runJson.artifacts[0].id, runJson.artifacts[0].current, runJson.workspace], ["Rawdog quick", PAGE_ID, 3, "pages"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("publishToCloud makes a local page a run of its own: listed with its page as version 1, and the next push is version 2", async () => {
+  const { pullRoot, gcs, dir } = setup();
+  const studioDir = path.join(dir, "studio");
+  fs.mkdirSync(path.join(studioDir, "library", "1617", "pictures"), { recursive: true });
+  fs.writeFileSync(path.join(studioDir, "library", "1617", "pictures", "A01-jar.png"), PNG);
+  const pageDoc = { id: "rawdog--marley-idea-x1", title: "RAWDOG · Marley idea", brand: { id: "1617", name: "RAWDOG" }, product: null, source: "made in Page Studio", version: 4, updatedAt: "2026-11-01T00:00:00.000Z", updatedBy: "Guy", notes: [], sections: [{ key: "hero", label: "Hero", kind: "html", src: "<section><h1>Wake up.</h1></section>" }] };
+  const rendered = `<html><body><section data-key="hero"><h1>Wake up.</h1><img src="file://${studioDir}/library/1617/pictures/A01-jar.png"></section></body></html>`;
+  const published = await publishToCloud({ uri: "gs://dev-bucket/runs", pageId: pageDoc.id, requester: "guy@zyg.com", renderedHtml: rendered, pageDoc, studioDir, by: { name: "Guy", email: "guy@zyg.com" }, workDir: path.join(dir, "w1"), capture: noChrome, now: () => new Date("2026-11-21T21:00:00.000Z") });
+  assert.ok(published.ok, JSON.stringify(published));
+  assert.equal(published.outputRoot, `gs://dev-bucket/runs/published/${published.runId}`);
+  assert.equal(published.artifact.version, 1);
+  const root = path.join(gcs, published.outputRoot.slice(5));
+  const runJson = JSON.parse(fs.readFileSync(path.join(root, "agent", "marshal-state", "run.json"), "utf8"));
+  assert.deepEqual([runJson.schemaVersion, runJson.status, runJson.requester, runJson.workflow, runJson.brand, runJson.labels.brand, runJson.title], [1, "done", "guy@zyg.com", "page-publish", "RAWDOG", "RAWDOG", "RAWDOG · Marley idea"]);
+  assert.deepEqual(runJson.artifacts, [{ app: "page", kind: "landing-page", id: pageDoc.id, title: "RAWDOG · Marley idea", current: 1 }]);
+  assert.match(fs.readFileSync(path.join(root, "preview", "index.html"), "utf8"), /Wake up\./);
+  assert.equal(fs.readdirSync(path.join(root, "images")).length, 1);
+
+  // Every Marshal listing the prefix sees it as a page it can open.
+  const { pageRows } = await import("../src/cloud-pages");
+  const host = cloudHost({ id: "sandbox", uri: "gs://dev-bucket/runs" }, pullRoot);
+  const rows = pageRows(await host.cloudRuns(true)).filter((row) => row.outputRoot === published.outputRoot);
+  assert.deepEqual(rows.map((row) => [row.artifact.id, row.artifact.current, row.requester, row.brand, row.status, row.marshal]), [[pageDoc.id, 1, "guy@zyg.com", "RAWDOG", "done", true]]);
+
+  // Someone else's edit made from version 1 lands as version 2.
+  const next = await pushToCloud({ outputRoot: published.outputRoot, cloudPageId: published.cloudPageId, baseVersion: 1, renderedHtml: rendered.replace("Wake up.", "Wake up, Omer."), pageDoc: { ...pageDoc, version: 5 }, studioDir, by: { name: "Omer" }, workDir: path.join(dir, "w2"), capture: noChrome });
+  assert.ok(next.ok && next.artifact.version === 2);
+  assert.match(fs.readFileSync(path.join(root, "preview", "index.html"), "utf8"), /Wake up, Omer\./);
   fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -52,7 +52,7 @@ await build({
 });
 
 await build({
-  entryPoints: ["store", "pages", "questions", "cloud", "shared", "review", "artifacts", "cache", "cloud-pages", "backfill", "procedures"].map((name) => path.join(root, "test", `${name}.test.ts`)),
+  entryPoints: ["store", "pages", "questions", "cloud", "shared", "review", "artifacts", "cache", "cloud-pages", "backfill", "procedures", "gcs"].map((name) => path.join(root, "test", `${name}.test.ts`)),
   outdir: path.join(root, "out", "test"),
   outExtension: { ".js": ".cjs" },
   bundle: true,

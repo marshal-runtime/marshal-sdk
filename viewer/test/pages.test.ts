@@ -112,7 +112,7 @@ test("a page a local run made opens in Page Studio straight from the run's own f
 test("a linked host's page is pulled with its pictures before Page Studio takes it in, and pull brings pages too", async () => {
   const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-pages-host-"));
   const run = pageRun(path.join(hostRoot, "run"), "run-x");
-  const server = await startLinkServer({ token: LINK_TOKEN, sessionsRoot: run.store.root, host: { id: "coder-omer-dev", kind: "container" }, pageStudioDir: run.data });
+  const server = await startLinkServer({ token: LINK_TOKEN, sessionsRoot: run.store.root, host: { id: "coder-omer-dev", kind: "container" }, pagesDir: run.data });
   const pullRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-pages-pulled-"));
   const configuration = { roots: [fs.mkdtempSync(path.join(os.tmpdir(), "empty-"))], pullRoot, hosts: [{ id: "coder", name: "Coder", url: server.url, token: LINK_TOKEN }] };
   try {
