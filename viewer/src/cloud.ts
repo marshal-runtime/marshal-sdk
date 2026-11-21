@@ -18,7 +18,7 @@ import os from "os";
 import path from "path";
 import { pathToFileURL } from "url";
 
-import { finishPage } from "../../src/page-finish";
+import { finishPage } from "./page-finish";
 import { commitPageVersion, extendRunJson, type ArtifactRef, type NewPicture } from "./artifacts";
 import { gcloud, gcsCat, gcsGlob, gcsRead, gcsWrite, PreconditionFailed, pool } from "./gcs";
 import { folderHost, type Host } from "./hosts";
