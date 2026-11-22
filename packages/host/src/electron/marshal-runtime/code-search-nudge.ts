@@ -13,7 +13,9 @@
  * advisory note instead, as does every later one. An actual index call counts
  * as having searched: a runtimeInvoke of a `knowledge.*` capability, or
  * scripting-tool TypeScript that calls `runtime.invoke("knowledge.…")` outside
- * a comment. Subagents get the same rule when they start.
+ * a comment. Subagents get the same rule when they start. An agent that starts
+ * browsing code by hand (Read, Glob, ls/cat/sed/find, git log) before using the
+ * index gets one advisory note pointing at it; nothing is blocked.
  *
  * The predicate was tuned on a replay of 240 real blocks and 18 hand-labelled
  * concept searches (replayed in `code-search-nudge.test.ts`).
@@ -472,6 +474,38 @@ export function codeSearchGateText(scriptingToolName: string, query: string): st
   );
 }
 
+/** Commands that browse code by hand; an exact grep is left out because the rules say grep stays right for one. */
+const BROWSE_COMMANDS = new Set(["ls", "cat", "sed", "head", "tail", "find", "tree", "less", "fd"]);
+const BROWSE_TOOLS = new Set(["read", "glob", "view", "ls"]);
+
+/**
+ * True when the call opens or lists code without searching for it: a Read or Glob,
+ * or a shell command with a segment that starts with a browsing command or `git log`/`git show`.
+ */
+export function isCodeBrowse(toolName: string, toolInput: unknown): boolean {
+  if (BROWSE_TOOLS.has(toolName.toLowerCase())) return true;
+  const command = field(toolInput, "command");
+  if (!command) return false;
+  return maskQuoted(command)
+    .masked.split(SEGMENT_SEPARATOR)
+    .flatMap((segment) => segment.split("|").slice(0, 1))
+    .some((stage) => {
+      const words = stage.trim().split(/\s+/);
+      const program = words[0] === "cd" ? undefined : words[0];
+      if (!program) return false;
+      if (BROWSE_COMMANDS.has(program)) return true;
+      return program === "git" && (words[1] === "log" || words[1] === "show");
+    });
+}
+
+export function brainFirstHintText(scriptingToolName: string): string {
+  return (
+    "This session has not searched the knowledge index yet. For where/how/who-calls/what-depends questions, " +
+    `search it first in ${scriptingToolName}: \`${knowledgeSearchCall()}\` It also returns tickets, rules and ` +
+    "team memories that files alone miss. This note shows once; the command is running as sent."
+  );
+}
+
 export function brainFirstSubagentText(scriptingToolName: string): string {
   return (
     "Code questions: this workspace has a code knowledge index. Your first code lookup is knowledge.search " +
@@ -500,6 +534,7 @@ export function createCodeSearchGuide(options: CodeSearchNudgeOptions): CodeSear
   });
   const searchedIndex = new Set<string>();
   const gated = new Set<string>();
+  const hinted = new Set<string>();
 
   const isAvailable = (sessionId: string): Promise<boolean> => availability.check(sessionId);
 
@@ -520,7 +555,17 @@ export function createCodeSearchGuide(options: CodeSearchNudgeOptions): CodeSear
       track(searchedIndex, agentKey);
       return undefined;
     }
-    if (!isConceptCodeSearch(toolName, toolInput)) return undefined;
+    if (!isConceptCodeSearch(toolName, toolInput)) {
+      // 2026-11-22: a zyg session with the Brain rule in its prompt answered from ls/sed/cat alone and missed
+      // the incident tickets and rules the Brain held; one advisory note on the first hand browse, never a block.
+      if (searchedIndex.has(agentKey) || hinted.has(agentKey)) return undefined;
+      if (!isCodeBrowse(toolName, toolInput)) return undefined;
+      // Claimed before the probe so parallel calls of one agent get a single note.
+      track(hinted, agentKey);
+      if (await isAvailable(sessionId)) return brainFirstHintText(scriptingToolName);
+      hinted.delete(agentKey);
+      return undefined;
+    }
     if (!(await isAvailable(sessionId))) return undefined;
     const query = conceptQuery(toolName, toolInput);
     if (
