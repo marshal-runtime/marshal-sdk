@@ -12,11 +12,6 @@ import type { PermissionPolicy } from "../permission-policy";
 import type { SessionManager } from "../sessions";
 import { captureWorkspaceBinding } from "../workspace-role-identity";
 import {
-  adaptMarshalBrowserCommand,
-  isMarshalBrowserCommandName,
-} from "./browser-command-adapters";
-import {
-  MARSHAL_RUNTIME_BROWSER_PERMISSION_PREFIX,
   MARSHAL_RUNTIME_DEFAULT_WORKSPACE,
   MARSHAL_RUNTIME_PERMISSION,
   MARSHAL_RUNTIME_TOOL_PERMISSION_PREFIX,
@@ -556,63 +551,6 @@ function policyDecision(
   };
 }
 
-function browserPolicyDecision(
-  policy: PermissionPolicy,
-  sessionId: string,
-  capability: string,
-  input: unknown,
-): PermissionDecision {
-  if (!isMarshalBrowserCommandName(capability) || !isRecord(input)) {
-    return {
-      decision: "deny",
-      reason: `Marshal does not support browser capability "${capability}".`,
-      code: "permission_denied",
-    };
-  }
-  let adapted: ReturnType<typeof adaptMarshalBrowserCommand>;
-  try {
-    adapted = adaptMarshalBrowserCommand(capability, input);
-  } catch (error) {
-    return {
-      decision: "deny",
-      reason: error instanceof Error ? error.message : "The browser command input is invalid.",
-      code: "permission_denied",
-    };
-  }
-  const request: ApprovalRequest = {
-    id: randomUUID(),
-    sessionId,
-    toolCallId: undefined,
-    kind: "mcp",
-    serverName: "playwright",
-    toolName: adapted.toolName,
-    toolTitle: undefined,
-    toolDescription: undefined,
-    toolArgs: { ...adapted.input },
-    readOnly:
-      capability === "browser_accessibility_tree" ||
-      capability === "browser_console" ||
-      capability === "browser_list_tabs" ||
-      capability === "browser_screenshot",
-  };
-  const evaluation = policy.evaluateDetailed(request);
-  if (evaluation.decision === "approve") {
-    return { decision: "allow", reason: "Allowed by the Marshal browser permission policy." };
-  }
-  if (evaluation.decision === "prompt") {
-    return {
-      decision: "approval",
-      reason: "Marshal requires interactive approval for this browser command.",
-      prompt: `Approve browser command "${capability}".`,
-    };
-  }
-  return {
-    decision: "deny",
-    reason: evaluation.denyReason ?? `Marshal policy denied browser command "${capability}".`,
-    code: "permission_denied",
-  };
-}
-
 function codeIntelligencePolicyToolName(permission: string, capability: string): string | null {
   if (permission === "code.read") {
     return CODE_INTELLIGENCE_READ_CAPABILITIES.has(capability) ? capability : null;
@@ -712,8 +650,7 @@ export const EXTENSION_DECLARED_PERMISSION_POLICY_PREFIX = "runtime-extension:";
  * Codex 22:48(ii): before an extension-declared permission ever reaches the
  * resolver or policyDecision() — namespaced or not — refuse anything whose id
  * collides with a name an earlier branch already owns: a real self-tool name,
- * a builtin permission, a marshal.tool.invoke: / marshal.browser.invoke:
- * prefix wrapper, or a memory/code-intelligence id. A descriptor-controlled id like
+ * a builtin permission, a marshal.tool.invoke: prefix wrapper, or a memory/code-intelligence id. A descriptor-controlled id like
  * "runtimeInvoke" or "memory.recall" must fall straight through to the
  * existing "not supported" deny below, never to the resolver.
  *
@@ -730,7 +667,6 @@ export function isReservedRuntimePermissionId(permission: string): boolean {
     BUILTIN_PERMISSIONS.has(permission) ||
     TRUSTED_TYPESCRIPT_PERMISSIONS.has(permission) ||
     permission.startsWith(MARSHAL_RUNTIME_TOOL_PERMISSION_PREFIX) ||
-    permission.startsWith(MARSHAL_RUNTIME_BROWSER_PERMISSION_PREFIX) ||
     permission === "memory.read" ||
     permission === "memory.write" ||
     permission === "code.read" ||
@@ -1105,35 +1041,6 @@ export function createProductionMarshalRuntimePorts(options: {
             });
           }
           const decision = policyDecision(
-            options.permissionPolicy,
-            request.scope.sessionId,
-            toolName,
-            request.input,
-          );
-          if (decision.decision !== "allow") return finish(decision);
-          continue;
-        }
-        if (permission.startsWith(MARSHAL_RUNTIME_BROWSER_PERMISSION_PREFIX)) {
-          const toolName = permission.slice(MARSHAL_RUNTIME_BROWSER_PERMISSION_PREFIX.length);
-          if (toolName.startsWith(EXTENSION_DECLARED_PERMISSION_POLICY_PREFIX)) {
-            // SF2-3 defense in depth: mirror the tool.invoke guard above —
-            // never let the browser-invoke channel reach
-            // browserPolicyDecision() with a smuggled extension-identity-
-            // qualified bucket string either.
-            return finish({
-              decision: "deny",
-              reason: `Marshal Runtime permission is not supported: ${permission}.`,
-              code: "permission_denied",
-            });
-          }
-          if (toolName !== request.capability) {
-            return finish({
-              decision: "deny",
-              reason: "Marshal browser capability and permission identity do not match.",
-              code: "permission_denied",
-            });
-          }
-          const decision = browserPolicyDecision(
             options.permissionPolicy,
             request.scope.sessionId,
             toolName,

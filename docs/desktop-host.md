@@ -54,7 +54,7 @@ column it needs; the right column says what the desktop supplies, so you can see
 | `extensionSecrets` | `safeStorage` | a secret port (file, env, vault) |
 | `resolveOrganization` | org identity of the signed-in person when rooms are on | the org token's identity (`R18.1`) |
 | `resolveDelegationIdentity` | delegation ids from the session store | the agent port's session ids |
-| `agenticBrowser`, `firstPartyExtensions` | browser executor, bundled first-party extensions | optional |
+| `firstPartyExtensions` | bundled first-party extensions (the browser is `@marshal/browser`, one of them) | optional |
 | `startupDelayMs`, `warmUiCompiler`, `diagnostics` | acceptance harness only | omitted |
 
 ## What is not shared yet

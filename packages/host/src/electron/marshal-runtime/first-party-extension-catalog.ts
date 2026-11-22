@@ -13,7 +13,6 @@ import {
   adaptOverlayReviewExtensionPackage,
   type OverlayReviewPackageHost,
 } from "../overlay-review";
-import { adaptAgenticBrowserExtensionPackage } from "./agentic-browser-runtime-host";
 import { adaptAgenticDebuggerExtensionPackage } from "./agentic-debugger-runtime-host";
 import { runtimeNodeModulesRoot, type RuntimePackageLocation } from "./runtime-package-loader";
 
@@ -48,25 +47,14 @@ export interface ResolvedFirstPartyExtension {
 export const FIRST_PARTY_EXTENSION_CATALOG: readonly FirstPartyExtensionCatalogManifestEntry[] =
   Object.freeze([
     Object.freeze({
-      identity: "@agentic-browser/automation-extension",
+      identity: "@marshal/browser",
       version: "0.1.0",
-      packageName: "@agentic-browser/automation-extension",
-      bundledLocation: Object.freeze(["@agentic-browser", "automation-extension"]),
+      packageName: "@marshal/browser",
+      bundledLocation: Object.freeze(["@marshal", "browser"]),
       integrity: Object.freeze({
         algorithm: "sha256" as const,
         domain: INTEGRITY_DOMAIN,
-        value: "075ab45eb5d160a355cd804c2afb9da61a76bb247b65884105d35ce809692421",
-      }),
-    }),
-    Object.freeze({
-      identity: "@agentic-browser/marshal-runtime-extension",
-      version: "0.1.0",
-      packageName: "@agentic-browser/marshal-runtime-extension",
-      bundledLocation: Object.freeze(["@agentic-browser", "marshal-runtime-extension"]),
-      integrity: Object.freeze({
-        algorithm: "sha256" as const,
-        domain: INTEGRITY_DOMAIN,
-        value: "3b1933539519157d07a00ea7f042435f2e1ff654ea4c3ab303a9e728a0a7ac1d",
+        value: "3c0d4dbae2499b5f8efecc02978364bf1ac1f6a615694aced66fd2001bc77929",
       }),
     }),
     Object.freeze({
@@ -104,6 +92,16 @@ export const FIRST_PARTY_EXTENSION_CATALOG: readonly FirstPartyExtensionCatalogM
       }),
     }),
   ]);
+
+/**
+ * Extensions an earlier Marshal release bundled and this one no longer ships. Their stored records
+ * point at packages that are gone from the app, so the host drops them at start instead of
+ * restoring them as unavailable entries. Replaced by @marshal/browser.
+ */
+export const RETIRED_FIRST_PARTY_EXTENSION_IDENTITIES: ReadonlySet<string> = new Set([
+  "@agentic-browser/automation-extension",
+  "@agentic-browser/marshal-runtime-extension",
+]);
 
 export function resolveFirstPartyExtensionCatalog(options: {
   readonly location: RuntimePackageLocation;
@@ -148,7 +146,6 @@ export function createFirstPartyExtensionPackageLoader(options: {
   readonly overlayReview?: OverlayReviewPackageHost;
 }): RuntimeExtensionPackageLoader {
   const adapters = new Map<string, PackageAdapter>([
-    ["@agentic-browser/marshal-runtime-extension", adaptAgenticBrowserExtensionPackage],
     [
       "@marshal/agentic-debugger-extension",
       (loaded) => adaptAgenticDebuggerExtensionPackage(loaded, options.compositionRegistry),

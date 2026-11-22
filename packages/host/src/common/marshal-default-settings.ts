@@ -80,6 +80,7 @@ export const DEFAULT_SETTINGS: MSettings = {
     orgLiveSessions: true,
     orgPlacement: true,
     orgSessionAudit: true,
+    orgRooms: true,
   },
   telemetryEnabled: true,
   sessionRetentionDays: 90,
