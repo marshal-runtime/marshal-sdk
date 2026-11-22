@@ -73,6 +73,16 @@ const inputs = {
     })
     .strict(),
   members: z.object({ roomId }).strict(),
+  grant: z
+    .object({
+      roomId,
+      principal: z
+        .string()
+        .max(320)
+        .regex(/^(user:)?[^\s@:]+@[^\s@]+$/),
+      role: z.enum(["viewer", "collaborator", "driver"]).optional(),
+    })
+    .strict(),
   presence: z.object({ roomId, state: z.unknown().optional() }).strict(),
   wait: z
     .object({
@@ -197,6 +207,11 @@ const DESCRIPTIONS: Record<Operation, [title: string, description: string, write
     false,
   ],
   members: ["Room members", "The people who can read the room and their roles.", false],
+  grant: [
+    "Invite someone to a room",
+    "Give a person in the organization access to a room (owner only): `principal` is their email (or `user:<email>`), `role` viewer, collaborator (default) or driver. They then see it in rooms.list and can open it. Returns the members after the grant.",
+    true,
+  ],
   presence: [
     "Room presence",
     "Who is in the room now; with `state`, also sets this desktop's presence state (at most 30 updates a second are sent).",
@@ -399,6 +414,16 @@ async function run(
     case "members": {
       const input = inputs.members.parse(value);
       return guardRead(input.roomId) ?? { ok: true, members: await manager.members(input.roomId) };
+    }
+    case "grant": {
+      const input = inputs.grant.parse(value);
+      const refused = guardRead(input.roomId);
+      if (refused) return refused;
+      const principal: `user:${string}` = input.principal.startsWith("user:")
+        ? `user:${input.principal.slice("user:".length).toLowerCase()}`
+        : `user:${input.principal.toLowerCase()}`;
+      await manager.grant(input.roomId, principal, input.role ?? "collaborator");
+      return { ok: true, members: await manager.members(input.roomId) };
     }
     case "presence": {
       const input = inputs.presence.parse(value);

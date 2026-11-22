@@ -2091,7 +2091,7 @@ export interface MSettings extends MiniModeSettings, WorkServiceProviderSettings
   experiments?: ExperimentFlags;
   /** Organization URL (serves `/.well-known/marshal-org.json`). An admin policy `orgUrl` overrides it. */
   orgUrl?: string;
-  /** Developer builds only: trust the local build of an extension that may use the org services. */
+  /** Trust the local build of an extension that may use the org services (such as the Brain); an admin policy value overrides it. */
   trustLocalOrgExtensions?: boolean;
   /** String-keyed runtime adapter selected at the next app startup. */
   runtimeId?: string;
