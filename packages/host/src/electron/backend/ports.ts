@@ -766,6 +766,8 @@ export interface IExternalOperationRegistryPort {
 
 export interface ISelfToolDeps {
   sessionManager: ISelfToolsSessionManager;
+  /** The workspace a session runs in; absent where sessions have no workspace binding. */
+  resolveSessionWorkspaceName?: (sessionId: string) => string | undefined;
   /** Indexed session search; absent or returning null falls back to the legacy scan. */
   sessionRecall?: import("./../session-recall/port").SessionRecallPort;
   /** Shared-session search in the team Brain; absent keeps searchSessions local. */

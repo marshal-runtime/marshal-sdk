@@ -19,6 +19,38 @@ export interface InterfaceCustomization {
   readonly theme: string | null;
   /** A red frame drawn around one placement (or one of its parts) to point at it, e.g. in a demo. */
   readonly spotlight?: InterfaceSpotlight;
+  /** Per extension id: where its UI contributions apply. Absent = all of Marshal. */
+  readonly extensionScopes?: Readonly<Record<string, InterfaceExtensionScope>>;
+}
+
+/**
+ * Where an extension's UI contributions (theme, edits, items, views) apply:
+ * everywhere, only in threads of the named workspaces, or only in the named threads.
+ */
+export type InterfaceExtensionScope =
+  | { readonly level: "marshal" }
+  | { readonly level: "workspace"; readonly workspaceNames: readonly string[] }
+  | { readonly level: "thread"; readonly sessionIds: readonly string[] };
+
+/** The thread the interface is showing; both fields absent outside a thread. */
+export interface InterfaceActiveContext {
+  readonly sessionId?: string;
+  readonly workspaceName?: string;
+}
+
+export function isExtensionInScope(
+  customization: InterfaceCustomization,
+  extensionId: string,
+  active: InterfaceActiveContext,
+): boolean {
+  const scope = customization.extensionScopes?.[extensionId];
+  if (!scope || scope.level === "marshal") return true;
+  if (scope.level === "workspace") {
+    return (
+      active.workspaceName !== undefined && scope.workspaceNames.includes(active.workspaceName)
+    );
+  }
+  return active.sessionId !== undefined && scope.sessionIds.includes(active.sessionId);
 }
 
 export interface InterfaceSpotlight {
@@ -86,13 +118,79 @@ export function sanitizeInterfaceCustomization(raw: unknown): InterfaceCustomiza
       ? raw.theme
       : null;
   const spotlight = sanitizeSpotlight(raw.spotlight);
+  const extensionScopes = sanitizeExtensionScopes(raw.extensionScopes);
   return {
     edits,
     disabledContributions,
     replacementChoice,
     theme,
     ...(spotlight ? { spotlight } : {}),
+    ...(extensionScopes ? { extensionScopes } : {}),
   };
+}
+
+const MAX_SCOPED_EXTENSIONS = 128;
+const MAX_SCOPE_TARGETS = 256;
+
+function stringList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return [
+    ...new Set(
+      raw.filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.trim().length > 0 && entry.length <= MAX_KEY,
+      ),
+    ),
+  ].slice(0, MAX_SCOPE_TARGETS);
+}
+
+function sanitizeExtensionScope(raw: unknown): InterfaceExtensionScope | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (raw.level === "marshal") return { level: "marshal" };
+  if (raw.level === "workspace") {
+    const workspaceNames = stringList(raw.workspaceNames);
+    return workspaceNames.length > 0 ? { level: "workspace", workspaceNames } : undefined;
+  }
+  if (raw.level === "thread") {
+    const sessionIds = stringList(raw.sessionIds);
+    return sessionIds.length > 0 ? { level: "thread", sessionIds } : undefined;
+  }
+  return undefined;
+}
+
+function sanitizeExtensionScopes(
+  raw: unknown,
+): Record<string, InterfaceExtensionScope> | undefined {
+  if (!isRecord(raw)) return undefined;
+  const scopes: Record<string, InterfaceExtensionScope> = {};
+  for (const [extensionId, value] of Object.entries(raw).slice(0, MAX_SCOPED_EXTENSIONS)) {
+    if (extensionId.length === 0 || extensionId.length > MAX_KEY) continue;
+    const scope = sanitizeExtensionScope(value);
+    // "marshal" is the default; storing it would only add noise.
+    if (scope && scope.level !== "marshal") scopes[extensionId] = scope;
+  }
+  return Object.keys(scopes).length > 0 ? scopes : undefined;
+}
+
+/** Returns the scope or the reason it is invalid, for writers that must not drop input silently. */
+export function parseExtensionScope(
+  raw: unknown,
+): { ok: true; value: InterfaceExtensionScope } | { ok: false; error: string } {
+  if (!isRecord(raw)) return { ok: false, error: "Scope must be an object." };
+  if (raw.level !== "marshal" && raw.level !== "workspace" && raw.level !== "thread") {
+    return { ok: false, error: 'Scope level must be "marshal", "workspace" or "thread".' };
+  }
+  const scope = sanitizeExtensionScope(raw);
+  if (!scope) {
+    return {
+      ok: false,
+      error:
+        raw.level === "workspace"
+          ? "A workspace scope needs at least one workspace name."
+          : "A thread scope needs at least one session id.",
+    };
+  }
+  return { ok: true, value: scope };
 }
 
 const MAX_SPOTLIGHT_LABEL = 160;
@@ -121,6 +219,8 @@ export interface InterfaceCustomizationPatch {
   readonly theme?: string | null;
   /** null clears the spotlight. */
   readonly spotlight?: InterfaceSpotlight | null;
+  /** Per extension id; replaces the whole map. A `marshal` scope removes the restriction. */
+  readonly extensionScopes?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -156,6 +256,12 @@ export function mergeInterfaceCustomization(
       errors.push(`Placement "${definition.id}" has no part "${patch.spotlight.part}".`);
     }
   }
+  if (patch.extensionScopes !== undefined) {
+    for (const [extensionId, scope] of Object.entries(patch.extensionScopes)) {
+      const parsed = parseExtensionScope(scope);
+      if (!parsed.ok) errors.push(`Extension "${extensionId}": ${parsed.error}`);
+    }
+  }
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
@@ -165,6 +271,7 @@ export function mergeInterfaceCustomization(
       replacementChoice: patch.replacementChoice ?? current.replacementChoice,
       theme: patch.theme === undefined ? current.theme : patch.theme,
       spotlight,
+      extensionScopes: patch.extensionScopes ?? current.extensionScopes,
     }),
   };
 }
