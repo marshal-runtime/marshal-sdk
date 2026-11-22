@@ -8,7 +8,7 @@ export const AGENTIC_DEBUGGER_EXTENSION_PIN = Object.freeze({
   integrity: {
     algorithm: "sha256",
     domain: "marshal-runtime-extension-package-v1",
-    value: "515d7f40c709e6a9abfa4a596de037dae10f59f7a5c12441bb0fbb74441fe59e",
+    value: "957c338554af1c4c1aa86d2fede7fcc88fbe19f433d4d54ce0eb7ff177487189",
   },
 } as const);
 

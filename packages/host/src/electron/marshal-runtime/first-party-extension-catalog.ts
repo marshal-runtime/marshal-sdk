@@ -48,13 +48,13 @@ export const FIRST_PARTY_EXTENSION_CATALOG: readonly FirstPartyExtensionCatalogM
   Object.freeze([
     Object.freeze({
       identity: "@marshal/browser",
-      version: "0.1.0",
+      version: "0.2.0",
       packageName: "@marshal/browser",
       bundledLocation: Object.freeze(["@marshal", "browser"]),
       integrity: Object.freeze({
         algorithm: "sha256" as const,
         domain: INTEGRITY_DOMAIN,
-        value: "3c0d4dbae2499b5f8efecc02978364bf1ac1f6a615694aced66fd2001bc77929",
+        value: "f66ab52abe89a0f590f2d65375c10e827a70876ecf3455a3c91fdb0807dea418",
       }),
     }),
     Object.freeze({
