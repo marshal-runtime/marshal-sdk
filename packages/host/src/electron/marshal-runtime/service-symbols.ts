@@ -22,7 +22,6 @@ import type {
   MarshalRuntimeBrainTranscript,
   MarshalRuntimeBrainWaitResult,
 } from "./brain-provider";
-import type { MarshalRuntimeBrowserCommandResult } from "./browser-command-executor";
 import type { ResolvedMarshalRuntimeScope } from "./contracts";
 import type {
   MarshalRuntimeMemoryRecallResult,
@@ -177,13 +176,6 @@ export interface MarshalMemoryService {
     context?: InvocationContext,
   ): Promise<MarshalRuntimeMemoryRecallResult>;
 }
-export interface MarshalBrowserExecutionService {
-  execute(
-    input: MarshalRuntimeBrowserInput,
-    context?: InvocationContext,
-  ): Promise<MarshalRuntimeBrowserCommandResult>;
-  dispose(): Promise<void>;
-}
 export interface MarshalUiDeliveryService {
   notification(
     input: RuntimeUiNotificationDelivery,
@@ -207,9 +199,6 @@ const memory = createRuntimeServiceToken<MarshalMemoryService>("@marshal/marshal
 const memoryProviderRegistry = createRuntimeServiceToken<MemoryProviderRegistrationService>(
   "@marshal/marshal:memory-provider-registry",
 );
-const browserExecution = createRuntimeServiceToken<MarshalBrowserExecutionService>(
-  "@marshal/marshal:browser.execution",
-);
 const uiDelivery = createRuntimeServiceToken<MarshalUiDeliveryService>(
   "@marshal/marshal:ui.delivery",
 );
@@ -222,7 +211,6 @@ export const MarshalServiceSymbols = Object.freeze({
   brain,
   memory,
   memoryProviderRegistry,
-  browserExecution,
   uiDelivery,
   uiReview,
 });
@@ -236,7 +224,6 @@ export interface MarshalServiceMap {
   readonly brain: MarshalBrainService;
   readonly memory: MarshalMemoryService;
   readonly memoryProviderRegistry: MemoryProviderRegistrationService;
-  readonly browserExecution: MarshalBrowserExecutionService;
   readonly uiDelivery: MarshalUiDeliveryService;
   readonly uiReview: MarshalUiReviewService;
 }
@@ -254,15 +241,6 @@ export interface MarshalRuntimeAuthorizeInput {
   readonly capability: string;
   readonly permissions: readonly string[];
   readonly input: unknown;
-}
-export interface MarshalRuntimeBrowserInput {
-  readonly command: string;
-  readonly input: Readonly<Record<string, unknown>>;
-  readonly context: {
-    readonly chatId: string;
-    readonly executionId: string;
-    readonly browserSessionId: string;
-  };
 }
 export interface MarshalRuntimeAgentLaunchInput {
   readonly task: string;
@@ -400,9 +378,6 @@ export interface MemoryStoreProvider { id: string; store: unknown; dispose?(): v
   listWorkspaces(input: {}): Promise<{ workspaces: Array<{ name: string; path: string }> }>;
   getSessionContext(input: {}): Promise<{ session: { id: string; name: string; workspaceName?: string; repoPath?: string; source?: string } | null }>;
   listTools(input: {}): Promise<{ tools: Array<{ name: string; description?: string; parameters?: unknown }> }>;
-}`,
-  browserExecution: `export interface IBrowserExecution {
-  execute(input: { command: string; input: Record<string, unknown>; context: { chatId: string; executionId: string; browserSessionId: string }}): Promise<{ success: boolean; data?: unknown; error?: { code: string; message: string; details?: unknown }; metadata?: { duration: number; timestamp: number; commandId?: string; context?: { chatId: string; executionId: string; browserSessionId: string } } }>;
 }`,
   uiDelivery: `export interface IUiDelivery {
   notification(input: { deliveryId: string; owner: unknown; title: string; message: string; openSessionId?: string }): Promise<void>;
@@ -637,26 +612,6 @@ const memoryProviderRegistryComposition: RuntimeCompositionServiceDescriptor<Mem
       ],
     },
   };
-const browserExecutionComposition: RuntimeCompositionServiceDescriptor<MarshalBrowserExecutionService> =
-  {
-    key: "@marshal/marshal:browser.execution",
-    token: browserExecution,
-    contract: {
-      name: "@marshal/marshal:browser.execution",
-      version: "1.0.0",
-      declaration: MARSHAL_APP_SERVICE_DECLARATIONS.browserExecution,
-      methods: [
-        {
-          name: "execute",
-          input:
-            "{ command: string; input: Record<string, unknown>; context: { chatId: string; executionId: string; browserSessionId: string } }",
-          output:
-            "{ success: boolean; data?: unknown; error?: { code: string; message: string; details?: unknown }; metadata?: unknown }",
-          description: "Execute a browser command in the current authorized browser session.",
-        },
-      ],
-    },
-  };
 const uiDeliveryComposition: RuntimeCompositionServiceDescriptor<MarshalUiDeliveryService> = {
   key: "@marshal/marshal:ui.delivery",
   token: uiDelivery,
@@ -710,7 +665,6 @@ export const MarshalRuntimeCompositionServices = Object.freeze({
   brain: brainComposition,
   memory: memoryComposition,
   memoryProviderRegistry: memoryProviderRegistryComposition,
-  browserExecution: browserExecutionComposition,
   uiDelivery: uiDeliveryComposition,
   uiReview: uiReviewComposition,
 });

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { copyFile, lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 
@@ -62,10 +63,6 @@ import type { MemoryProviderRegistrationService } from "../active-memory-store";
 import type { OverlayReviewPackageHost } from "../overlay-review";
 import { captureWorkspaceBinding } from "../workspace-role-identity";
 import type { MarshalRuntimeAgentPort } from "./agent-orchestration";
-import {
-  AGENTIC_BROWSER_EXTENSION_IDENTITY,
-  createMarshalAgenticBrowserRuntimeHostModule,
-} from "./agentic-browser-runtime-host";
 import { BUILTIN_AGENTIC_DEBUGGER_EXTENSION_IDENTITY } from "./agentic-debugger-extension";
 import {
   AGENTIC_DEBUGGER_HOST_COMPOSITION_SERVICE,
@@ -74,7 +71,6 @@ import {
 } from "./agentic-debugger-runtime-host";
 import { RuntimeApplicationAuthority, stripApplicationAuthority } from "./application-authority";
 import type { MarshalRuntimeBrainPort } from "./brain-provider";
-import type { MarshalRuntimeBrowserCommandExecutorPort } from "./browser-command-executor";
 import { assertCapabilityInput } from "./capability-input-check";
 import {
   MARSHAL_RUNTIME_PERMISSION,
@@ -99,6 +95,7 @@ import {
 import type { RuntimeExtensionSecrets } from "./extension-secrets";
 import {
   createFirstPartyExtensionPackageLoader,
+  RETIRED_FIRST_PARTY_EXTENSION_IDENTITIES,
   type ResolvedFirstPartyExtension,
 } from "./first-party-extension-catalog";
 import { LIFECYCLE_PIN_METADATA_KEY, LifecycleWorkspacePins } from "./lifecycle-workspace-pins";
@@ -121,7 +118,6 @@ import { resolveRuntimeWorkspaceIds } from "./runtime-workspace-identity";
 import { MarshalRuntimeCompositionServices, MarshalServiceSymbols } from "./service-symbols";
 import type {
   MarshalAuthorityService,
-  MarshalBrowserExecutionService,
   MarshalUiDeliveryService,
   MarshalUiReviewService,
 } from "./service-symbols";
@@ -147,6 +143,52 @@ import { createMarshalReactUiOptions } from "./ui-packages";
 export const WORKSPACE_METADATA_KEY = "marshalWorkspaceName";
 const MARSHAL_HOST_PROVIDER_PREFIX = "marshal.host.";
 
+const SEMANTIC_VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/u;
+
+/** Semantic version precedence; undefined when either side is not a semantic version. */
+function compareSemanticVersions(left: string, right: string): number | undefined {
+  const a = SEMANTIC_VERSION.exec(left);
+  const b = SEMANTIC_VERSION.exec(right);
+  if (!a || !b) return undefined;
+  for (const index of [1, 2, 3]) {
+    const diff = Number(a[index]) - Number(b[index]);
+    if (diff !== 0) return Math.sign(diff);
+  }
+  const [preA, preB] = [a[4], b[4]];
+  if (preA === preB) return 0;
+  if (preA === undefined) return 1;
+  if (preB === undefined) return -1;
+  const partsA = preA.split(".");
+  const partsB = preB.split(".");
+  for (let index = 0; index < Math.max(partsA.length, partsB.length); index += 1) {
+    const [x, y] = [partsA[index], partsB[index]];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (x === y) continue;
+    const [numericX, numericY] = [/^\d+$/u.test(x), /^\d+$/u.test(y)];
+    if (numericX && numericY) return Math.sign(Number(x) - Number(y));
+    if (numericX) return -1;
+    if (numericY) return 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * A bundled extension's installed copy is kept, instead of being re-pointed to the bundled package, only
+ * when its version is strictly newer than the bundled one (a local update or a newer organization catalog
+ * version) and its package is still on disk. Equal, older, unparseable or missing copies go to the pin.
+ */
+function keepsNewerInstalledCopy(
+  installed: { readonly version: string; readonly request: { readonly packageRoot: string } },
+  bundled: { readonly version: string },
+): boolean {
+  return (
+    (compareSemanticVersions(installed.version, bundled.version) ?? 0) > 0 &&
+    existsSync(path.join(installed.request.packageRoot, "runtime-extension.json"))
+  );
+}
+
 async function ensureBundledExtension(
   lifecycle: RuntimeExtensionLifecycleService,
   extension: {
@@ -159,6 +201,7 @@ async function ensureBundledExtension(
   const installed = lifecycle.get(extension.identity);
   const needsRefresh =
     installed !== undefined &&
+    !keepsNewerInstalledCopy(installed, extension) &&
     (installed.version !== extension.version ||
       installed.request.packageRoot !== extension.request.packageRoot ||
       installed.integrity.value !== extension.request.integrity.value ||
@@ -209,6 +252,20 @@ async function ensureRequiredBundledExtension(
   });
 }
 
+async function dropRetiredBundledExtensionState(
+  stateStore: RuntimeExtensionStateStore,
+): Promise<readonly string[]> {
+  const records = await stateStore.load();
+  const kept = records.filter(
+    ({ identity }) => !RETIRED_FIRST_PARTY_EXTENSION_IDENTITIES.has(identity),
+  );
+  if (kept.length === records.length) return [];
+  await stateStore.save(kept);
+  return records
+    .filter(({ identity }) => RETIRED_FIRST_PARTY_EXTENSION_IDENTITIES.has(identity))
+    .map(({ identity }) => identity);
+}
+
 async function reconcileBundledExtensionState(
   stateStore: RuntimeExtensionStateStore,
   extension: {
@@ -220,6 +277,7 @@ async function reconcileBundledExtensionState(
   const records = await stateStore.load();
   const installed = records.find(({ identity }) => identity === extension.identity);
   if (!installed) return;
+  if (keepsNewerInstalledCopy(installed, extension)) return;
   if (
     installed.version === extension.version &&
     installed.request.packageRoot === extension.request.packageRoot &&
@@ -340,30 +398,6 @@ export function publicAuthority(port: MarshalRuntimeAuthorityPort): MarshalAutho
         signal: abortSignal(context),
       });
     },
-  };
-}
-
-function publicBrowser(
-  executor: MarshalRuntimeBrowserCommandExecutorPort,
-  services: RuntimeServiceContainer,
-): MarshalBrowserExecutionService {
-  return {
-    execute: async (input, context) => {
-      const scope = contextScope(context);
-      if (!scope) throw new Error("Marshal browser execution requires invocation context.");
-      const resolved = await services
-        .get(MarshalServiceSymbols.authority)
-        .resolveScope({}, runtimeServiceContext(scope, abortSignal(context)));
-      if (!resolved) throw new Error("Marshal browser execution scope was denied.");
-      return executor.execute({
-        command: input.command,
-        input: input.input,
-        context: input.context,
-        scope: resolved,
-        signal: abortSignal(context),
-      });
-    },
-    dispose: () => executor.dispose(),
   };
 }
 
@@ -608,43 +642,6 @@ function createRuntimeUiDelivery(
   };
 }
 
-function callTimeAuthorityPort(services: RuntimeServiceContainer): MarshalRuntimeAuthorityPort {
-  return {
-    resolveScope: (scope, signal) =>
-      services
-        .get(MarshalServiceSymbols.authority)
-        .resolveScope({}, runtimeServiceContext(scope, signal)),
-    authorize: (request) =>
-      services.get(MarshalServiceSymbols.authority).authorize(
-        {
-          capability: request.capability,
-          permissions: request.permissions,
-          input: request.input,
-        },
-        runtimeServiceContext(request.scope, request.signal),
-      ),
-  };
-}
-
-function callTimeBrowserExecutor(
-  services: RuntimeServiceContainer,
-): MarshalRuntimeBrowserCommandExecutorPort {
-  return {
-    execute: async (request) => {
-      const result = await services.get(MarshalServiceSymbols.browserExecution).execute(
-        {
-          command: request.command,
-          input: request.input,
-          context: request.context,
-        },
-        runtimeServiceContext(request.scope, request.signal),
-      );
-      return result;
-    },
-    dispose: () => services.get(MarshalServiceSymbols.browserExecution).dispose(),
-  };
-}
-
 const LOCAL_EXTENSION_IMPORT_ERROR = "Local extension packages cannot contain symbolic links.";
 
 function samePath(left: string, right: string): boolean {
@@ -813,9 +810,6 @@ export interface MarshalRuntimeHostOptions {
   readonly startupDelayMs?: number;
   /** Compiles a throwaway view in the background once the runtime is up, so the first real view skips the cold-compile cost. */
   readonly warmUiCompiler?: boolean;
-  readonly agenticBrowser?: {
-    readonly executor: MarshalRuntimeBrowserCommandExecutorPort;
-  };
   readonly firstPartyExtensions?: readonly ResolvedFirstPartyExtension[];
   readonly serviceContainer: RuntimeServiceContainer;
   readonly compositionRegistry?: RuntimeCompositionRegistry;
@@ -1659,50 +1653,17 @@ export class MarshalRuntimeHost {
           version: provider.version,
         })),
       });
-      if (this.options.agenticBrowser) {
-        this.emitDiagnostic("agentic-browser.resolve.started", {
-          identity: AGENTIC_BROWSER_EXTENSION_IDENTITY,
-        });
-      }
       const firstPartyExtensions = this.options.firstPartyExtensions ?? [];
-      const builtInAgenticBrowser =
-        firstPartyExtensions.find(
-          ({ identity }) => identity === AGENTIC_BROWSER_EXTENSION_IDENTITY,
-        ) ?? null;
-      if (builtInAgenticBrowser) {
-        this.emitDiagnostic("agentic-browser.resolve.completed", {
-          identity: builtInAgenticBrowser.identity,
-          version: builtInAgenticBrowser.version,
-        });
-      }
-      if (builtInAgenticBrowser && !this.ui) {
-        throw new Error("The built-in agentic browser extension requires Marshal Runtime UI.");
-      }
       if (
         serviceContainer.tryGet(RUNTIME_EXTENSION_LIFECYCLE_SERVICE) ||
         serviceContainer.tryGet(RUNTIME_EXTENSION_CATALOG_SERVICE)
       ) {
         throw new Error("Marshal Runtime extension services were already configured.");
       }
-      const agenticBrowserHost =
-        builtInAgenticBrowser && this.ui
-          ? createMarshalAgenticBrowserRuntimeHostModule({
-              authority: callTimeAuthorityPort(serviceContainer),
-              executor: callTimeBrowserExecutor(serviceContainer),
-              ui: this.ui,
-              onLifecycleEvent: (event) =>
-                this.emitDiagnostic(`agentic-browser.lifecycle.${event.type}`, {
-                  browserSessionId: event.context.browserSessionId,
-                  executionId: event.context.executionId,
-                  command: event.command,
-                }),
-            })
-          : null;
       const injectedModules = {
         ...(this.options.extensionSecrets
           ? { "@marshal/runtime-secrets": this.options.extensionSecrets }
           : {}),
-        ...(agenticBrowserHost ? { "@agentic-browser/runtime-host": agenticBrowserHost } : {}),
       };
       const discoveryRoots = await runtimeExtensionDiscoveryRoots(
         this.options.location,
@@ -1740,6 +1701,10 @@ export class MarshalRuntimeHost {
       const extensionStateStore = new JsonFileRuntimeExtensionStateStore(
         path.join(bindings.stateRoot, "extensions", "state.json"),
       );
+      const retired = await dropRetiredBundledExtensionState(extensionStateStore);
+      if (retired.length > 0) {
+        this.emitDiagnostic("first-party-extension.retired", { identities: retired });
+      }
       for (const extension of firstPartyExtensions) {
         // Extension state is persisted through one JSON store; preserve catalog order.
         // eslint-disable-next-line no-await-in-loop
@@ -1920,16 +1885,6 @@ export class MarshalRuntimeHost {
           MarshalRuntimeCompositionServices.memoryProviderRegistry,
           "memory-provider-registry",
           this.options.memoryProviderRegistry,
-        ),
-      );
-    }
-    if (this.options.agenticBrowser) {
-      defaultBindings.push(
-        registerHostService(
-          this.compositionRegistry,
-          MarshalRuntimeCompositionServices.browserExecution,
-          "browser.execution",
-          publicBrowser(this.options.agenticBrowser.executor, this.serviceContainer),
         ),
       );
     }

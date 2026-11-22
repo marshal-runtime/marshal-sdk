@@ -2220,7 +2220,7 @@ export type ExperimentFlags = {
   orgPlacement?: boolean;
   /** Flag `org.liveSessions`: shared sessions people write in together; each person's own Marshal answers their own messages on their own computer. Needs `orgRemoteSessions`, `orgSessionSharing`, `orgMentions` and an organization that serves `sharedTranscript` (default off). */
   orgLiveSessions?: boolean;
-  /** Flag `org.rooms` (hidden experiment): rooms extensions share live through the organization's rooms service; needs `orgSignIn` and an organization that serves `rooms` (default off). */
+  /** Flag `org.rooms`: rooms extensions share live through the organization's rooms service; needs `orgSignIn` and an organization that serves `rooms` (default on). */
   orgRooms?: boolean;
 };
 

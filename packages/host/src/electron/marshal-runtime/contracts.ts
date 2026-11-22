@@ -67,7 +67,6 @@ export const MARSHAL_RUNTIME_PERMISSION = Object.freeze({
 } as const);
 
 export const MARSHAL_RUNTIME_TOOL_PERMISSION_PREFIX = "marshal.tool.invoke:";
-export const MARSHAL_RUNTIME_BROWSER_PERMISSION_PREFIX = "marshal.browser.invoke:";
 
 export interface MarshalRuntimeScope {
   readonly sessionId: string;
