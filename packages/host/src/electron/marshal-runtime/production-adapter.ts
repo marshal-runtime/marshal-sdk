@@ -192,6 +192,13 @@ const BUILTIN_PERMISSIONS = new Set<string>([
   // calling extension's contributes.rooms and the person's role in the room.
   ORG_ROOMS_PERMISSION.read,
   ORG_ROOMS_PERMISSION.write,
+  // Host model services (marshal-sdk src/models, registered by the host as provider
+  // `marshal.models`): each capability declares its own name as a low-risk permission. They were
+  // missing here, so every session and extension call fell through to the unsupported deny.
+  "marshal.models.decide",
+  "marshal.models.embed",
+  "marshal.models.speak",
+  "marshal.models.transcribe",
 ]);
 const RUNTIME_SELF_TOOL_NAME_SET = new Set<string>(RUNTIME_SELF_TOOL_NAMES);
 const CODE_INTELLIGENCE_READ_CAPABILITIES = new Set([
