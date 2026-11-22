@@ -12,6 +12,7 @@ export { modelCredential, googleAccessTokenProvider } from "./credentials.js";
 export { createOpenAiTranscriber, type OpenAiTranscribeConfig, type OpenAiTranscriber } from "./openai-transcribe.js";
 export { createDecisionsClient, DEFAULT_DECISIONS_MODEL } from "./openai-decisions.js";
 export { createDecideService, type DecideConfig, type DecideProviderName, type DecideRequest, type DecideResult, type DecideService } from "./decide.js";
+export type { DecideImage, JudgeAnswer, JudgeQuestion, JudgeRequest, JudgeResult, PredicateAnswer, PredicateQuestion, RefusalAnswer } from "./judge.js";
 export { createEmbedService, EmbedError, formatForGemini, type EmbedConfig, type EmbedRequest, type EmbedResult, type EmbedService, type LocalEmbedder } from "./embed.js";
 export { createSpeech, configFromEnv as speechConfigFromEnv, type Speech, type SpeechConfig } from "./speech/index.js";
 export type { JevAskRequest, JevAskResult, JevQuestion, JevAnswer } from "./jev/api.js";
@@ -105,12 +106,23 @@ const result = (properties: Record<string, unknown>) => ({
   properties: { success: { type: "boolean" }, error: { type: "string" }, code: { type: "string" }, ...properties },
 });
 const PROBABILITIES = { type: "object", additionalProperties: { type: "number" } };
+const IMAGES = {
+  type: "array",
+  maxItems: 32,
+  description: "Images shown with the state/context: a data:image/...;base64 URL or a public http(s) URL, or {url, detail: low|high|auto|original}.",
+  items: {
+    oneOf: [
+      { type: "string" },
+      { type: "object", required: ["url"], properties: { url: { type: "string" }, detail: { enum: ["low", "high", "auto", "original"] } }, additionalProperties: false },
+    ],
+  },
+};
 
 const OPERATIONS: Record<string, { title: string; description: string; risk: "low" | "medium"; input: Record<string, unknown>; output: Record<string, unknown> }> = {
   "marshal.models.decide": {
     title: "Make a fast judgement with the host's decision model",
     description:
-      "Answer one question from a context: pick one of `options` (with probabilities), answer yes/no when there are no options, or fill `schema`. Runs on the host's decision provider (Jev contract or OpenAI structured output). For many named choice/score/yes-no questions over one state at once, pass `questions` (Jev's contract) instead.",
+      "Answer one question from a context: pick one of `options` (with probabilities), answer yes/no when there are no options, or fill `schema`. For several named questions over one state in ONE request, pass `state` + `questions` (each {type: choice|score|predicate|noul, criteria?, instructions, images?}); a predicate answer is {type: predicate, probability}, a declined one {type: refusal}. `images` (data or http(s) URLs) are shown with the state on every provider; images on one question need provider decisions (else code JEV_UNSUPPORTED).",
     risk: "low",
     input: {
       type: "object",
@@ -119,8 +131,9 @@ const OPERATIONS: Record<string, { title: string; description: string; risk: "lo
         options: { oneOf: [{ type: "array", items: { type: "string" }, maxItems: 500 }, { type: "object" }] },
         context: {},
         schema: { type: "object" },
-        questions: { type: "object" },
+        questions: { type: "object", description: "name -> {type: choice|score|predicate|noul, criteria?, instructions?, images?}" },
         state: {},
+        images: IMAGES,
         model: { type: "string" },
         provider: { enum: ["jev", "decisions", "openai"] },
       },
@@ -217,7 +230,12 @@ export function createModelsProvider(models: ModelServices): CapabilityProvider 
           case "marshal.models.decide": {
             const decideService = models.decideFor(input.provider);
             if (input.questions && typeof input.questions === "object") {
-              const judged = await decideService.judge({ state: input.state ?? input.context ?? null, questions: input.questions, ...(input.model ? { model: input.model } : {}) });
+              const judged = await decideService.judge({
+                state: input.state ?? input.context ?? null,
+                questions: input.questions,
+                ...(input.images !== undefined ? { images: input.images } : {}),
+                ...(input.model ? { model: input.model } : {}),
+              });
               return { output: { success: true, answers: judged.answers, provider: decideService.provider, model: judged.model, usage: judged.usage, latencyMs: judged.latencyMs } };
             }
             const decided = await decideService.decide({
@@ -225,6 +243,7 @@ export function createModelsProvider(models: ModelServices): CapabilityProvider 
               ...(input.options ? { options: input.options } : {}),
               ...(input.context !== undefined ? { context: input.context } : {}),
               ...(input.schema ? { schema: input.schema } : {}),
+              ...(input.images !== undefined ? { images: input.images } : {}),
               ...(input.model ? { model: input.model } : {}),
             });
             return { output: { success: true, ...decided } };

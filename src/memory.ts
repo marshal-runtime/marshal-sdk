@@ -7,7 +7,8 @@
 import { RUNTIME_PROTOCOL_VERSION, type CapabilityProvider, type InvocationContext } from "@marshal/runtime";
 
 import { callerSessionId } from "./agent-provider.js";
-import type { JevAskRequest, JevAskResult } from "./models/jev/api.js";
+import type { JevAskRequest } from "./models/jev/api.js";
+import type { JudgeResult } from "./models/judge.js";
 import type { PromptMemoryEntry, SessionPromptContext } from "./prompt.js";
 import type { SessionRecord, SessionStore } from "./session-store.js";
 
@@ -217,7 +218,7 @@ export function decideQueries(decide: DecideCall, options: { timeoutMs?: number;
   };
 }
 
-type JudgeCall = (request: JevAskRequest, options?: { timeoutMs?: number }) => Promise<JevAskResult>;
+type JudgeCall = (request: JevAskRequest, options?: { timeoutMs?: number }) => Promise<JudgeResult>;
 
 /**
  * A relevance judgement on the host's decide service: one yes/no question per candidate memory over one state (the task

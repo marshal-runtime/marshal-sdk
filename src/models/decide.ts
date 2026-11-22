@@ -1,4 +1,4 @@
-import type { JevAnswer, JevAskRequest, JevAskResult, JevQuestion } from "./jev/api.js";
+import type { JevAnswer, JevAskRequest, JevQuestion } from "./jev/api.js";
 import { DEFAULT_JEV_MODEL } from "./jev/api.js";
 import {
   abortedError,
@@ -8,12 +8,16 @@ import {
   notConnectedError,
   rateLimitedError,
   unavailableError,
+  unsupportedError,
 } from "./jev/errors.js";
-import { buildChatRequest, defaultReasoningEffort, openAiErrorMessage, parseChatCompletion, toJevAnswers } from "./jev/openai.js";
+import { buildChatRequest, defaultReasoningEffort, openAiErrorMessage, parseChatCompletion, toJevAnswers, userContent } from "./jev/openai.js";
 import { isAbortError, postJsonWithRetry, type JevFetch } from "./jev/transport.js";
 import { validateAnswer } from "./jev/validation.js";
 import { modelCredential, type ModelEnv } from "./credentials.js";
 import { createDecisionsClient, DEFAULT_DECISIONS_MODEL, judgeWithDecisions } from "./openai-decisions.js";
+import { normalizeImages, type DecideImage, type JudgeAnswer, type JudgeRequest, type JudgeResult, type NormalizedImage } from "./judge.js";
+
+export type { DecideImage, JudgeAnswer, JudgeQuestion, JudgeRequest, JudgeResult, PredicateAnswer, PredicateQuestion, RefusalAnswer } from "./judge.js";
 
 export type DecideProviderName = "jev" | "openai" | "decisions";
 
@@ -40,6 +44,8 @@ export interface DecideRequest {
   readonly context?: unknown;
   /** A JSON schema for a free-form structured answer (instead of options). */
   readonly schema?: Readonly<Record<string, unknown>>;
+  /** Images shown with the context (data URLs or public http(s) URLs); every provider takes them, none drops them. */
+  readonly images?: readonly DecideImage[];
   readonly model?: string;
 }
 
@@ -59,8 +65,11 @@ export interface DecideService {
   readonly provider: DecideProviderName;
   readonly model: string;
   decide(request: DecideRequest, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<DecideResult>;
-  /** Jev's own contract: named choice / score / noul questions over one state. */
-  judge(request: JevAskRequest, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<JevAskResult>;
+  /**
+   * Several named choice / score / predicate (or Jev's noul) questions over one state, answered by ONE request, with
+   * optional images on the state. Images on one question work on `decisions` only; elsewhere they fail JEV_UNSUPPORTED.
+   */
+  judge(request: JudgeRequest, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<JudgeResult>;
 }
 
 const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0);
@@ -98,17 +107,29 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
 
   const decisions = createDecisionsClient({ fetch: fetchImpl, baseUrl, keyEnv, key: () => modelCredential(keyEnv, deps.env) });
 
-  async function judge(request: JevAskRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<JevAskResult> {
+  async function judge(request: JudgeRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<JudgeResult> {
     const chosen = resolveModel(request.model);
     if (provider === "decisions") return judgeWithDecisions(decisions, chosen, request, options);
+    const images = normalizeImages(request.images);
+    // Chat completions has one user message and no per-question slot: a question's own images can't be placed, so refuse
+    // before sending rather than drop them. A predicate is asked as Jev's yes/no and returned as a predicate.
+    const questions: Record<string, JevQuestion> = {};
+    for (const [name, question] of Object.entries(request.questions)) {
+      if (question.images?.length) throw unsupportedError(`The ${provider} provider can't show images on one question ("${name}"); attach them to the request's images, or use the decisions provider.`);
+      const { images: _images, ...rest } = question as typeof question & { images?: unknown };
+      questions[name] = rest.type === "predicate" ? { type: "noul", instructions: rest.instructions } : (rest as JevQuestion);
+    }
     const started = Date.now();
     const completion = await complete(
-      buildChatRequest(chosen, request.state, request.questions, config.reasoningEffort ?? defaultReasoningEffort(chosen)),
+      buildChatRequest(chosen, request.state, questions, config.reasoningEffort ?? defaultReasoningEffort(chosen), images),
       options,
     );
-    const raw = toJevAnswers(request.questions, completion.output);
-    const answers: Record<string, JevAnswer> = {};
-    for (const [name, question] of Object.entries(request.questions)) answers[name] = validateAnswer(name, question, raw[name]);
+    const raw = toJevAnswers(questions, completion.output);
+    const answers: Record<string, JudgeAnswer> = {};
+    for (const [name, question] of Object.entries(questions)) {
+      const answer = validateAnswer(name, question, raw[name]);
+      answers[name] = request.questions[name]!.type === "predicate" && answer.type === "noul" ? { type: "predicate", probability: answer.noul } : answer;
+    }
     return {
       answers,
       model: completion.model ?? chosen,
@@ -123,7 +144,7 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
     return { ...(options as Record<string, unknown>) };
   }
 
-  async function structured(request: DecideRequest, schema: Record<string, unknown>, options: { signal?: AbortSignal; timeoutMs?: number }) {
+  async function structured(request: DecideRequest, schema: Record<string, unknown>, options: { signal?: AbortSignal; timeoutMs?: number }, images: readonly NormalizedImage[]) {
     // The Decisions endpoint only picks among options; a free-form schema answer goes to chat completions.
     const chosen = provider === "decisions" && !request.model ? DEFAULT_JEV_MODEL : resolveModel(request.model);
     const effort = config.reasoningEffort ?? defaultReasoningEffort(chosen);
@@ -132,7 +153,7 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
         model: chosen,
         messages: [
           { role: "system", content: "Answer the question from the context alone, in the required JSON shape. Keep `reasoning` to one sentence." },
-          { role: "user", content: JSON.stringify({ question: request.question, context: request.context ?? null }) },
+          { role: "user", content: userContent(JSON.stringify({ question: request.question, context: request.context ?? null }), images) },
         ],
         response_format: { type: "json_schema", json_schema: { name: "decision", strict: true, schema } },
         ...(/^(gpt-5|o\d)/.test(chosen) ? (effort ? { reasoning_effort: effort } : {}) : { temperature: 0 }),
@@ -146,6 +167,7 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
     if (!request.question?.trim()) throw badRequestError("A decision needs a question.");
     const started = Date.now();
     const criteria = criteriaOf(request.options);
+    const images = normalizeImages(request.images);
     if (request.schema) {
       const schema = {
         type: "object",
@@ -153,7 +175,7 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
         required: ["answer", "reasoning"],
         additionalProperties: false,
       };
-      const { completion, chosen } = await structured(request, schema, options);
+      const { completion, chosen } = await structured(request, schema, options, images);
       const output = completion.output as { answer?: unknown; reasoning?: unknown } | undefined;
       if (!output || !("answer" in output)) throw invalidResponseError("The decision model returned no answer.");
       return {
@@ -169,8 +191,12 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
       const question: JevQuestion = criteria
         ? { type: "choice", criteria, instructions: request.question }
         : { type: "noul", instructions: request.question };
-      const result = await judge({ state: (request.context ?? null) as JevAskRequest["state"], questions: { decision: question }, ...(request.model ? { model: request.model } : {}) }, options);
-      const answer = result.answers.decision;
+      const result = await judge(
+        { state: (request.context ?? null) as JevAskRequest["state"], questions: { decision: question }, ...(images.length ? { images } : {}), ...(request.model ? { model: request.model } : {}) },
+        options,
+      );
+      const answer = result.answers.decision!;
+      if (answer.type === "refusal" || answer.type === "predicate") throw invalidResponseError("The decision model declined to answer.");
       const usage = { inputTokens: result.usage.input_tokens, outputTokens: result.usage.output_tokens };
       if (answer.type === "noul") {
         return { choice: answer.noul >= 0.5, confidence: Math.max(answer.noul, 1 - answer.noul), probabilities: { true: answer.noul, false: 1 - answer.noul }, provider, model: result.model, usage, latencyMs: Date.now() - started };
@@ -197,7 +223,7 @@ export function createDecideService(config: DecideConfig = {}, deps: { fetch?: J
       required: ["choice", "confidence", "reasoning"],
       additionalProperties: false,
     };
-    const { completion, chosen } = await structured({ ...request, context: { context: request.context ?? null, options: criteria ?? null } }, schema, options);
+    const { completion, chosen } = await structured({ ...request, context: { context: request.context ?? null, options: criteria ?? null } }, schema, options, images);
     const output = completion.output as { choice?: unknown; confidence?: unknown; reasoning?: unknown } | undefined;
     if (!output || (ids ? !ids.includes(String(output.choice)) : typeof output.choice !== "boolean")) throw invalidResponseError("The decision model's answer is not one of the options.");
     return {

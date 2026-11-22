@@ -50,6 +50,40 @@ The same object can be passed as `createMarshalHost({ models })`; an explicit op
   - `jev` runs Jev's judgement contract and returns a full, validated probability distribution. With options it asks a `choice` question; without options it asks a `noul` (yes/no) question. Pass `questions` + `state` to `marshal.models.decide` (or call `decide.judge`) to ask several named choice / score / yes-no questions at once.
   - `openai` makes one structured-output call and returns `{choice, confidence, reasoning}`.
   - Both providers handle `schema` the same way: the answer object is returned as `choice`.
+
+### Several questions and images in one decide call
+
+`decide.judge({ state, images?, questions })` (or `marshal.models.decide` with `state` + `questions`) answers every named question with **one** request. The question types are:
+
+| Type | Answer |
+| --- | --- |
+| `choice` | `{type: "choice", choice, confidence, probabilities}` |
+| `score` | `{type: "score", score, confidence, probabilities}` |
+| `predicate` | `{type: "predicate", probability}`, the probability that the condition holds |
+| `noul` | Jev's yes/no: `{type: "noul", noul}` |
+
+On `decisions`, a question the model declines comes back as `{type: "refusal"}`, and the other answers still arrive.
+
+`images` attach to the state, after its text. Each image is a `data:image/...;base64,...` URL or a public `http(s)://` URL, either as a plain string or as `{url, detail}`; `detail` is `low`, `high`, `auto` or `original`. `decide.decide({ ..., images })` takes them the same way, `schema` answers included. An image is never dropped:
+
+- On `decisions`, images go as `input_image` parts, and a predicate is the endpoint's own yes/no question.
+- On `jev` and `openai`, images go as chat completions `image_url` parts, `original` is sent as `high`, and a predicate is asked as yes/no and returned as a predicate.
+- A question can carry its own `images`. On `decisions` they go into that question's `instructions`; any other provider refuses with code `JEV_UNSUPPORTED` before sending anything.
+- A malformed image is `JEV_BAD_REQUEST`.
+
+```ts
+const step = await host.models.decide.judge({
+  state: "URL: https://shop.example\ne12 button \"Sign in\"\ne13 link \"Cart\"",
+  images: ["data:image/png;base64,iVBOR..."],
+  questions: {
+    next_action: { type: "choice", criteria: { "click e12": "Sign in", "click e13": "Cart" }, instructions: "Which ONE action opens the cart?" },
+    goal_met: { type: "predicate", instructions: "Is the cart already open?" },
+    page_ready: { type: "predicate", instructions: "Is the page loaded and not covered by a pop-up?" },
+  },
+});
+// step.answers.next_action.choice === "click e13"; step.answers.goal_met.probability === 0.02
+```
+
 - **embed:**
   - `provider` is `gemini` or `local`.
   - `model` defaults to `gemini-embedding-2`.
