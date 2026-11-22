@@ -26,9 +26,27 @@ const SYSTEM_PROMPT = [
   "Follow each question's `instructions`. Use only ids or levels that appear in that question's criteria.",
 ].join("\n");
 
+/** A chat completions content part: text, or an image as a data URL or public https URL. */
+export type ChatContentPart =
+  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "image_url"; readonly image_url: { readonly url: string; readonly detail?: "low" | "high" | "auto" } };
+
+/** The user message's content: plain text, or text followed by image parts when the request carries images. */
+export function userContent(text: string, images: readonly { url: string; detail?: string }[] = []): string | ChatContentPart[] {
+  if (images.length === 0) return text;
+  return [
+    { type: "text", text },
+    // Chat completions knows low/high/auto; `original` (a Decisions-only level) is closest to high.
+    ...images.map((image) => ({
+      type: "image_url" as const,
+      image_url: { url: image.url, ...(image.detail ? { detail: (image.detail === "original" ? "high" : image.detail) as "low" | "high" | "auto" } : {}) },
+    })),
+  ];
+}
+
 export interface OpenAiChatRequest {
   readonly model: string;
-  readonly messages: readonly { readonly role: "system" | "user"; readonly content: string }[];
+  readonly messages: readonly { readonly role: "system" | "user"; readonly content: string | ChatContentPart[] }[];
   readonly response_format: unknown;
   readonly temperature?: number;
   readonly reasoning_effort?: string;
@@ -84,6 +102,7 @@ export function buildChatRequest(
   state: unknown,
   questions: Readonly<Record<string, JevQuestion>>,
   reasoningEffort: string | undefined,
+  images: readonly { url: string; detail?: string }[] = [],
 ): OpenAiChatRequest {
   const names = Object.keys(questions);
   const schema = {
@@ -96,7 +115,7 @@ export function buildChatRequest(
     model,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: JSON.stringify({ state, questions }) },
+      { role: "user", content: userContent(JSON.stringify({ state, questions }), images) },
     ],
     response_format: { type: "json_schema", json_schema: { name: "jev_answers", strict: true, schema } },
     ...(isReasoningModel(model)

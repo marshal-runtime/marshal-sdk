@@ -151,7 +151,9 @@ export type JevClientErrorCode =
   | "JEV_UNAVAILABLE"
   | "JEV_BAD_REQUEST"
   | "JEV_INVALID_RESPONSE"
-  | "JEV_ABORTED";
+  | "JEV_ABORTED"
+  /** The provider can't do what the request asks (e.g. images on one question over chat completions); nothing was sent. */
+  | "JEV_UNSUPPORTED";
 
 // ---------------------------------------------------------------------------
 // Service contract

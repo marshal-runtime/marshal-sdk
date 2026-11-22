@@ -68,3 +68,7 @@ export function invalidResponseError(detail: string): JevClientError {
 export function abortedError(): JevClientError {
   return new JevClientError("JEV_ABORTED", "The request was aborted.");
 }
+
+export function unsupportedError(detail: string): JevClientError {
+  return new JevClientError("JEV_UNSUPPORTED", detail);
+}
