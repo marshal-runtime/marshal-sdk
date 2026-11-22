@@ -47,17 +47,6 @@ export interface ResolvedFirstPartyExtension {
 export const FIRST_PARTY_EXTENSION_CATALOG: readonly FirstPartyExtensionCatalogManifestEntry[] =
   Object.freeze([
     Object.freeze({
-      identity: "@marshal/browser",
-      version: "0.1.0",
-      packageName: "@marshal/browser",
-      bundledLocation: Object.freeze(["@marshal", "browser"]),
-      integrity: Object.freeze({
-        algorithm: "sha256" as const,
-        domain: INTEGRITY_DOMAIN,
-        value: "3c0d4dbae2499b5f8efecc02978364bf1ac1f6a615694aced66fd2001bc77929",
-      }),
-    }),
-    Object.freeze({
       identity: "@marshal/agentic-debugger-extension",
       version: "1.0.0",
       packageName: "@marshal/agentic-debugger-extension",
@@ -96,7 +85,8 @@ export const FIRST_PARTY_EXTENSION_CATALOG: readonly FirstPartyExtensionCatalogM
 /**
  * Extensions an earlier Marshal release bundled and this one no longer ships. Their stored records
  * point at packages that are gone from the app, so the host drops them at start instead of
- * restoring them as unavailable entries. Replaced by @marshal/browser.
+ * restoring them as unavailable entries. Replaced by @marshal/browser, which comes from the
+ * organization's recommended extensions (or a local install), not from this catalog.
  */
 export const RETIRED_FIRST_PARTY_EXTENSION_IDENTITIES: ReadonlySet<string> = new Set([
   "@agentic-browser/automation-extension",

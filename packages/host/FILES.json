@@ -79,7 +79,6 @@
   "electron/marshal-runtime/lifecycle-workspace-pins.ts",
   "electron/marshal-runtime/local-extension-hot-reload.ts",
   "electron/marshal-runtime/local-source.ts",
-  "electron/marshal-runtime/marshal-browser-extension-pin.generated.ts",
   "electron/marshal-runtime/memory-reasoner-adapter.ts",
   "electron/marshal-runtime/memory/fallback-memory-ops.ts",
   "electron/marshal-runtime/memory/forget-completely-approval.ts",
