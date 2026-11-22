@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { copyFile, lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 
@@ -142,6 +143,52 @@ import { createMarshalReactUiOptions } from "./ui-packages";
 export const WORKSPACE_METADATA_KEY = "marshalWorkspaceName";
 const MARSHAL_HOST_PROVIDER_PREFIX = "marshal.host.";
 
+const SEMANTIC_VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/u;
+
+/** Semantic version precedence; undefined when either side is not a semantic version. */
+function compareSemanticVersions(left: string, right: string): number | undefined {
+  const a = SEMANTIC_VERSION.exec(left);
+  const b = SEMANTIC_VERSION.exec(right);
+  if (!a || !b) return undefined;
+  for (const index of [1, 2, 3]) {
+    const diff = Number(a[index]) - Number(b[index]);
+    if (diff !== 0) return Math.sign(diff);
+  }
+  const [preA, preB] = [a[4], b[4]];
+  if (preA === preB) return 0;
+  if (preA === undefined) return 1;
+  if (preB === undefined) return -1;
+  const partsA = preA.split(".");
+  const partsB = preB.split(".");
+  for (let index = 0; index < Math.max(partsA.length, partsB.length); index += 1) {
+    const [x, y] = [partsA[index], partsB[index]];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (x === y) continue;
+    const [numericX, numericY] = [/^\d+$/u.test(x), /^\d+$/u.test(y)];
+    if (numericX && numericY) return Math.sign(Number(x) - Number(y));
+    if (numericX) return -1;
+    if (numericY) return 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * A bundled extension's installed copy is kept, instead of being re-pointed to the bundled package, only
+ * when its version is strictly newer than the bundled one (a local update or a newer organization catalog
+ * version) and its package is still on disk. Equal, older, unparseable or missing copies go to the pin.
+ */
+function keepsNewerInstalledCopy(
+  installed: { readonly version: string; readonly request: { readonly packageRoot: string } },
+  bundled: { readonly version: string },
+): boolean {
+  return (
+    (compareSemanticVersions(installed.version, bundled.version) ?? 0) > 0 &&
+    existsSync(path.join(installed.request.packageRoot, "runtime-extension.json"))
+  );
+}
+
 async function ensureBundledExtension(
   lifecycle: RuntimeExtensionLifecycleService,
   extension: {
@@ -154,6 +201,7 @@ async function ensureBundledExtension(
   const installed = lifecycle.get(extension.identity);
   const needsRefresh =
     installed !== undefined &&
+    !keepsNewerInstalledCopy(installed, extension) &&
     (installed.version !== extension.version ||
       installed.request.packageRoot !== extension.request.packageRoot ||
       installed.integrity.value !== extension.request.integrity.value ||
@@ -229,6 +277,7 @@ async function reconcileBundledExtensionState(
   const records = await stateStore.load();
   const installed = records.find(({ identity }) => identity === extension.identity);
   if (!installed) return;
+  if (keepsNewerInstalledCopy(installed, extension)) return;
   if (
     installed.version === extension.version &&
     installed.request.packageRoot === extension.request.packageRoot &&
