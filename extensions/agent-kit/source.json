@@ -112,7 +112,8 @@
     "sandbox/daytona/zs-config.ts",
     "sandbox/daytona/zs-ws-connect.ts",
     "sandbox/ssh.ts",
-    "sandbox/ssh-target.ts"
+    "sandbox/ssh-target.ts",
+    "proxy.ts"
   ],
   "extracts": {
     "claude.ts": [
@@ -134,9 +135,6 @@
     ],
     "prompt-v2.ts": [
       "loadSoul"
-    ],
-    "proxy.ts": [
-      "Usage"
     ],
     "store.ts": [
       "ConversationKey",
@@ -269,6 +267,16 @@
     ],
     "sandbox/product-store-script.ts": [
       "RECOVER_PRODUCT_MANIFEST"
+    ],
+    "pool/pool-types.ts": [
+      "PlanUsage"
+    ],
+    "pool/usage-windows.ts": [
+      "windowsFromHeaders"
+    ],
+    "browser-decide.ts": [
+      "BROWSER_DECIDE_PATH",
+      "DECIDE_MAX_BODY_BYTES"
     ]
   },
   "packages": {
