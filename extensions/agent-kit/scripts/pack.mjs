@@ -22,7 +22,7 @@ const source = JSON.parse(fs.readFileSync(path.join(kit, "source.json"), "utf8")
 const sha = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 
 const aliases = {
-  "@zygstinct/marshal-sdk-port": "src/compat/sdk-port.ts",
+  "@zygstinct/marshal-sdk-port": "src/compat/sdk-port-core.ts",
   "@zygstinct/marshal-sdk-port/host": "src/compat/sdk-port-host.ts",
   "@zygstinct/marshal-sdk-port/agent-sdk": "src/compat/sdk-port-agent-sdk.ts",
   "@zygstinct/shared": "src/compat/zygstinct-shared.ts",
@@ -54,7 +54,7 @@ const peers = {
   pg: kitPackage.dependencies.pg,
   yaml: "^2.0.0",
 };
-const peerPrefixes = ["@marshal/agent-runtime-", "@marshal/runtime"];
+const peerPrefixes = ["@marshal/agent-runtime-"];
 
 const stage = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR ?? "/tmp"), "marshal-agent-kit-"));
 const result = await build({
