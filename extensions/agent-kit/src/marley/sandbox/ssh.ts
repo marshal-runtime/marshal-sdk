@@ -1,8 +1,10 @@
-// Extract of zygstinct apps/agent-server/src/sandbox/ssh.ts at 7110e58c8: only shellQuote, SshRunner:declare.
+// Extract of zygstinct apps/agent-server/src/sandbox/ssh.ts at 7110e58c8: only shellQuote, SshRunner:declare, Exec, brandPaths.
 import { type ChildProcess } from "node:child_process";
 import type { SpawnedProcess, SpawnOptions } from "@zygstinct/marshal-sdk-port/agent-sdk";
 import type { ConversationKey } from "../store.js";
 import { type SshTarget } from "./ssh-target.js";
+
+export const DEFAULT_BRANDS_ROOT = "/srv/zygstinct/brands";
 
 /** Where a brand lives on its VM. */
 export interface BrandPaths {
@@ -12,6 +14,11 @@ export interface BrandPaths {
   configDir: string;
   /** `.claude/projects`: the SDK session transcripts. */
   projects: string;
+}
+
+export function brandPaths(brandId: string, root: string = DEFAULT_BRANDS_ROOT): BrandPaths {
+  const home = `${root}/${brandId}`;
+  return { home, work: `${home}/work`, repo: `${home}/repo`, configDir: `${home}/.claude`, projects: `${home}/.claude/projects` };
 }
 
 export interface SshConfig {
@@ -38,6 +45,22 @@ export interface ExecResult {
   stderr: string;
   /** The raw bytes of stdout, for binary streams (tar). */
   raw: Buffer;
+}
+
+/** Runs one command on a brand's VM as the brand user. The SSH runner and the tests' local runner both fit. */
+export interface Exec {
+  /** Local harnesses bind VM filesystem targets to their private fixture root. */
+  validatePaths?(targets: readonly string[]): void;
+  run(ip: SshTarget, brandId: string, command: string, options?: { stdin?: string | Buffer; timeoutMs?: number; chat?: ConversationKey }): Promise<ExecResult>;
+  /**
+   * Grants (true, renewing a 30 minute grant) or revokes (false) the per-turn data grant of one chat. `readSeq` (data-grant.ts `nextGrantRead`) orders the
+   * fresh reads that decided it: a value from an older read than the last one written is not written (`superseded`).
+   */
+  bindKeyGrant?(ip: SshTarget, brandId: string, id: string, allow: boolean | "owner_report", readSeq?: number, keepWithinMs?: number): Promise<KeyGrantWrite>;
+  /** Marks the chat an eval conversation on its sandbox (`zs-chat-eval`): from then on every login of that chat has the brand repo read-only. Never undone; a failure must fail the turn. */
+  bindEval?(ip: SshTarget, brandId: string, id: string): Promise<void>;
+  /** Opens the multiplexed masters of the brand user and of the chat user ahead of the commands that need them (a sandbox target only). Never rejects. */
+  warmConnections?(ip: SshTarget, brandId: string, chat?: ConversationKey): Promise<void>;
 }
 
 /** What one grant bind did: wrote the value, kept a deny already in place, or skipped a value whose read is older than the last one written. */

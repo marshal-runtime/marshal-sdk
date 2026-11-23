@@ -100,7 +100,17 @@
     "tasks/tool-gate.ts",
     "types.ts",
     "vertex.ts",
-    "voice-reply.ts"
+    "voice-reply.ts",
+    "sandbox/daytona/carry-over.ts",
+    "sandbox/daytona/chat-backup-store.ts",
+    "sandbox/daytona/client.ts",
+    "sandbox/daytona/code-layer.ts",
+    "sandbox/daytona/credentials.ts",
+    "sandbox/daytona/id-access.ts",
+    "sandbox/daytona/provider.ts",
+    "sandbox/daytona/snapshot-upgrade.ts",
+    "sandbox/daytona/zs-config.ts",
+    "sandbox/daytona/zs-ws-connect.ts"
   ],
   "extracts": {
     "claude.ts": [
@@ -128,7 +138,9 @@
     ],
     "sandbox/ssh.ts": [
       "shellQuote",
-      "SshRunner:declare"
+      "SshRunner:declare",
+      "Exec",
+      "brandPaths"
     ],
     "store.ts": [
       "ConversationKey",
@@ -157,7 +169,8 @@
       "ownerReportCoverage"
     ],
     "tasks/runtime-features.ts": [
-      "FeatureAnswer"
+      "FeatureAnswer",
+      "RUNTIME_FILE"
     ],
     "state/living-state.ts": [
       "SHEET_CURATOR"
@@ -218,6 +231,48 @@
     ],
     "tasks/handoff.ts": [
       "HandoffChat"
+    ],
+    "backup.ts": [
+      "downloadObject",
+      "ObjectDownloadError",
+      "uploadObject"
+    ],
+    "config.ts": [
+      "ServerConfig"
+    ],
+    "sandbox/brain-tokens.ts": [
+      "brainAccount",
+      "brainScopesFor",
+      "iamTokenMinter",
+      "STAGING_BRAIN_SCOPES",
+      "MintedToken"
+    ],
+    "sandbox/brand-link.ts": [
+      "BrandLinks"
+    ],
+    "sandbox/brand-environment.ts": [
+      "BrandNotInEnvironmentError"
+    ],
+    "object-store.ts": [
+      "googleObjectStore",
+      "ObjectTooLarge",
+      "ObjectStore"
+    ],
+    "routine-state/ua-files.ts": [
+      "UA_DURABLE_PATTERNS",
+      "UA_SCRATCH_PATTERNS"
+    ],
+    "brand-runtime-repo.ts": [
+      "syncRuntimeRepo",
+      "verifyRuntimeSource"
+    ],
+    "mirror/mirror.ts": [
+      "BrandMirror",
+      "DivergedArchiveResult",
+      "MirrorVm"
+    ],
+    "connect-ladder.ts": [
+      "ConnectOffers"
     ]
   },
   "packages": {
