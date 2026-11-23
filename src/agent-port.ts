@@ -16,7 +16,7 @@ import {
 } from "./session-messages.js";
 import type { SessionStore, SessionFork, SessionRecord, TranscriptMessage } from "./session-store.js";
 import { nativeSubagentHook } from "./native-tools.js";
-import { toClaudePermissionResult, toRuntimePermissionRequest, type RuntimePermissionHandler } from "./providers.js";
+import { toClaudePermissionResult, toRuntimePermissionRequest, type AntigravityRemoteBridge, type RuntimePermissionHandler } from "./providers.js";
 
 /**
  * What a turn carries for provider clients beside the Claude Agent SDK's options (which read only string keys): the
@@ -42,6 +42,13 @@ export interface TurnExtras {
    * the process passes options; every user message pushed into the process carries its own turn's id under `TURN_ID`.
    */
   turnId?: string;
+  /** The launch's Antigravity bridge on another machine (AgentLaunchOptions.antigravityBridge). */
+  antigravityBridge?: AntigravityRemoteBridge;
+  /**
+   * The provider a host's `providerFor` routed this turn's session to, when the host's own `query` wraps routed turns
+   * (MarshalHostOptions.wrapRoutedTurns): its runtime id and its query, which the wrapper calls to run the model.
+   */
+  routedProvider?: { runtime: string; query: QueryFn };
 }
 
 /**
@@ -169,6 +176,11 @@ export interface AgentLaunchOptions {
   outputFormat?: unknown;
   /** Start the Claude Code process yourself (a remote machine, a sandbox user). */
   spawnClaudeCodeProcess?: (options: any) => unknown;
+  /**
+   * Antigravity's counterpart of `spawnClaudeCodeProcess`: run the session's Antigravity bridge on another machine
+   * (a brand VM over ssh) whose model calls go to a credential-holding proxy. Other providers ignore it.
+   */
+  antigravityBridge?: AntigravityRemoteBridge;
   /** MCP servers of this session, added to the host's (or alone, with hostMcpServers false). */
   mcpServers?: Readonly<Record<string, unknown>>;
   /** Give the session the host's MCP servers (the marshal runtime tools, the browser). Default true. */
@@ -255,6 +267,12 @@ export interface AgentPortOptions {
   query: QueryFn;
   /** The runtime the sessions run on (the provider id: claude, codex, cursor, openai); recorded as the session's runtimeId. Default claude. */
   runtimeId?: string;
+  /**
+   * The runtime of a new session with this model, when sessions of one port run on different providers (the host's
+   * `providerFor`): recorded as its runtimeId, which then decides what is Claude-only for that session (a live process,
+   * the transcript store). Absent: every session runs on `runtimeId`.
+   */
+  runtimeIdFor?: (model: string | undefined) => string;
   store: SessionStore;
   /** Working directory of every session, and the directory the backend files its native history under. */
   cwd: string;
@@ -491,14 +509,21 @@ export class ClaudeAgentPort {
     };
   }
 
+  /** The runtime a session's turns run on: its own recorded one when sessions are routed per model, else the port's. */
+  private runtimeOf(session: SessionRecord): string {
+    if (this.options.runtimeIdFor) return session.runtimeId ?? session.runtime;
+    return this.options.runtimeId ?? "claude";
+  }
+
   launch(request: AgentLaunchRequest): AgentSummary {
     const existing = this.launches.get(request.idempotencyKey);
     if (existing) return this.summary(existing);
+    const model = request.model ?? this.options.settings?.().model ?? this.options.defaultModel;
     const session = this.options.store.create({
       ...(request.sessionId ? { id: request.sessionId } : {}),
       title: request.name ?? request.task.slice(0, 80),
-      runtime: this.options.runtimeId ?? "claude",
-      model: request.model ?? this.options.settings?.().model ?? this.options.defaultModel,
+      runtime: this.options.runtimeIdFor?.(model || undefined) ?? this.options.runtimeId ?? "claude",
+      model,
       reasoningEffort: request.reasoningEffort ?? this.options.settings?.().reasoningEffort ?? this.options.defaultReasoningEffort,
       native: {
         kind: "claude",
@@ -795,7 +820,7 @@ export class ClaudeAgentPort {
     const hostPrompt = basePrompt !== undefined && session.systemPromptAppend ? `${basePrompt}\n\n${session.systemPromptAppend}` : basePrompt;
     const systemPrompt = agent.systemPrompt ?? hostPrompt;
     const launch = mergeLaunchOptions(this.options.launchOptionsFor?.(session), agent.launchOptions);
-    const live = this.options.live && (this.options.runtimeId ?? "claude") === "claude" && (this.options.liveFor?.(session) ?? true) ? this.options.live : undefined;
+    const live = this.options.live && this.runtimeOf(session) === "claude" && (this.options.liveFor?.(session) ?? true) ? this.options.live : undefined;
     agent.structuredOutput = undefined;
     const extraArgs = { ...launch.extraArgs, ...(launch.disableSlashCommands ? { "disable-slash-commands": null } : {}) };
     // A fork carries its parent's prompt, so it counts as the host's prompt when the text is the same.
@@ -824,7 +849,7 @@ export class ClaudeAgentPort {
       // The store keeps the backend's transcript: the Agent SDK mirrors each batch to it while the turn runs and, when a
       // session resumes, loads it from there before the backend starts (a store answers null when the machine already has it).
       // A session reads as idle without waiting for any of it to reach the cloud.
-      ...(store.transcripts && (this.options.runtimeId ?? "claude") === "claude" ? { sessionStore: store.transcripts.bind ? store.transcripts.bind(agent.id) : store.transcripts } : {}),
+      ...(store.transcripts && this.runtimeOf(session) === "claude" ? { sessionStore: store.transcripts.bind ? store.transcripts.bind(agent.id) : store.transcripts } : {}),
       // A live process keeps the servers it started with, so they are made only when one starts (openProcess).
       mcpServers: live ? {} : this.mcpServersOf(session, launch),
       // A launch's own prompt (a fork's included) is rendered fresh on every request: recorded once, a resumed or
@@ -863,6 +888,7 @@ export class ClaudeAgentPort {
         ...(surface ? { nativeSubagentAllowlist: [...surface.subagentAllowlist] } : {}),
         ...(launch.env ? { launchEnv: true } : {}),
         ...(live ? { live: true } : {}),
+        ...(launch.antigravityBridge ? { antigravityBridge: launch.antigravityBridge } : {}),
         // The provider's own session id is not the Marshal one; the handler always gets the Marshal session.
         ...(permissionHandler ? { permissionHandler: (request) => permissionHandler(request, { sessionId: agent.id }) } : {}),
       } satisfies TurnExtras,

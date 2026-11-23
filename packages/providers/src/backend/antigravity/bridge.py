@@ -309,11 +309,18 @@ class BridgeSession:
 
   def _endpoint(self):
     endpoint = self.config.get("endpoint") or {}
+    # A proxy endpoint: every model call goes to baseUrl with httpHeaders, and the SDK then needs no key and reads
+    # no GOOGLE_CLOUD_* from this machine's environment.
+    routing = {}
+    if endpoint.get("baseUrl"):
+      routing["base_url"] = endpoint["baseUrl"]
+      if endpoint.get("httpHeaders"):
+        routing["http_headers"] = dict(endpoint["httpHeaders"])
     if endpoint.get("kind") == "vertex":
       if endpoint.get("apiKey"):
-        return agy_models.VertexEndpoint(api_key=endpoint["apiKey"])
-      return agy_models.VertexEndpoint(project=endpoint.get("project"), location=endpoint.get("location"))
-    return agy_models.GeminiAPIEndpoint(api_key=endpoint.get("apiKey"))
+        return agy_models.VertexEndpoint(api_key=endpoint["apiKey"], **routing)
+      return agy_models.VertexEndpoint(project=endpoint.get("project"), location=endpoint.get("location"), **routing)
+    return agy_models.GeminiAPIEndpoint(api_key=endpoint.get("apiKey"), **routing)
 
   def _models(self):
     endpoint = self._endpoint()

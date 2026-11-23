@@ -39,6 +39,8 @@ export const ANTIGRAVITY_WRITE_TOOLS = new Set([
 ]);
 export const ANTIGRAVITY_URL_TOOLS = new Set(["read_url_content", "search_web"]);
 export const ANTIGRAVITY_SHELL_TOOL = "run_command";
+/** The built-in that ends a turn with its structured answer (the Agent's response_schema); it runs nothing. */
+export const ANTIGRAVITY_FINISH_TOOL = "finish";
 /**
  * Built-in tools whose job Marshal owns (askUser, forkSubagents, workflows,
  * automations), kept out of a session on Marshal's tool surface like Claude's
