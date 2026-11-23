@@ -33,3 +33,5 @@ export * as routineEvents from "./marley/routines/events.js";
 
 /** The Slack channel binding (the `@marshal/agent-kit-slack` extension's service). */
 export * as slackChannel from "./channels/slack.js";
+/** The GitHub channel binding (the `@marshal/agent-kit-github` extension's service). */
+export * as githubChannel from "./channels/github.js";

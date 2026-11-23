@@ -41,11 +41,26 @@ export interface Sandbox {
   stop?(scope: string): Promise<void>;
 }
 
-/** How words reach a person: the outbox's send for one conversation (Marley's `ComposedSend`), bound per channel kind. */
+/** A posted part: the outbox's outcome and, when it was posted, the message's id on the channel (a Slack ts, a GitHub comment's URL). */
+export interface ChannelPosted {
+  outcome: ComposedOutcome;
+  id: string | null;
+}
+
+/**
+ * How words reach a person: the outbox's send for one conversation (Marley's `ComposedSend`), bound per channel kind. `post` is the same send
+ * with the posted message's id, for a host that records what it sent; `acknowledge` tells a person their message was taken (`messageId` is the
+ * host's id of it, whose last `:` segment is the channel's own id; `text` its words, for a channel that picks the acknowledgement by them).
+ */
 export interface Channel {
   readonly kind: string;
   send(key: ConversationKey, part: ComposedPart, idempotencyKey: string, origin: SendOrigin): Promise<ComposedOutcome>;
+  post?(key: ConversationKey, part: Pick<ComposedPart, "kind" | "text">, idempotencyKey: string): Promise<ChannelPosted>;
+  acknowledge?(key: ConversationKey, messageId: string, text?: string): Promise<void>;
 }
+
+/** The channel's own id of a host message id (`slack:<channel>:<ts>` → `<ts>`); an id without `:` is its own. */
+export const channelMessageId = (messageId: string): string => messageId.slice(messageId.lastIndexOf(":") + 1);
 
 /** The channels a host bound, by kind: the outbox's send for a conversation goes to the channel of its key's `channel`. */
 export function channelSend(channels: readonly Channel[]): (key: ConversationKey, part: ComposedPart, idempotencyKey: string, origin: SendOrigin) => Promise<ComposedOutcome> {

@@ -38,10 +38,21 @@ const extensions = [
     identity: "@marshal/agent-kit-slack",
     displayName: "Agent kit: Slack channel",
     guidance: {
-      purpose: "Sends the agent kit outbox's words to Slack as the bot (chat.postMessage in the conversation's thread).",
+      purpose: "Sends the agent kit outbox's words to Slack as the bot in the conversation's thread, and reacts to a person's message to say it was taken.",
       when: "A host whose agents talk to people on Slack binds it as one of its channels.",
-      recipe: "Host binds @marshal/agent-kit:slack-host {token}; reads its channel with services.getAll(Symbol.for('@marshal/agent-kit:channel')).",
+      recipe: "Host binds @marshal/agent-kit:slack-host {token, pickReaction?}; reads services.getAll(Symbol.for('@marshal/agent-kit:channel')).",
       boundaries: "Text parts only; a voice part is refused. Posts only where the conversation key points.",
+    },
+  },
+  {
+    name: "github",
+    identity: "@marshal/agent-kit-github",
+    displayName: "Agent kit: GitHub channel",
+    guidance: {
+      purpose: "Sends the agent kit outbox's words to GitHub as comments on the conversation's pull request or issue.",
+      when: "A host whose agents answer people on GitHub binds it as one of its channels.",
+      recipe: "Host binds @marshal/agent-kit:github-host {comment(repo, number, body)}; reads services.getAll(Symbol.for('@marshal/agent-kit:channel')).",
+      boundaries: "Comments only where the conversation key points; the host's App or token stays in its comment call.",
     },
   },
   {

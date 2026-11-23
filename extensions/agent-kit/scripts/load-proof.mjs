@@ -31,7 +31,14 @@ execFileSync(process.execPath, [path.join(kit, "scripts/build-extensions.mjs"), 
 const services = composer.createRuntimeServiceContainer();
 const slackCalls = [];
 await services.bind(Symbol.for("@marshal/agent-kit:slack-host"), {
-  useValue: { call: async (method, body) => (slackCalls.push({ method, body }), { ok: true, ts: "1763900000.000100" }) },
+  useValue: {
+    call: async (method, body) => (slackCalls.push({ method, body }), method === "reactions.add" && body.name === "rotating_light" ? { ok: false, error: "invalid_name" } : { ok: true, ts: "1763900000.000100" }),
+    pickReaction: async (text) => (text.includes("urgent") ? "rotating_light" : "heart"),
+  },
+});
+const githubComments = [];
+await services.bind(Symbol.for("@marshal/agent-kit:github-host"), {
+  useValue: { comment: async (repo, number, body) => (githubComments.push({ repo, number, body }), `https://github.com/${repo}/issues/${number}#issuecomment-${githubComments.length}`) },
 });
 const daytonaLog = [];
 const proxySessions = [];
@@ -69,7 +76,7 @@ const manager = new extensions.RuntimeExtensionManager({
   activationContext: { principal: { id: "agent-kit-load-proof", kind: "agent" }, scope: { workspaceId: "agent-kit" } },
   stateStore: new extensions.JsonFileRuntimeExtensionStateStore(path.join(work, "extension-state.json")),
 });
-for (const name of ["slack", "daytona"]) {
+for (const name of ["slack", "github", "daytona"]) {
   const packageRoot = fs.realpathSync(path.join(packages, name));
   const record = await manager.install({ packageRoot, integrity: extensions.computeRuntimeExtensionIntegrity(packageRoot) });
   console.log(`installed ${record.identity ?? record.manifest?.identity}@${record.version ?? record.manifest?.version}: ${record.state ?? record.status ?? "?"}`);
@@ -78,8 +85,7 @@ console.log("manager:", manager.list().map((entry) => `${entry.identity ?? entry
 
 // The channel: one Slack binding among the host's channels.
 const channels = services.getAll(Symbol.for("@marshal/agent-kit:channel"));
-assert.equal(channels.length, 1);
-assert.equal(channels[0].kind, "slack");
+assert.deepEqual(channels.map((channel) => channel.kind), ["slack", "github"]);
 const key = { brandId: "zyg-agents", channel: "slack", conversationId: "D0PROOF:1763899999.000200" };
 const origin = { pendingIds: [1], turnId: "turn-proof", memberId: "U0PROOF" };
 const part = { kind: "text", text: "proof: the kit's Slack channel posts this", lang: "en", voiceName: null };
@@ -88,7 +94,18 @@ assert.equal(await channels[0].send(key, part, "idem-1", origin), "sent");
 assert.equal(slackCalls.length, 1, "a key already posted is not posted again");
 assert.deepEqual(slackCalls[0], { method: "chat.postMessage", body: { channel: "D0PROOF", text: part.text, thread_ts: "1763899999.000200" } });
 assert.equal(await channels[0].send(key, { ...part, kind: "voice" }, "idem-2", origin), "refused");
-console.log("channel @marshal/agent-kit:channel -> slack: sent once in the thread, deduped, voice refused");
+assert.deepEqual(await channels[0].post(key, { kind: "text", text: "posted" }, "idem-p"), { outcome: "sent", id: "1763900000.000100" });
+slackCalls.length = 0;
+await channels[0].acknowledge(key, "slack:D0PROOF:1763899999.000300", "thanks!");
+await channels[0].acknowledge(key, "slack:D0PROOF:1763899999.000400", "urgent: prod is down");
+assert.deepEqual(slackCalls.map((entry) => [entry.body.timestamp, entry.body.name]), [["1763899999.000300", "heart"], ["1763899999.000400", "rotating_light"], ["1763899999.000400", "eyes"]]);
+console.log("channel @marshal/agent-kit:channel -> slack: sent once in the thread, deduped, voice refused, post gives the ts, acknowledge reacts with the picked reaction (eyes when Slack refuses it)");
+const prKey = { brandId: "zyg-agents", channel: "github", conversationId: "zyg-edge/zyg-agents:2004" };
+assert.deepEqual(await channels[1].post(prKey, { kind: "text", text: "on it" }, "gh-1"), { outcome: "sent", id: "https://github.com/zyg-edge/zyg-agents/issues/2004#issuecomment-1" });
+assert.equal(await channels[1].send(prKey, part, "gh-1", origin), "sent");
+assert.equal(await channels[1].send({ ...prKey, conversationId: "zyg-edge/zyg-agents" }, part, "gh-2", origin), "refused");
+assert.deepEqual(githubComments, [{ repo: "zyg-edge/zyg-agents", number: 2004, body: "on it" }]);
+console.log("channel @marshal/agent-kit:channel -> github: one comment through the host, its URL as the id, deduped, no issue number refused");
 
 // The sandbox: Daytona, routed through the host's provider, ssh runner and proxy.
 const sandbox = services.get(Symbol.for("@marshal/agent-kit:sandbox"));
@@ -126,7 +143,7 @@ await build({ entryPoints: [path.join(kit, "src/bindings.ts")], outfile: hostBun
 const host = await import(pathToFileURL(hostBundle).href);
 const bindings = host.kitBindings(services);
 assert.equal(bindings.sandbox.kind, "daytona");
-assert.deepEqual(bindings.channels.map((channel) => channel.kind), ["slack"]);
+assert.deepEqual(bindings.channels.map((channel) => channel.kind), ["slack", "github"]);
 assert.equal(await bindings.send(key, { ...part, text: "via the host entry" }, "idem-3", origin), "sent");
 assert.equal(await bindings.send({ ...key, channel: "whatsapp" }, part, "idem-4", origin), "refused");
 const sdkOptions = await host.sandboxSessionOptions(services, { scope: brand, conversation: chat, runId: "run-host", front: true }, "turn");
