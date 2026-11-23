@@ -1,5 +1,7 @@
 /** The kit's interfaces: Sandbox and Channel, the two places a host binds an extension. */
 export * from "./contracts.js";
+/** The bound extensions as an engine uses them (the Agent SDK options of a sandboxed session, the outbox's send). */
+export * from "./bindings.js";
 
 /** Marley's one outbox: material, moments, holds, the fallback and the send (outbox/outbox.ts). */
 export * as outbox from "./marley/outbox/outbox.js";

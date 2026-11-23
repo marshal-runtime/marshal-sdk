@@ -119,9 +119,27 @@ assert.throws(() => sandbox.spawn(target, { scope: brand, runId: "run-proof-3" }
 assert.deepEqual(daytonaLog, [["ensure", brand, "turn"], ["stop", brand]]);
 console.log("sandbox @marshal/agent-kit:sandbox -> daytona: ensure via provider, spawn via proxy+port+ssh, proxy session closed on exit, stop forgets the target");
 
+// The host entry: an engine asks the kit for a session's Agent SDK options and its outbox send, over whatever the extensions bound.
+const { build } = await import("esbuild");
+const hostBundle = path.join(work, "bindings.mjs");
+await build({ entryPoints: [path.join(kit, "src/bindings.ts")], outfile: hostBundle, bundle: true, format: "esm", platform: "node", logLevel: "warning", external: ["@anthropic-ai/claude-agent-sdk"] });
+const host = await import(pathToFileURL(hostBundle).href);
+const bindings = host.kitBindings(services);
+assert.equal(bindings.sandbox.kind, "daytona");
+assert.deepEqual(bindings.channels.map((channel) => channel.kind), ["slack"]);
+assert.equal(await bindings.send(key, { ...part, text: "via the host entry" }, "idem-3", origin), "sent");
+assert.equal(await bindings.send({ ...key, channel: "whatsapp" }, part, "idem-4", origin), "refused");
+const sdkOptions = await host.sandboxSessionOptions(services, { scope: brand, conversation: chat, runId: "run-host", front: true }, "turn");
+assert.equal(sdkOptions.cwd, `/srv/zygstinct/brands/${brand}/work`);
+const hostChild = sdkOptions.spawnClaudeCodeProcess({ command: "claude", args: [], env: {}, signal: abort.signal });
+assert.equal(spawned.at(-1).child, hostChild);
+assert.equal(spawned.at(-1).input.dummyKey, "dummy-run-host");
+console.log("host entry: kitBindings sends through the bound channel (unbound kind refused); sandboxSessionOptions gives the SDK cwd + spawnClaudeCodeProcess in the ensured sandbox");
+
 // Swapping a binding is installing another extension: removing the Daytona one leaves no sandbox.
 await manager.remove("@marshal/agent-kit-daytona");
 assert.equal(services.tryGet(Symbol.for("@marshal/agent-kit:sandbox")), undefined);
+await assert.rejects(host.sandboxSessionOptions(services, { scope: brand, runId: "run-none" }, "turn"), { name: "NoSandboxError" });
 console.log("removed @marshal/agent-kit-daytona: no sandbox bound");
 console.log("LOAD PROOF OK");
 fs.rmSync(work, { recursive: true, force: true });
