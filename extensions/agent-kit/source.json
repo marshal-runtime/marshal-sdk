@@ -110,7 +110,9 @@
     "sandbox/daytona/provider.ts",
     "sandbox/daytona/snapshot-upgrade.ts",
     "sandbox/daytona/zs-config.ts",
-    "sandbox/daytona/zs-ws-connect.ts"
+    "sandbox/daytona/zs-ws-connect.ts",
+    "sandbox/ssh.ts",
+    "sandbox/ssh-target.ts"
   ],
   "extracts": {
     "claude.ts": [
@@ -135,12 +137,6 @@
     ],
     "proxy.ts": [
       "Usage"
-    ],
-    "sandbox/ssh.ts": [
-      "shellQuote",
-      "SshRunner:declare",
-      "Exec",
-      "brandPaths"
     ],
     "store.ts": [
       "ConversationKey",
@@ -203,9 +199,6 @@
     ],
     "extension-registry/routine-specs.ts": [
       "RoutineSpecs:declare"
-    ],
-    "sandbox/ssh-target.ts": [
-      "SshTarget"
     ],
     "ua-figures.ts": [
       "UaFigures:declare"
@@ -273,6 +266,9 @@
     ],
     "connect-ladder.ts": [
       "ConnectOffers"
+    ],
+    "sandbox/product-store-script.ts": [
+      "RECOVER_PRODUCT_MANIFEST"
     ]
   },
   "packages": {
