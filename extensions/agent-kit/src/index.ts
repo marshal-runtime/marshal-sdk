@@ -28,3 +28,6 @@ export * as soul from "./marley/prompt-v2.js";
 
 /** Routine run events (routines/events.ts). */
 export * as routineEvents from "./marley/routines/events.js";
+
+/** The Slack channel binding (the `@marshal/agent-kit-slack` extension's service). */
+export * as slackChannel from "./channels/slack.js";

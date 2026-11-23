@@ -1,7 +1,32 @@
-// Extract of zygstinct apps/agent-server/src/claude.ts at 7110e58c8: only ComposeRunRequest.
+// Extract of zygstinct apps/agent-server/src/claude.ts at 7110e58c8: only ComposeRunRequest, PortAllocator.
 import type { Role } from "./engine/roles.js";
 import { type ConversationKey } from "./store.js";
 import { ComposeToolRefusedError } from "./types.js";
+
+/** Gives each session a loopback port on its VM for the reverse tunnel; two live sessions never share one. */
+export class PortAllocator {
+  private readonly used = new Set<number>();
+  private next: number;
+
+  constructor(
+    private readonly low = 41_000,
+    private readonly high = 45_999,
+  ) {
+    this.next = low;
+  }
+
+  take(): { port: number; release(): void } {
+    for (let i = 0; i <= this.high - this.low; i += 1) {
+      const port = this.next;
+      this.next = this.next >= this.high ? this.low : this.next + 1;
+      if (!this.used.has(port)) {
+        this.used.add(port);
+        return { port, release: () => void this.used.delete(port) };
+      }
+    }
+    throw new Error("no free tunnel port");
+  }
+}
 
 /** The composer's question (outbox/sandbox-composer.ts): which conversation and sandbox, its words, and the JSON Schema of its structured answer. */
 export interface ComposeRunRequest {

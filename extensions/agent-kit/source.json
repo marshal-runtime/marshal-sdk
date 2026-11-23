@@ -117,7 +117,8 @@
   ],
   "extracts": {
     "claude.ts": [
-      "ComposeRunRequest"
+      "ComposeRunRequest",
+      "PortAllocator"
     ],
     "data-tools.ts": [
       "fail",
@@ -138,6 +139,7 @@
     ],
     "store.ts": [
       "ConversationKey",
+      "keyString",
       "StoredMessage",
       "Store:declare",
       "ConversationRecord",

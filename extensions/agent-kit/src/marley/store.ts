@@ -1,4 +1,4 @@
-// Extract of zygstinct apps/agent-server/src/store.ts at 7110e58c8: only ConversationKey, StoredMessage, Store:declare, ConversationRecord, isDeletion, MessageState.
+// Extract of zygstinct apps/agent-server/src/store.ts at 7110e58c8: only ConversationKey, keyString, StoredMessage, Store:declare, ConversationRecord, isDeletion, MessageState.
 import Database from "better-sqlite3";
 import type { Channel, ConversationKind } from "@zygstinct/shared";
 import type { Attachment, PublishedInbound, StoredAttachment } from "./attachments.js";
@@ -22,6 +22,8 @@ export interface EvalIds {
   runId: string;
   caseId: string;
 }
+
+export const keyString = (key: ConversationKey): string => `${key.brandId}|${key.channel}|${key.conversationId}`;
 
 export interface StoredMessage {
   seq: number;
