@@ -56,17 +56,20 @@ const peers = {
 };
 // Only the `./daytona` entry reaches these; a host that uses the outbox alone does not install them.
 const daytonaPeers = { "@daytona/sdk": kitPackage.dependencies["@daytona/sdk"], ws: kitPackage.dependencies.ws };
+// Only the `./speech` entry (Marley's speech package) reaches this one.
+const speechPeers = { "google-auth-library": kitPackage.dependencies["google-auth-library"] };
+const optionalPeers = { ...daytonaPeers, ...speechPeers };
 const peerPrefixes = ["@marshal/agent-runtime-"];
 
 const stage = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR ?? "/tmp"), "marshal-agent-kit-"));
 const result = await build({
-  entryPoints: { index: path.join(kit, "src/index.ts"), daytona: path.join(kit, "src/daytona.ts") },
+  entryPoints: { index: path.join(kit, "src/index.ts"), daytona: path.join(kit, "src/daytona.ts"), speech: path.join(kit, "src/speech.ts") },
   outdir: path.join(stage, "dist"),
   bundle: true,
   format: "esm",
   platform: "node",
   target: "node22",
-  external: [...Object.keys({ ...peers, ...daytonaPeers }).flatMap((name) => [name, `${name}/*`]), ...peerPrefixes.map((prefix) => `${prefix}*`)],
+  external: [...Object.keys({ ...peers, ...optionalPeers }).flatMap((name) => [name, `${name}/*`]), ...peerPrefixes.map((prefix) => `${prefix}*`)],
   loader: { ".map": "empty" },
   metafile: true,
   logLevel: "warning",
@@ -80,12 +83,12 @@ const external = new Set(
     .filter((entry) => entry.external && !entry.path.startsWith("node:") && !entry.path.startsWith("."))
     .map((entry) => entry.path),
 );
-const stray = [...external].filter((name) => !builtins.has(name) && !Object.keys({ ...peers, ...daytonaPeers }).some((peer) => name === peer || name.startsWith(`${peer}/`)) && !peerPrefixes.some((prefix) => name.startsWith(prefix)));
+const stray = [...external].filter((name) => !builtins.has(name) && !Object.keys({ ...peers, ...optionalPeers }).some((peer) => name === peer || name.startsWith(`${peer}/`)) && !peerPrefixes.some((prefix) => name.startsWith(prefix)));
 if (stray.length) throw new Error(`The kit reaches packages a host does not provide: ${stray.join(", ")}`);
 
 const declarations = path.join(stage, "types");
 const declareConfig = path.join(kit, "tsconfig.declare.json");
-fs.writeFileSync(declareConfig, `${JSON.stringify({ extends: "./tsconfig.json", compilerOptions: { noEmit: false, declaration: true, emitDeclarationOnly: true, outDir: declarations, rootDir: "./src" }, files: ["src/index.ts", "src/daytona.ts"], include: [] }, null, 2)}\n`);
+fs.writeFileSync(declareConfig, `${JSON.stringify({ extends: "./tsconfig.json", compilerOptions: { noEmit: false, declaration: true, emitDeclarationOnly: true, outDir: declarations, rootDir: "./src" }, files: ["src/index.ts", "src/daytona.ts", "src/speech.ts"], include: [] }, null, 2)}\n`);
 try {
   execFileSync(process.execPath, [path.join(root, "node_modules/typescript/bin/tsc"), "-p", declareConfig], { cwd: kit, stdio: "pipe" });
 } catch (error) {
@@ -124,10 +127,10 @@ const manifest = {
   type: "module",
   main: "./dist/index.js",
   types: "./types/index.d.ts",
-  exports: { ".": { types: "./types/index.d.ts", default: "./dist/index.js" }, "./daytona": { types: "./types/daytona.d.ts", default: "./dist/daytona.js" } },
+  exports: { ".": { types: "./types/index.d.ts", default: "./dist/index.js" }, "./daytona": { types: "./types/daytona.d.ts", default: "./dist/daytona.js" }, "./speech": { types: "./types/speech.d.ts", default: "./dist/speech.js" } },
   files: ["dist", "types", "SOURCE.json"],
-  peerDependencies: { ...peers, ...daytonaPeers },
-  peerDependenciesMeta: Object.fromEntries(Object.keys(daytonaPeers).map((name) => [name, { optional: true }])),
+  peerDependencies: { ...peers, ...optionalPeers },
+  peerDependenciesMeta: Object.fromEntries(Object.keys(optionalPeers).map((name) => [name, { optional: true }])),
 };
 fs.writeFileSync(path.join(stage, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 fs.writeFileSync(path.join(stage, "SOURCE.json"), `${JSON.stringify({ repository: "marshal-runtime/marshal-sdk", gitSha: sha, marley: { branch: source.branch, commit: source.commit }, built: "node extensions/agent-kit/scripts/pack.mjs" }, null, 2)}\n`);

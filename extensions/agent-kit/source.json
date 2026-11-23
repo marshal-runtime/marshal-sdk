@@ -300,7 +300,19 @@
     "brand-brain/ingest/source-map.ts": "packages/brand-brain/src/ingest/source-map.ts",
     "brand-brain/ingest/ownership.ts": "packages/brand-brain/src/ingest/ownership.ts",
     "brand-brain/ingest/ports.ts": "packages/brand-brain/src/ingest/ports.ts",
-    "shared/credential-scrub.ts": "packages/shared/src/credential-scrub.ts"
+    "shared/credential-scrub.ts": "packages/shared/src/credential-scrub.ts",
+    "speech/config.ts": "packages/speech/src/config.ts",
+    "speech/convert.ts": "packages/speech/src/convert.ts",
+    "speech/gcs.ts": "packages/speech/src/gcs.ts",
+    "speech/http.ts": "packages/speech/src/http.ts",
+    "speech/index.ts": "packages/speech/src/index.ts",
+    "speech/language.ts": "packages/speech/src/language.ts",
+    "speech/ogg.ts": "packages/speech/src/ogg.ts",
+    "speech/providers/elevenlabs.ts": "packages/speech/src/providers/elevenlabs.ts",
+    "speech/providers/google.ts": "packages/speech/src/providers/google.ts",
+    "speech/speakable.ts": "packages/speech/src/speakable.ts",
+    "speech/text.ts": "packages/speech/src/text.ts",
+    "speech/types.ts": "packages/speech/src/types.ts"
   },
   "typeTrees": {
     "marshal-sdk-port": "packages/marshal-sdk-port"

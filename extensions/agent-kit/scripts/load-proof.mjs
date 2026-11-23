@@ -30,10 +30,17 @@ execFileSync(process.execPath, [path.join(kit, "scripts/build-extensions.mjs"), 
 // The host's side: the services the extensions read.
 const services = composer.createRuntimeServiceContainer();
 const slackCalls = [];
+const slackUploads = [];
 await services.bind(Symbol.for("@marshal/agent-kit:slack-host"), {
   useValue: {
-    call: async (method, body) => (slackCalls.push({ method, body }), method === "reactions.add" && body.name === "rotating_light" ? { ok: false, error: "invalid_name" } : { ok: true, ts: "1763900000.000100" }),
+    call: async (method, body, form) => {
+      slackCalls.push(form ? { method, body, form } : { method, body });
+      if (method === "files.getUploadURLExternal") return { ok: true, upload_url: "https://files.slack.com/upload/v1/proof", file_id: "F0PROOF" };
+      return method === "reactions.add" && body.name === "rotating_light" ? { ok: false, error: "invalid_name" } : { ok: true, ts: "1763900000.000100" };
+    },
     pickReaction: async (text) => (text.includes("urgent") ? "rotating_light" : "heart"),
+    speak: async (part) => ({ data: Buffer.from(`OggS:${part.text}:${part.lang}`), mimeType: "audio/ogg" }),
+    upload: async (url, data, mimeType) => void slackUploads.push({ url, bytes: data.length, mimeType }),
   },
 });
 const githubComments = [];
@@ -93,13 +100,20 @@ assert.equal(await channels[0].send(key, part, "idem-1", origin), "sent");
 assert.equal(await channels[0].send(key, part, "idem-1", origin), "sent");
 assert.equal(slackCalls.length, 1, "a key already posted is not posted again");
 assert.deepEqual(slackCalls[0], { method: "chat.postMessage", body: { channel: "D0PROOF", text: part.text, thread_ts: "1763899999.000200" } });
-assert.equal(await channels[0].send(key, { ...part, kind: "voice" }, "idem-2", origin), "refused");
+assert.equal(await channels[0].send(key, { ...part, text: " " }, "idem-2", origin), "refused");
+slackCalls.length = 0;
+assert.deepEqual(await channels[0].post(key, { kind: "voice", text: "the deploy is green", lang: "en", voiceName: null }, "idem-v"), { outcome: "sent", id: "F0PROOF" });
+assert.deepEqual(slackUploads, [{ url: "https://files.slack.com/upload/v1/proof", bytes: Buffer.from("OggS:the deploy is green:en").length, mimeType: "audio/ogg" }]);
+assert.deepEqual(slackCalls.map((entry) => [entry.method, entry.form]), [["files.getUploadURLExternal", true], ["files.completeUploadExternal", true]]);
+assert.deepEqual(slackCalls[0].body, { filename: "voice.ogg", length: String(Buffer.from("OggS:the deploy is green:en").length) });
+assert.deepEqual(slackCalls[1].body, { files: [{ id: "F0PROOF", title: "Voice note" }], channel_id: "D0PROOF", thread_ts: "1763899999.000200" });
+slackCalls.length = 0;
 assert.deepEqual(await channels[0].post(key, { kind: "text", text: "posted" }, "idem-p"), { outcome: "sent", id: "1763900000.000100" });
 slackCalls.length = 0;
 await channels[0].acknowledge(key, "slack:D0PROOF:1763899999.000300", "thanks!");
 await channels[0].acknowledge(key, "slack:D0PROOF:1763899999.000400", "urgent: prod is down");
 assert.deepEqual(slackCalls.map((entry) => [entry.body.timestamp, entry.body.name]), [["1763899999.000300", "heart"], ["1763899999.000400", "rotating_light"], ["1763899999.000400", "eyes"]]);
-console.log("channel @marshal/agent-kit:channel -> slack: sent once in the thread, deduped, voice refused, post gives the ts, acknowledge reacts with the picked reaction (eyes when Slack refuses it)");
+console.log("channel @marshal/agent-kit:channel -> slack: sent once in the thread, deduped, a voice part spoken by the host and uploaded into the thread, post gives the ts, acknowledge reacts with the picked reaction (eyes when Slack refuses it)");
 const prKey = { brandId: "zyg-agents", channel: "github", conversationId: "zyg-edge/zyg-agents:2004" };
 assert.deepEqual(await channels[1].post(prKey, { kind: "text", text: "on it" }, "gh-1"), { outcome: "sent", id: "https://github.com/zyg-edge/zyg-agents/issues/2004#issuecomment-1" });
 assert.equal(await channels[1].send(prKey, part, "gh-1", origin), "sent");

@@ -55,7 +55,7 @@ export interface ChannelPosted {
 export interface Channel {
   readonly kind: string;
   send(key: ConversationKey, part: ComposedPart, idempotencyKey: string, origin: SendOrigin): Promise<ComposedOutcome>;
-  post?(key: ConversationKey, part: Pick<ComposedPart, "kind" | "text">, idempotencyKey: string): Promise<ChannelPosted>;
+  post?(key: ConversationKey, part: Pick<ComposedPart, "kind" | "text"> & Partial<Pick<ComposedPart, "lang" | "voiceName">>, idempotencyKey: string): Promise<ChannelPosted>;
   acknowledge?(key: ConversationKey, messageId: string, text?: string): Promise<void>;
 }
 
