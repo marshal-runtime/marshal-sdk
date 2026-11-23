@@ -1,0 +1,247 @@
+{
+  "repo": "zyg-edge/zygstinct",
+  "branch": "release/combined-20261122",
+  "commit": "7110e58c8",
+  "serverRoot": "apps/agent-server/src",
+  "copies": [
+    "agent-extensions/brand-events-contract.ts",
+    "agent-extensions/routine-delegation.ts",
+    "agent-extensions/routine-engine.ts",
+    "agent-extensions/routine-events.ts",
+    "agent-extensions/routine-host-capabilities.ts",
+    "agent-extensions/schedules/brand-graph-state.ts",
+    "agent-extensions/schedules/brand-graph.ts",
+    "agent-extensions/schedules/cron.ts",
+    "agent-extensions/schedules/deliver.ts",
+    "agent-extensions/schedules/event-triggers.ts",
+    "agent-extensions/schedules/events.ts",
+    "agent-extensions/schedules/gate.ts",
+    "agent-extensions/schedules/index.ts",
+    "agent-extensions/schedules/ingress.ts",
+    "agent-extensions/schedules/prompt.ts",
+    "agent-extensions/schedules/repo-reindex.ts",
+    "agent-extensions/schedules/repo.ts",
+    "agent-extensions/schedules/scheduler.ts",
+    "agent-extensions/schedules/schema.ts",
+    "agent-extensions/schedules/tools.ts",
+    "agent-extensions/schedules/types.ts",
+    "agent-extensions/schedules/zone.ts",
+    "agent-extensions/trigger-dispatcher.ts",
+    "agent-extensions/triggers.ts",
+    "brand-selector.ts",
+    "directory.ts",
+    "engine/marshal-engine.ts",
+    "engine/marshal-prompt.ts",
+    "engine/mcp-ready.ts",
+    "engine/role-run-error.ts",
+    "engine/roles.ts",
+    "engine/run-role.ts",
+    "engine/tool-calls.ts",
+    "engine/vm-bridge.ts",
+    "extension-registry/release-extensions.ts",
+    "extension-registry/routine-spec-schema.ts",
+    "extension-registry/sdk-registry.ts",
+    "extension-registry/server-registry.ts",
+    "extension-registry/sqlite-store.ts",
+    "gateway.ts",
+    "gcp.ts",
+    "intent-outbox.ts",
+    "live-sends.ts",
+    "logger.ts",
+    "message-events.ts",
+    "message-ref.ts",
+    "operation-error.ts",
+    "org-store/config.ts",
+    "org-store/index.ts",
+    "org-store/redact.ts",
+    "outbox/composer.ts",
+    "outbox/direct-sends.ts",
+    "outbox/meme-render.ts",
+    "outbox/meme-templates.ts",
+    "outbox/memes.ts",
+    "outbox/outbox.ts",
+    "outbox/rework.ts",
+    "outbox/routine-changes.ts",
+    "outbox/run-sends.ts",
+    "outbox/sandbox-composer.ts",
+    "outbox/screen.ts",
+    "outbox/stand-in-answers.ts",
+    "outbox/store.ts",
+    "outbox/vertex-composer.ts",
+    "persona.ts",
+    "preferences-prompt.ts",
+    "prompt-layers/amazon-insights.ts",
+    "prompt-layers/answer-shapes.ts",
+    "prompt-layers/browser-help.ts",
+    "prompt-layers/creative-quadrants.ts",
+    "prompt-layers/ecom-analysis.ts",
+    "prompt-layers/front.ts",
+    "prompt-layers/owner-reports.ts",
+    "prompt-layers/pixel-audit.ts",
+    "prompt-layers/recall.ts",
+    "prompt-layers/routines.ts",
+    "prompt-layers/runtime.ts",
+    "prompt-layers/ua-insights.ts",
+    "prompt-layers/worker.ts",
+    "prompt-segments.ts",
+    "prompt-text.ts",
+    "reply-directives.ts",
+    "reply-parts.ts",
+    "reply-protocol.ts",
+    "reply-text.ts",
+    "routines/brand-run.ts",
+    "routines/events.ts",
+    "routines/graph.ts",
+    "routines/routine-report.ts",
+    "sandbox/transcript-redaction.ts",
+    "sandbox/wake-reason.ts",
+    "speaker-prompt.ts",
+    "tasks/ran.ts",
+    "tasks/tool-gate.ts",
+    "types.ts",
+    "vertex.ts",
+    "voice-reply.ts"
+  ],
+  "extracts": {
+    "claude.ts": [
+      "ComposeRunRequest"
+    ],
+    "data-tools.ts": [
+      "fail",
+      "ok",
+      "DataToolSpec"
+    ],
+    "live-session.ts": [
+      "InputQueue"
+    ],
+    "memory.ts": [
+      "Viewer"
+    ],
+    "nudges/inspector.ts": [
+      "isInspectorNudgeConversation"
+    ],
+    "prompt-v2.ts": [
+      "loadSoul"
+    ],
+    "proxy.ts": [
+      "Usage"
+    ],
+    "sandbox/ssh.ts": [
+      "shellQuote",
+      "SshRunner:declare"
+    ],
+    "store.ts": [
+      "ConversationKey",
+      "StoredMessage",
+      "Store:declare",
+      "ConversationRecord",
+      "isDeletion",
+      "MessageState"
+    ],
+    "tasks/prompt.ts": [
+      "taskIdOfEvent"
+    ],
+    "brand-stack.ts": [
+      "BrandStack:declare"
+    ],
+    "tickets.ts": [
+      "MarleyTickets:declare"
+    ],
+    "routines/registry.ts": [
+      "RoutineRecord",
+      "RoutineRegistry:declare",
+      "metaAnalysisLive"
+    ],
+    "routines/owner-reports.ts": [
+      "ShopClock",
+      "ownerReportCoverage"
+    ],
+    "tasks/runtime-features.ts": [
+      "FeatureAnswer"
+    ],
+    "state/living-state.ts": [
+      "SHEET_CURATOR"
+    ],
+    "nudges/turn.ts": [
+      "OperatorNudgeTurn"
+    ],
+    "tasks/origin-shape.ts": [
+      "TaskOrigin"
+    ],
+    "attachments.ts": [
+      "StoredAttachment",
+      "PublishedInbound"
+    ],
+    "agent-extensions/brand-host-capabilities.ts": [
+      "createBrandHostCapabilities",
+      "STACK_DETECTED",
+      "STACK_SCAN",
+      "TICKET_FILE",
+      "BrandHostTool"
+    ],
+    "stack-confirm.ts": [
+      "ConfirmJudge"
+    ],
+    "connector-requests.ts": [
+      "canonical"
+    ],
+    "routines/overrides.ts": [
+      "RoutineOverrides:declare"
+    ],
+    "extension-registry/routine-specs.ts": [
+      "RoutineSpecs:declare"
+    ],
+    "sandbox/ssh-target.ts": [
+      "SshTarget"
+    ],
+    "ua-figures.ts": [
+      "UaFigures:declare"
+    ],
+    "tasks/ledger.ts": [
+      "TaskLedger:declare"
+    ],
+    "tasks/schema.ts": [
+      "ListTasksQuery",
+      "Task",
+      "BRIEF_MAX",
+      "OPEN_STATUSES",
+      "SUMMARY_MAX",
+      "TITLE_MAX",
+      "newTaskId",
+      "TaskRow"
+    ],
+    "query-log.ts": [
+      "recordDataQueries"
+    ],
+    "pixel-audit.ts": [
+      "PixelPolicy"
+    ],
+    "tasks/handoff.ts": [
+      "HandoffChat"
+    ]
+  },
+  "packages": {
+    "brand-brain/ontology.ts": "packages/brand-brain/src/ontology.ts",
+    "log/log.ts": "packages/log/src/log.ts",
+    "routines-public/catalog.ts": "packages/routines-public/src/catalog.ts",
+    "routines-public/system.ts": "packages/routines-public/src/system.ts",
+    "shared/flags.ts": "packages/shared/src/flags.ts",
+    "shared/membership.ts": "packages/shared/src/membership.ts",
+    "shared/messages.ts": "packages/shared/src/messages.ts",
+    "shared/persona.ts": "packages/shared/src/persona.ts",
+    "shared/providers.ts": "packages/shared/src/providers.ts",
+    "shared/voices.ts": "packages/shared/src/voices.ts",
+    "shared/preferences.ts": "packages/shared/src/preferences.ts",
+    "shared/maintainer.ts": "packages/shared/src/maintainer.ts",
+    "routines-public/index.ts": "packages/routines-public/src/index.ts",
+    "routines-public/ua-snapshot.ts": "packages/routines-public/src/ua-snapshot.ts",
+    "brand-brain/ingest/hold.ts": "packages/brand-brain/src/ingest/hold.ts",
+    "brand-brain/ingest/source-map.ts": "packages/brand-brain/src/ingest/source-map.ts",
+    "brand-brain/ingest/ownership.ts": "packages/brand-brain/src/ingest/ownership.ts",
+    "brand-brain/ingest/ports.ts": "packages/brand-brain/src/ingest/ports.ts",
+    "shared/credential-scrub.ts": "packages/shared/src/credential-scrub.ts"
+  },
+  "typeTrees": {
+    "marshal-sdk-port": "packages/marshal-sdk-port"
+  }
+}

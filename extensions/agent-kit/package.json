@@ -1,0 +1,17 @@
+{
+  "name": "@marshal/agent-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Marley's agent-server components (engine, inbox admission, outbox + composer, voice, routines, events), copied as one host-side kit for any Marshal SDK host.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/pg": "^8.23.1"
+  }
+}
