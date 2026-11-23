@@ -5,3 +5,6 @@ export * as daytona from "./marley/sandbox/daytona/provider.js";
 export * as ssh from "./marley/sandbox/ssh.js";
 export * as modelProxy from "./marley/proxy.js";
 export { PortAllocator } from "./marley/claude.js";
+/** Marley's Daytona API client, and the ssh ProxyCommand that reaches a sandbox's relay (`dist/zs-ws-connect.js`, run by node). */
+export * as daytonaClient from "./marley/sandbox/daytona/client.js";
+export * as wsConnect from "./marley/sandbox/daytona/zs-ws-connect.js";

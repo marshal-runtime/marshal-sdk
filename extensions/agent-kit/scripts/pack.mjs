@@ -63,7 +63,7 @@ const peerPrefixes = ["@marshal/agent-runtime-"];
 
 const stage = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR ?? "/tmp"), "marshal-agent-kit-"));
 const result = await build({
-  entryPoints: { index: path.join(kit, "src/index.ts"), daytona: path.join(kit, "src/daytona.ts"), speech: path.join(kit, "src/speech.ts") },
+  entryPoints: { index: path.join(kit, "src/index.ts"), daytona: path.join(kit, "src/daytona.ts"), speech: path.join(kit, "src/speech.ts"), "zs-ws-connect": path.join(kit, "src/marley/sandbox/daytona/zs-ws-connect.ts") },
   outdir: path.join(stage, "dist"),
   bundle: true,
   format: "esm",
@@ -127,7 +127,7 @@ const manifest = {
   type: "module",
   main: "./dist/index.js",
   types: "./types/index.d.ts",
-  exports: { ".": { types: "./types/index.d.ts", default: "./dist/index.js" }, "./daytona": { types: "./types/daytona.d.ts", default: "./dist/daytona.js" }, "./speech": { types: "./types/speech.d.ts", default: "./dist/speech.js" } },
+  exports: { ".": { types: "./types/index.d.ts", default: "./dist/index.js" }, "./daytona": { types: "./types/daytona.d.ts", default: "./dist/daytona.js" }, "./speech": { types: "./types/speech.d.ts", default: "./dist/speech.js" }, "./zs-ws-connect": "./dist/zs-ws-connect.js" },
   files: ["dist", "types", "SOURCE.json"],
   peerDependencies: { ...peers, ...optionalPeers },
   peerDependenciesMeta: Object.fromEntries(Object.keys(optionalPeers).map((name) => [name, { optional: true }])),
