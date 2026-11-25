@@ -277,6 +277,11 @@ export interface HostAutomationsOptions {
   }) => Record<string, unknown> | undefined | Promise<Record<string, unknown> | undefined>;
   /** The session label naming the tenant on every session an automation starts. Default "tenant". */
   tenantLabel?: string;
+  /**
+   * The most live (active or paused) schedules the clock keeps. Every automation's schedule shares one principal and scope, so this bounds the
+   * host's automations together, every tenant's included. Default: the runtime scheduler's own (100).
+   */
+  maxLivePerOwner?: number;
 }
 
 /**
@@ -327,6 +332,7 @@ export class HostAutomations {
       ownerId: `marshal-sdk:${options.port.hostId}`,
       now: this.now,
       ...(options.tickMs ? { tickMs: options.tickMs } : {}),
+      ...(options.maxLivePerOwner ? { maxLivePerOwner: options.maxLivePerOwner } : {}),
       // A condition check waits for its check session's answer.
       runnerTimeoutMs: CHECK_WAIT_MS + 30_000,
       claimLeaseMs: CHECK_WAIT_MS + 60_000,
