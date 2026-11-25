@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 
 import type { PermissionBroker } from "@marshal/runtime";
 
+import { installSessionClaims } from "./session-claims.js";
+
 type PermissionDecision = Awaited<ReturnType<PermissionBroker["decide"]>>;
 
 /** dist/host-runtime.js, the bundle of packages/host (build.mjs). */
@@ -41,6 +43,12 @@ export interface SharedRuntimeOptions {
   /** The extension identities a session may see (agent profile); undefined: all installed. */
   sessionExtensionScope?: (sessionId: string) => readonly string[] | undefined;
   diagnostics?: (type: string, details?: Record<string, unknown>) => void;
+  /**
+   * Claims of the calling session, merged over `principal.claims` on every call a session makes (kit.brain.claimsFor).
+   * Absent: every call carries the host principal's claims, as before.
+   */
+  claimsFor?: (sessionId: string | undefined) => unknown;
+  log?: (line: string) => void;
 }
 
 export interface SharedRuntime {
@@ -124,13 +132,18 @@ export async function createSharedRuntime(options: SharedRuntimeOptions): Promis
     await host.dispose().catch(() => undefined);
     throw new Error("The shared Marshal runtime host has no getRuntimeBindings(): packages/host predates the SDK host options.");
   }
+  const execute = options.claimsFor
+    ? installSessionClaims({ port: bindings.kernel, core: bindings.core, claimsFor: options.claimsFor, ...(options.log ? { log: options.log } : {}) })
+    : undefined;
   return {
     // Search goes through the host's own search(), which applies a session's extension scope; the rest is the kernel's.
     kernel: new Proxy(bindings.kernel, {
       get: (target, property) =>
         property === "search"
           ? (request: unknown, context: unknown) => host.search(request, context)
-          : typeof target[property] === "function"
+          : property === "execute" && execute
+            ? execute
+            : typeof target[property] === "function"
             ? target[property].bind(target)
             : target[property],
     }),

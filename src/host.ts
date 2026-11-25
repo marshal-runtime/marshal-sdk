@@ -530,6 +530,16 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
       kind: "agent",
       ...(kit && Object.keys(kit.claims).length ? { claims: kit.claims } : {}),
     },
+    // A session's own claims (kit.brain.claimsFor), from the host's session record by the calling session's id.
+    ...(kit?.claimsFor
+      ? {
+          claimsFor: (sessionId: string | undefined) => {
+            const session = sessionId ? sessions.get(sessionId) : undefined;
+            return session ? kit.claimsFor!(session) : undefined;
+          },
+          log,
+        }
+      : {}),
     harnessId: HARNESS_ID,
     ...(options.nodeExecutable ? { nodeExecutable: options.nodeExecutable } : {}),
     ...(importPolicy ? { trustedTypeScript: true } : {}),

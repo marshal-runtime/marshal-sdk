@@ -2,7 +2,8 @@ import path from "node:path";
 
 import { createAllowAllPermissionBroker, type CapabilityProvider, type PermissionBroker } from "@marshal/runtime";
 
-import type { SessionStore } from "../session-store.js";
+import type { SessionClaims } from "../session-claims.js";
+import type { SessionRecord, SessionStore } from "../session-store.js";
 import { brainConfiguration, brainPackageRoot, type BrainKitOptions } from "./brain.js";
 import { kernelCall, type KernelLike } from "./call.js";
 import { createKnowledgeProvider, type KnowledgeKitOptions } from "./knowledge.js";
@@ -65,6 +66,8 @@ export interface PreparedKit {
   codeIntelligence: boolean;
   /** Claims for the host principal: who the Brain answers for in delegated mode. */
   claims: Record<string, unknown>;
+  /** Per-session claims (kit.brain.claimsFor), merged over `claims` on each call a session makes; only when the Brain is loaded. */
+  claimsFor?: (session: SessionRecord) => SessionClaims | undefined;
   providerSources: (() => CapabilityProvider)[];
   permissionBroker: PermissionBroker;
   /** Capabilities the broker refuses on this host. */
@@ -101,7 +104,7 @@ export function prepareKit(input: {
   // is refused, so the run goes on without the Brain's parts. The package still loads: extensions may depend on it.
   const signsAsService = brain.callerMode === "delegated" || brain.callerMode === "service-key";
   const asked = new Set(kit.parts);
-  const personless = signsAsService && !brain.callerEmail?.trim() && (asked.has("brain") || asked.has("memory"));
+  const personless = signsAsService && !brain.callerEmail?.trim() && !brain.claimsFor && (asked.has("brain") || asked.has("memory"));
   const requested = personless ? new Set([...asked].filter((part) => part !== "brain" && part !== "memory")) : asked;
   // Memory lives in the Brain's graph; it cannot exist without the Brain.
   const brainOn = requested.has("brain") || requested.has("memory");
@@ -158,6 +161,7 @@ export function prepareKit(input: {
     extensions,
     codeIntelligence: brainLoaded,
     claims,
+    ...(brainLoaded && brain.claimsFor ? { claimsFor: brain.claimsFor } : {}),
     providerSources,
     permissionBroker: kitPermissionBroker(denied),
     denied,

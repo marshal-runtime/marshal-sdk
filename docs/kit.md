@@ -51,6 +51,13 @@ the kit turns it on). The configuration is the cloud-only surface (`brainConfigu
     person.
   - `delegated`: a service on Google Cloud signs with its metadata-server ID token, and the person comes from the
     host principal's `callerEmail` claim (`kit.brain.callerEmail`, with access labels from `kit.brain.access`).
+    A host whose sessions act for different people (one service serving several brands) sets
+    `kit.brain.claimsFor(session)` instead or as well: it returns `{callerEmail?, conversationId?, access?, brand?,
+    member?}` from the host's own session record (its labels), and every capability call of that session, including
+    the calls a TypeScript block inside it makes, runs with those claims merged over the host's. Capability input never
+    sets them. Malformed values are dropped (`checkedSessionClaims`); a session the hook returns nothing for, or a hook
+    that throws (logged), keeps the host's claims. Without `claimsFor` nothing changes. Which claims reach the Brain
+    server is the extension's business: @marshal/brain sends only `callerEmail` (as `x-brain-caller`) today.
   - `service-key`: the same, signed with a service account key (`kit.brain.credentialsFile`, else
     `$GOOGLE_APPLICATION_CREDENTIALS_JSON`, else the file `$GOOGLE_APPLICATION_CREDENTIALS` names), for a service with
     no metadata server (an E2B sandbox). Needs @marshal/brain 0.2.1 or later.
