@@ -112,6 +112,7 @@ export {
   type PersonRoute,
 } from "./decisions.js";
 export { createForkToolsProvider } from "./fork-provider.js";
+export { checkedSessionClaims, type SessionClaims } from "./session-claims.js";
 export { SessionForks, forkReport, type ForkGroupResult, type ForkPointOf, type ForkTask, type SubagentSummary } from "./forks.js";
 export { manifestPath, withManifest } from "./onboarding-cli.js";
 export { orgExtensionResolver, type OrgExtensionResolverOptions } from "./org-extensions.js";

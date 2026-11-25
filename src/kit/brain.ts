@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { SessionClaims } from "../session-claims.js";
+import type { SessionRecord } from "../session-store.js";
+
 /** The cloud Brain's front door: the proxy that serves knowledge.*, memories and shared sessions. */
 export const BRAIN_CLOUD_URL = "https://zyg-agents-front-559219955260.us-central1.run.app";
 /** The service account the desktop mints its ID token for (the person's own credentials sign the request). */
@@ -39,6 +42,16 @@ export interface BrainKitOptions {
   callerEmail?: string;
   /** Access labels on the host principal (`staff`, `user:<email>`, `group:<name>`). */
   access?: readonly string[];
+  /**
+   * Claims of one session, for a host whose sessions act for different people, brands or members (one host serving
+   * every brand). Called on every capability call a session makes, with the host's own session record (its `labels` are
+   * the host's; nothing a model writes reaches them); the result is merged over `callerEmail`/`access` above for that
+   * call. Fields: `callerEmail`, `conversationId`, `access`, `brand`, `member`; malformed values are dropped, so a call
+   * with no valid `callerEmail` is refused by the Brain rather than made for the host. Calls outside a session (and
+   * sessions this returns nothing for) keep the host's claims. With it, a delegated or service-key host that names no
+   * `callerEmail` still loads the Brain: the person comes per session.
+   */
+  claimsFor?: (session: SessionRecord) => SessionClaims | undefined;
   /** knowledge.feedback writes to the Brain's search log. Off unless asked for. */
   feedback?: boolean;
   /**
