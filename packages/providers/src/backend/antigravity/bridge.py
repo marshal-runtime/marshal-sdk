@@ -23,6 +23,13 @@ from google.antigravity.hooks import hooks as agy_hooks
 from google.antigravity.hooks import policy as agy_policy
 from google.antigravity.tools import tool_runner as agy_tool_runner
 
+try:
+  from google.antigravity.connections.local import local_connection as agy_local_connection
+  from google.antigravity.proto import localharness_pb2 as agy_harness_proto
+except ImportError:  # Another SDK layout: replace-mode prompts go out as CustomSystemInstructions.
+  agy_local_connection = None
+  agy_harness_proto = None
+
 PROTOCOL_VERSION = 1
 
 # A cancel that the harness doesn't honour within this many seconds (a dead connection, a hook still waiting on
@@ -88,6 +95,77 @@ def _step_error_for(message: str) -> dict | None:
   return None
 
 
+# A prompt that replaces Google's goes to the harness as template overrides, not as CustomSystemInstructions.
+# Under CustomSystemInstructions the harness doesn't render a compaction's summary, so after a compaction every
+# request starts at the first user-role step. In a turn with no user input since the compaction that is a background
+# task's "finished" SYSTEM_MESSAGE: everything before it is dropped, and when the message directly follows a tool
+# result the harness folds it into that result and can't find the result's call ("tool call id <id> not found in
+# map"; conversations d6bdf896, 7afca41e, bd1438bc, 2026-11-25/26). With overrides the harness keeps its default
+# request path: `identity` carries Marshal's prompt and every other section of Google's default prompt is removed.
+# These are the sections google-antigravity 0.1.24 renders for Gemini models (the dynamic skills list stays, as it
+# does under CustomSystemInstructions). The harness refuses to remove a section it left out (gemini-4-neon has no
+# "guidelines"): the bridge then remembers that title for the model and sends the turn again.
+DEFAULT_PROMPT_SECTIONS = (
+    "non_interactive_mode",
+    "user_information",
+    "subagents",
+    "messaging",
+    "conversation_transcript",
+    "guidelines",
+    "communication_style",
+    "memory_rules",
+)
+# As an exception the title is quoted; inside a harness step error it comes escaped (\"guidelines\").
+ABSENT_SECTION_ERROR = re.compile(r'template override title \\?"([^"\\]+)\\?" has not been included')
+# model -> default prompt sections the harness leaves out for it
+_absent_sections: dict[str, set[str]] = {}
+
+
+class ReplacingSystemInstructions(types.CustomSystemInstructions):
+  """Marshal's prompt in place of Google's, sent as template overrides (see DEFAULT_PROMPT_SECTIONS)."""
+
+  removed_sections: list[str] = []
+
+
+_sdk_system_instructions_proto = getattr(agy_local_connection, "to_system_instructions_proto", None)
+OVERRIDES_SUPPORTED = _sdk_system_instructions_proto is not None and hasattr(agy_harness_proto, "TemplateOverride")
+
+
+def _system_instructions_proto(instructions):
+  if isinstance(instructions, ReplacingSystemInstructions):
+    proto = agy_harness_proto.SystemInstructions()
+    proto.overrides.add(title="identity", text=instructions.text)
+    for title in instructions.removed_sections:
+      proto.overrides.add(title=title, remove=True)
+    return proto
+  return _sdk_system_instructions_proto(instructions)
+
+
+if OVERRIDES_SUPPORTED:
+  agy_local_connection.to_system_instructions_proto = _system_instructions_proto
+
+
+def _drop_failed_input(con: sqlite3.Connection) -> list[int]:
+  """Deletes a failed attempt's trailing user input and error steps, so its turn can be sent again."""
+  last = con.execute("SELECT idx, step_type FROM steps ORDER BY idx DESC LIMIT 2").fetchall()
+  if [kind for _, kind in last] != [STEP_ERROR_MESSAGE, STEP_USER_INPUT]:
+    return []
+  dropped = sorted(idx for idx, _ in last)
+  con.execute("DELETE FROM steps WHERE idx >= ?", (dropped[0],))
+  return dropped
+
+
+def _drop_failed_attempt(db_path: str) -> list[int]:
+  if not os.path.exists(db_path):
+    return []
+  con = sqlite3.connect(db_path)
+  try:
+    with con:
+      return _drop_failed_input(con)
+  finally:
+    con.close()
+
+
 def _repair_trajectory(db_path: str, call_id: str, drop_failed_input: bool) -> dict | None:
   """Moves the system message that landed after `call_id`'s tool result back before that result.
 
@@ -98,7 +176,8 @@ def _repair_trajectory(db_path: str, call_id: str, drop_failed_input: bool) -> d
   model's call and its result replays fine. With `drop_failed_input`, the failed attempt's own user input and
   error step are removed too, so the turn can be sent again without a duplicate. Returns what changed, or None.
   The failed attempts' gen_metadata/executor_metadata rows stay: they are keyed by their own counters, not by
-  step, and a conversation that keeps them replays fine.
+  step, and a conversation that keeps them replays fine. Replace-mode prompts now go out as template overrides
+  (DEFAULT_PROMPT_SECTIONS), which build that layout fine, so this is only a fallback.
   """
   if not os.path.exists(db_path):
     return None
@@ -137,12 +216,7 @@ def _repair_trajectory(db_path: str, call_id: str, drop_failed_input: bool) -> d
         if slot != idx:
           con.execute("UPDATE steps SET idx = ? WHERE idx = ?", (-1 - slot, idx))
       con.execute("UPDATE steps SET idx = -1 - idx WHERE idx < 0")
-      dropped: list[int] = []
-      if drop_failed_input:
-        last = con.execute("SELECT idx, step_type FROM steps ORDER BY idx DESC LIMIT 2").fetchall()
-        if [kind for _, kind in last] == [STEP_ERROR_MESSAGE, STEP_USER_INPUT]:
-          dropped = sorted(idx for idx, _ in last)
-          con.execute("DELETE FROM steps WHERE idx >= ?", (dropped[0],))
+      dropped = _drop_failed_input(con) if drop_failed_input else []
     return {"systemMessageSteps": moved, "toolResultSteps": results, "droppedSteps": dropped}
   finally:
     con.close()
@@ -315,6 +389,9 @@ class BridgeSession:
       return agy_models.VertexEndpoint(project=endpoint.get("project"), location=endpoint.get("location"))
     return agy_models.GeminiAPIEndpoint(api_key=endpoint.get("apiKey"))
 
+  def _model_name(self) -> str:
+    return self.config.get("model") or agy_models.DEFAULT_MODEL
+
   def _models(self):
     endpoint = self._endpoint()
     model = self.config.get("model")
@@ -333,7 +410,12 @@ class BridgeSession:
     if not system or not system.get("text"):
       return None
     if system.get("mode") == "replace":
-      return types.CustomSystemInstructions(text=system["text"])
+      if not OVERRIDES_SUPPORTED:
+        return types.CustomSystemInstructions(text=system["text"])
+      absent = _absent_sections.get(self._model_name(), set())
+      return ReplacingSystemInstructions(
+          text=system["text"], removed_sections=[title for title in DEFAULT_PROMPT_SECTIONS if title not in absent]
+      )
     return types.TemplatedSystemInstructions(
         sections=[types.SystemInstructionSection(content=system["text"], title="marshal_instructions")]
     )
@@ -459,6 +541,7 @@ class BridgeSession:
     produced = False
     failure: Exception | None = None
     try:
+      steps_before = len(self.agent.conversation.history)
       response = await self.agent.chat(content)
       self.response = response
       async for chunk in response.chunks:
@@ -478,6 +561,10 @@ class BridgeSession:
               "args": chunk.args,
               "serverName": chunk.server_name,
           })
+      system_error = self._system_error_since(steps_before)
+      if system_error:
+        # The SDK only logs a harness error that arrives as a step, and the turn would end as an empty reply.
+        raise types.AntigravityExecutionError(system_error)
       structured = None
       if self.config.get("responseSchema") is not None:
         try:
@@ -502,6 +589,24 @@ class BridgeSession:
     finally:
       self.response = None
     if failure is None:
+      return
+    absent = ABSENT_SECTION_ERROR.search(str(failure)) if isinstance(failure, types.AntigravityExecutionError) else None
+    learned = _absent_sections.setdefault(self._model_name(), set())
+    if (
+        absent is not None
+        and not produced
+        and absent.group(1) in DEFAULT_PROMPT_SECTIONS
+        and absent.group(1) not in learned
+    ):
+      # The request was refused before it reached the model: reopen without that override and send the turn again.
+      learned.add(absent.group(1))
+      await self._stop_agent()
+      dropped = await asyncio.to_thread(self._drop_failed_attempt_steps)
+      logging.warning(
+          "default prompt section %r is absent for %s; resending turn %s (dropped steps %s)",
+          absent.group(1), self._model_name(), turn, dropped,
+      )
+      await self.run_turn(turn, prompt, media, retried=retried)
       return
     missing = MISSING_CALL_ERROR.search(str(failure)) if isinstance(failure, types.AntigravityExecutionError) else None
     if missing is None:
@@ -531,6 +636,29 @@ class BridgeSession:
         "repair": repair,
     })
     await self.run_turn(turn, prompt, media, retried=True)
+
+  def _system_error_since(self, steps_before: int) -> str | None:
+    """The error of the harness (SYSTEM) step this turn ended on, if it ended on one."""
+    if self.agent is None:
+      return None
+    history = self.agent.conversation.history
+    if len(history) <= steps_before:
+      return None
+    step = history[-1]
+    if step.status == types.StepStatus.ERROR and step.source == types.StepSource.SYSTEM and step.error:
+      return step.error
+    return None
+
+  def _drop_failed_attempt_steps(self) -> list[int]:
+    save_dir = self.config.get("saveDir")
+    conversation_id = self.config.get("conversationId")
+    if not save_dir or not conversation_id:
+      return []
+    try:
+      return _drop_failed_attempt(os.path.join(save_dir, conversation_id + ".db"))
+    except sqlite3.Error:
+      logging.warning("dropping the failed attempt failed: %s", traceback.format_exc())
+      return []
 
   async def _heal_trajectory(self, call_id: str, drop_failed_input: bool) -> dict | None:
     save_dir = self.config.get("saveDir")
