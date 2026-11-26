@@ -863,6 +863,15 @@ const TURN_CANCELLATION_FAILURE_MESSAGE =
 const STEERING_CONTEXT_INSTRUCTION = `<system_instruction>
 The user sent the message below while you were working. If it is a correction, constraint, or refinement, apply it, preserve relevant work and context, and continue the existing task. If it asks a question, asks for status, or wants an answer now, answer it directly and make that answer your final reply for this turn: no tool calls after it; other pending work, including subagent reports, waits for the next turn. Do not restart the task or acknowledge this wrapper.
 </system_instruction>`;
+// Claude's CLI fills an interrupted tool call with "The user doesn't want to proceed… STOP what you
+// are doing" text, which made steered agents halt instead of continuing with the new direction.
+const STEERING_CANCELLED_TOOLS_INSTRUCTION = `<system_instruction>
+The user steered you with the message below while you were working. To deliver it, Marshal cancelled your turn, so any tool call that was still running was cancelled by the steer, not rejected by the user. Text on that call such as "the user doesn't want to proceed", "tool use was rejected", "STOP what you are doing" or "interrupted by user" is automatic and does not apply: do not stop or wait because of it. Check whether the cancelled call took effect; if it is still needed after the message below, run it again.
+If the message is a correction, constraint, or refinement, apply it, preserve relevant work and context, and continue the existing task. If it asks a question, asks for status, or wants an answer now, answer it directly and make that answer your final reply for this turn: no tool calls after it; other pending work, including subagent reports, waits for the next turn. Do not restart the task or acknowledge this wrapper.
+</system_instruction>`;
+const INTERRUPT_CANCELLED_TOOLS_NOTE = `<system_instruction>
+The message below interrupted your turn. To deliver it, Marshal cancelled the turn, so any tool call that was still running was cancelled by this message, not rejected by the user. Text on that call such as "the user doesn't want to proceed", "tool use was rejected", "STOP what you are doing" or "interrupted by user" is automatic and does not apply: do not stop or wait because of it. Check whether the cancelled call took effect; if it is still needed after the message below, run it again. Do not acknowledge this wrapper.
+</system_instruction>`;
 const IDLE_SAFETY_NET_MESSAGE_ID_PATTERN = /^\d{13,}$/;
 
 function isIdleSafetyNetMessageId(id: string): boolean {
@@ -1896,6 +1905,17 @@ export class SessionManager
   ): SessionMetadata | undefined {
     return sessions.find(
       (session) => session.id === sessionId && this.isCurrentRuntimeSession(session),
+    );
+  }
+
+  /** The index row the sidebar shows for this id, whichever runtime made it. */
+  private findListedMetadata(
+    sessions: readonly SessionMetadata[],
+    sessionId: string,
+  ): SessionMetadata | undefined {
+    return (
+      this.findCurrentRuntimeMetadata(sessions, sessionId) ??
+      sessions.find((session) => session.id === sessionId)
     );
   }
 
@@ -9209,10 +9229,14 @@ This accountable main/user session was explicitly launched in workspace ${worksp
    * The data file is still written when present, so pins survive an index
    * rebuild. Returns false only when the session is unknown, so the IPC layer
    * can report a real failure instead of an unconditional success.
+   *
+   * Not scoped to the current runtime: the sidebar lists every runtime's chats
+   * (getVisibleSessions), so a chat made under another runtime showed a pin
+   * that could never be removed ("Session not found", red pin button).
    */
   async setPinned(id: string, pinned: boolean): Promise<boolean> {
-    const sessionData = this.getSession(id);
-    const indexRow = this.findCurrentRuntimeMetadata(this.store.loadIndex().sessions, id);
+    const sessionData = this.store.loadSessionData(id);
+    const indexRow = this.findListedMetadata(this.store.loadIndex().sessions, id);
     if (!sessionData && !indexRow) return false;
 
     const dataNeedsWrite = !!sessionData && (sessionData.isPinned ?? false) !== pinned;
@@ -9226,7 +9250,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
 
     if (indexNeedsWrite) {
       await this.store.withIndexLock((index) => {
-        const meta = this.findCurrentRuntimeMetadata(index.sessions, id);
+        const meta = this.findListedMetadata(index.sessions, id);
         if (meta) {
           meta.isPinned = pinned;
         }
@@ -11866,11 +11890,11 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     return undefined;
   }
 
-  /** Search across all session transcripts by keyword. Returns matching sessions with relevant snippets. */
+  /** Keyword search over the newest session transcripts (bounded scan; see session-search.ts). Returns matching sessions with relevant snippets. */
   async searchSessions(
     query: string,
     maxResults: number = 10,
-    options?: Pick<SessionListOptions, "sources" | "excludeSources">,
+    options?: Parameters<typeof searchSessionsFn>[3],
   ): Promise<SessionSearchResult[]> {
     const results = await searchSessionsFn(
       {
@@ -12328,9 +12352,6 @@ This accountable main/user session was explicitly launched in workspace ${worksp
     this.assertSessionAcceptsMessages(sessionId);
     this.assertSubagentLaunchStarted(sessionId);
     const wasBusy = this.isSessionBusy(sessionId);
-    const backendPromptContent = wasBusy
-      ? `${STEERING_CONTEXT_INSTRUCTION}\n\n${content}`
-      : content;
     this.pendingUserSteers.set(sessionId, (this.pendingUserSteers.get(sessionId) ?? 0) + 1);
     try {
       // Native busy-steer: when the backend injects into the active turn
@@ -12342,7 +12363,7 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       if (this.backend.capabilities().busyTurnSteer && wasBusy) {
         await this.sendMessage(sessionId, content, attachments, {
           ...options,
-          backendPromptContent,
+          backendPromptContent: `${STEERING_CONTEXT_INSTRUCTION}\n\n${content}`,
           busySteer: true,
         });
         return;
@@ -12353,7 +12374,12 @@ This accountable main/user session was explicitly launched in workspace ${worksp
         this.assertSessionAcceptsMessages(sessionId);
         await this.sendMessage(sessionId, content, attachments, {
           ...options,
-          ...(wasBusy ? { backendPromptContent, steering: true } : {}),
+          ...(wasBusy
+            ? {
+                backendPromptContent: `${STEERING_CANCELLED_TOOLS_INSTRUCTION}\n\n${content}`,
+                steering: true,
+              }
+            : {}),
         });
       } finally {
         this.finishPendingSend(sessionId);
@@ -13575,9 +13601,13 @@ This accountable main/user session was explicitly launched in workspace ${worksp
       const sendPromise = this.sendMessage(sessionId, content, attachments, {
         noSwitch: true,
         ...(options?.clientMessageId ? { clientMessageId: options.clientMessageId } : {}),
-        ...(options?.backendPromptContent
-          ? { backendPromptContent: options.backendPromptContent }
-          : {}),
+        ...(options?.tookOverTurn
+          ? {
+              backendPromptContent: `${INTERRUPT_CANCELLED_TOOLS_NOTE}\n\n${options.backendPromptContent ?? content}`,
+            }
+          : options?.backendPromptContent
+            ? { backendPromptContent: options.backendPromptContent }
+            : {}),
         ...(options?.goalContinuation ? { goalContinuation: true } : {}),
         ...(options?.internalControl ? { internalControl: options.internalControl } : {}),
         ...(options?.goalTimelineEvent ? { goalTimelineEvent: options.goalTimelineEvent } : {}),
