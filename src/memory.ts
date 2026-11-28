@@ -99,6 +99,12 @@ export interface BrainMemoryRoute {
   search(input: { query: string; scopes: string[]; limit: number; category?: MemoryCategory }): Promise<BrainMemory[]>;
   /** Memories of one scope, newest first: the prompt block (`alwaysOn`) and a day's review (`since`). */
   list(input: { scope: string; alwaysOn?: boolean; since?: string; limit: number }): Promise<BrainMemory[]>;
+  /**
+   * The Brain's `memory_start` answer for the signed-in person (their page, what they saved since it was compiled, the
+   * workspace's rules); the Brain derives the person from the sign-in, so the input names only the workspace. Only a
+   * route of the person's own home offers it.
+   */
+  start?(input: { workspace: string }): Promise<unknown>;
 }
 
 /** What a session's memory uses: one Brain store and the scopes it reads, broadest first. */
@@ -152,6 +158,13 @@ export interface MemoryOptions {
    * Default 60 s. A turn never waits for it: only the first read of a scope this host has not seen is awaited.
    */
   refreshMs?: number;
+  /**
+   * Fill a session's memory block from the Brain's `memory_start` answer (the person's page and recent preferences, and the
+   * workspace's rules) instead of their always-on memories and a task search. Fetched once per session, before its first
+   * turn. Default off, and it stays off until the Brain tool and the extension's `memory.start` capability are deployed.
+   * When the answer is unavailable the block holds the person's own home only, never the workspace's memories.
+   */
+  memoryStart?: boolean;
 }
 
 /** Decides which candidate memories shape a task; returns the ids to keep. */
@@ -319,6 +332,7 @@ export function brainCapabilityRoute(id: string, rawCall: BrainCall, options: { 
         throw error;
       }
     },
+    start: async (input) => call("memory.start", input),
   };
 }
 
@@ -356,6 +370,69 @@ const scopeHome = (scope: string | undefined): MemoryHome | undefined =>
   scope?.startsWith("person:") ? "personal" : scope?.startsWith("workspace:") ? "workspace" : undefined;
 const homeRank = (home: MemoryHome | undefined) => (home === "personal" ? 0 : home === "workspace" ? 1 : 2);
 
+/** What a start answer may put in a prompt: the Brain's own block budgets, bounded item counts, plain one-line text. */
+const START_BUDGETS = { page: 6 * 1024, since: 2 * 1024, rules: 4 * 1024 } as const;
+const START_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
+const START_MAX_ITEMS = 80;
+const START_BLOCKS = ["page", "since", "workspace"] as const;
+const START_ORIGIN: Record<string, string> = { project: " [this project]", person: " [all projects]" };
+const START_BLOCK_NAME = { page: "the rules page", since: "rules saved since the page", workspace: "the workspace's team rules" } as const;
+const START_TIMEOUT_MS = 6_000;
+const START_RETRY_MS = 60_000;
+
+/** One `memory_start` answer as prompt entries, read defensively; undefined when it is not an answer. */
+export function startPromptEntries(output: unknown, now = Date.now()): PromptMemoryEntry[] | undefined {
+  const answer = output as Record<string, any> | null | undefined;
+  if (!answer || typeof answer !== "object" || Array.isArray(answer) || typeof answer.workspace !== "string") return undefined;
+  const list = (value: unknown): Record<string, any>[] =>
+    (Array.isArray(value) ? value : []).slice(0, START_MAX_ITEMS).filter((item) => item && typeof item === "object" && START_ID.test(String(item.id)) && typeof item.text === "string");
+  const stamp = (value: unknown): string => (typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : new Date(now).toISOString());
+  const fit = (items: Record<string, any>[], budget: number, make: (item: Record<string, any>, text: string) => PromptMemoryEntry): PromptMemoryEntry[] => {
+    const out: PromptMemoryEntry[] = [];
+    let used = 0;
+    for (const item of items) {
+      const text = String(item.text).replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 400);
+      if (!text) continue;
+      const size = Buffer.byteLength(text, "utf8") + 1;
+      if (used + size > budget) break;
+      used += size;
+      out.push(make(item, text));
+    }
+    return out;
+  };
+  const compiled = stamp(answer.page?.compiledAt);
+  // Incomplete only on the server's own word (`current: false`); the blocks it names come from a closed list, never from its text.
+  const named = (value: unknown): string[] => (Array.isArray(value) ? START_BLOCKS.filter((block) => value.includes(block)).map((block) => START_BLOCK_NAME[block]) : []);
+  // A list the server shortened to its budget (`truncated.<block>` = entries left out): named from the closed block list with an integer count, never from server text.
+  const shortened = START_BLOCKS.flatMap((block) => {
+    const left = answer.truncated && typeof answer.truncated === "object" ? answer.truncated[block] : undefined;
+    return typeof left === "number" && Number.isSafeInteger(left) && left > 0 ? [`${START_BLOCK_NAME[block]} (${Math.min(left, 99999)} left out)`] : [];
+  });
+  const incomplete = answer.current === false;
+  const notice: PromptMemoryEntry[] =
+    incomplete || shortened.length
+      ? [{
+          fact: [
+            incomplete
+              ? "The Brain could not give the full session-start list this time, so rules may be missing from the memories below; do not treat them as everything the user or the team has stated."
+              : "The session-start list was shortened to fit its budget, so rules may be missing from the memories below; do not treat them as everything the user or the team has stated.",
+            ...(incomplete && named(answer.degraded).length ? [`Not read in full: ${named(answer.degraded).join(", ")}.`] : []),
+            ...(incomplete && named(answer.capped).length ? [`Longer than could be read: ${named(answer.capped).join(", ")}.`] : []),
+            ...(shortened.length ? [`Shortened to fit the budget: ${shortened.join(", ")}.`] : []),
+          ].join(" "),
+          category: "context",
+          createdAt: stamp(now),
+          source: "brain",
+        }]
+      : [];
+  return [
+    ...notice,
+    ...fit(list(answer.page?.rules), START_BUDGETS.page, (item, text) => ({ fact: `${text}${START_ORIGIN[String(item.source)] ?? ""} (memory ${item.id})`, category: "preference", createdAt: compiled, source: "brain" })),
+    ...fit(list(answer.since), START_BUDGETS.since, (item, text) => ({ fact: `${text} (memory ${item.id})`, category: "preference", createdAt: stamp(item.createdAt), source: "brain" })),
+    ...fit(list(answer.rules), START_BUDGETS.rules, (item, text) => ({ fact: `${text} (memory ${item.id})`, category: "decision", createdAt: stamp(now), source: "brain" })),
+  ];
+}
+
 const invalid = (message: string) => Object.assign(new Error(message), { code: "invalid-request" });
 
 /**
@@ -374,6 +451,9 @@ export class HostMemory {
   private readonly relevant = new Map<string, BrainMemory[]>();
   private judge: RelevanceJudge | undefined;
   private planner: MemoryQueryPlanner | undefined;
+  /** `memoryStart`: each session's start entries, fetched once before its first turn; a failed fetch is retried after a minute. */
+  private readonly starts = new Map<string, PromptMemoryEntry[]>();
+  private readonly startFailedAt = new Map<string, number>();
 
   constructor(
     private readonly options: MemoryOptions & { fallback?: (session: SessionRecord | undefined) => MemoryStore | readonly MemoryStore[] | undefined },
@@ -413,6 +493,31 @@ export class HostMemory {
       }
     }
     return stores.sort((a, b) => homeRank(a.home) - homeRank(b.home));
+  }
+
+  /** `memoryStart` on and the session has a personal home whose route offers `start`. */
+  private startRouteOf(session: SessionRecord | undefined): { route: BrainMemoryRoute; workspace: string } | undefined {
+    if (!this.options.memoryStart || !session) return undefined;
+    let stores: MemoryStore[];
+    try {
+      stores = this.storesOf(session);
+    } catch {
+      return undefined;
+    }
+    const personal = stores.find((store) => store.home === "personal" && store.route.start);
+    const workspace = stores.find((store) => store.home === "workspace")?.scopes.find((scope) => scope.name)?.name;
+    return personal && workspace ? { route: personal.route, workspace } : undefined;
+  }
+
+  /**
+   * The stores a session's prompt block reads. With `memoryStart` on and a personal home, a session without its start
+   * answer reads that home only: the workspace's memories (other people's always-on rows among them) never fill the gap.
+   */
+  private promptStoresOf(session: SessionRecord | undefined): MemoryStore[] {
+    const stores = this.storesOf(session);
+    if (!this.startRouteOf(session) || (session && this.starts.has(session.id))) return stores;
+    const own = stores.filter((store) => store.home === "personal");
+    return own.length ? own : stores;
   }
 
   /** The session's first store (personal when it has one). */
@@ -485,13 +590,15 @@ export class HostMemory {
       log?.(`memory: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
+    await this.fetchStart(session, log);
+    if (session && this.starts.has(session.id)) return;
     if (this.mode() === "relevant") {
       if (session && scopes.length > 0) await this.chooseRelevant(session, task, log);
       return;
     }
     // Homes are read side by side: a slow Brain of one home does not hold up the other.
     await Promise.all(
-      this.storesOf(session).map(async (store) => {
+      this.promptStoresOf(session).map(async (store) => {
         for (const { key: scope } of scopes.filter((entry) => entry.store === store)) {
           if (this.readAt.has(this.cacheKey(store, scope))) {
             this.refresh(store, scope, log);
@@ -505,6 +612,28 @@ export class HostMemory {
         }
       }),
     );
+  }
+
+  /** `memoryStart`: the session's start answer, asked once and held; unavailable or unusable leaves the session on its own home. */
+  private async fetchStart(session: SessionRecord | undefined, log?: (line: string) => void): Promise<void> {
+    const target = this.startRouteOf(session);
+    if (!target || !session || this.starts.has(session.id)) return;
+    if (Date.now() - (this.startFailedAt.get(session.id) ?? 0) < START_RETRY_MS) return;
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const answer = await Promise.race([
+        target.route.start!({ workspace: target.workspace }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("memory_start timed out")), START_TIMEOUT_MS);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      const entries = startPromptEntries(answer);
+      if (!entries) throw new Error("memory_start answered something that is not a start answer");
+      this.starts.set(session.id, entries);
+    } catch (error) {
+      this.startFailedAt.set(session.id, Date.now());
+      log?.(`memory: no start answer for session ${session.id}; the block holds the person's own home only: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**
@@ -532,7 +661,7 @@ export class HostMemory {
         return;
       }
     }
-    const stores = this.storesOf(session);
+    const stores = this.promptStoresOf(session);
     const perQuery = this.options.relevantCandidates ?? 12;
     // One store's hits: its queries' lists interleaved by rank.
     const results = await Promise.allSettled(
@@ -594,6 +723,10 @@ export class HostMemory {
       return undefined;
     }
     if (scopes.length === 0) return undefined;
+    if (session && this.starts.has(session.id)) {
+      const held = this.starts.get(session.id)!;
+      return held.length ? { entries: held } : undefined;
+    }
     if (this.mode() === "relevant") {
       const chosen = (session ? this.relevant.get(session.id) ?? [] : []).filter((record) => !this.forgotten.has(record.id));
       if (chosen.length === 0) return undefined;
@@ -605,7 +738,7 @@ export class HostMemory {
     const newest = (a: BrainMemory, b: BrainMemory) => b.createdAt.localeCompare(a.createdAt);
     const heldOf = (store: MemoryStore) =>
       scopes.filter((entry) => entry.store === store).map(({ key }) => this.cache.get(this.cacheKey(store, key)) ?? { alwaysOn: [], recent: [] });
-    const stores = this.storesOf(session);
+    const stores = this.promptStoresOf(session);
     const alwaysOn = stores.flatMap((store) => heldOf(store).flatMap((entry) => entry.alwaysOn).sort(newest)).slice(0, this.options.alwaysOnLimit ?? 50);
     const recent = stores
       .flatMap((store) => heldOf(store).flatMap((entry) => entry.recent))
