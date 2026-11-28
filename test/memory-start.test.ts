@@ -121,5 +121,6 @@ test("startPromptEntries bounds a hostile answer: bad ids dropped, one line, cut
   assert.ok(entries.some((entry) => entry.fact === "a b (memory ok_1)"));
   const page = entries.filter((entry) => entry.fact.includes("(memory rule_"));
   assert.ok(page.length > 0 && page.length <= 16, `page block held to 6 KB, got ${page.length}`);
+  assert.equal(startPromptEntries({ workspace: "z", since: [{ id: "c1", text: "a\u0000b\u0007c" }] })![0]!.fact, "a b c (memory c1)");
   for (const bad of [undefined, null, "x", [], {}, { workspace: 5 }]) assert.equal(startPromptEntries(bad), undefined);
 });

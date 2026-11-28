@@ -388,7 +388,7 @@ export function startPromptEntries(output: unknown, now = Date.now()): PromptMem
     const out: PromptMemoryEntry[] = [];
     let used = 0;
     for (const item of items) {
-      const text = String(item.text).replace(/\s+/g, " ").trim().slice(0, 400);
+      const text = String(item.text).replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 400);
       if (!text) continue;
       const size = Buffer.byteLength(text, "utf8") + 1;
       if (used + size > budget) break;
