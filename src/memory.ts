@@ -374,6 +374,9 @@ const homeRank = (home: MemoryHome | undefined) => (home === "personal" ? 0 : ho
 const START_BUDGETS = { page: 6 * 1024, since: 2 * 1024, rules: 4 * 1024 } as const;
 const START_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 const START_MAX_ITEMS = 80;
+const START_BLOCKS = ["page", "since", "workspace"] as const;
+const START_ORIGIN: Record<string, string> = { project: " [this project]", person: " [all projects]" };
+const START_BLOCK_NAME = { page: "the rules page", since: "rules saved since the page", workspace: "the workspace's team rules" } as const;
 const START_TIMEOUT_MS = 6_000;
 const START_RETRY_MS = 60_000;
 
@@ -398,8 +401,24 @@ export function startPromptEntries(output: unknown, now = Date.now()): PromptMem
     return out;
   };
   const compiled = stamp(answer.page?.compiledAt);
+  // Incomplete only on the server's own word (`current: false`); the blocks it names come from a closed list, never from its text.
+  const named = (value: unknown): string[] => (Array.isArray(value) ? START_BLOCKS.filter((block) => value.includes(block)).map((block) => START_BLOCK_NAME[block]) : []);
+  const notice: PromptMemoryEntry[] =
+    answer.current === false
+      ? [{
+          fact: [
+            "The Brain could not give the full session-start list this time, so rules may be missing from the memories below; do not treat them as everything the user or the team has stated.",
+            ...(named(answer.degraded).length ? [`Not read in full: ${named(answer.degraded).join(", ")}.`] : []),
+            ...(named(answer.capped).length ? [`Longer than could be read: ${named(answer.capped).join(", ")}.`] : []),
+          ].join(" "),
+          category: "context",
+          createdAt: stamp(now),
+          source: "brain",
+        }]
+      : [];
   return [
-    ...fit(list(answer.page?.rules), START_BUDGETS.page, (item, text) => ({ fact: `${text} (memory ${item.id})`, category: "preference", createdAt: compiled, source: "brain" })),
+    ...notice,
+    ...fit(list(answer.page?.rules), START_BUDGETS.page, (item, text) => ({ fact: `${text}${START_ORIGIN[String(item.source)] ?? ""} (memory ${item.id})`, category: "preference", createdAt: compiled, source: "brain" })),
     ...fit(list(answer.since), START_BUDGETS.since, (item, text) => ({ fact: `${text} (memory ${item.id})`, category: "preference", createdAt: stamp(item.createdAt), source: "brain" })),
     ...fit(list(answer.rules), START_BUDGETS.rules, (item, text) => ({ fact: `${text} (memory ${item.id})`, category: "decision", createdAt: stamp(now), source: "brain" })),
   ];
