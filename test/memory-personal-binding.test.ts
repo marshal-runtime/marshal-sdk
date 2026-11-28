@@ -151,3 +151,38 @@ test("a held start answer does not outlive the sign-in either: after a change th
   await r.warm();
   assert.deepEqual(r.facts(), []);
 });
+
+import { defaultSignedInOf } from "../src/memory.js";
+
+test("the default personal home's identity: a delegated or service-key principal confirms its person; a desktop sign-in cannot be confirmed from a configured address", async () => {
+  const kit = { kitMemory: true, ownStore: false, ownProbe: false };
+  assert.equal(await defaultSignedInOf({ callerMode: "delegated", callerEmail: " Person-A@zyg.com " }, kit)!(), A);
+  assert.equal(await defaultSignedInOf({ callerMode: "service-key", callerEmail: A }, kit)!(), A);
+  for (const brain of [{ callerEmail: A }, { callerMode: "desktop", callerEmail: A }, { callerMode: "delegated" }, undefined])
+    assert.equal(await defaultSignedInOf(brain, kit)!(), undefined, "no live identity: the configured address is not proof");
+  assert.equal(defaultSignedInOf({ callerMode: "desktop", callerEmail: A }, { ...kit, ownProbe: true }), undefined, "a host's own probe is used as given");
+  assert.equal(defaultSignedInOf({ callerMode: "desktop", callerEmail: A }, { ...kit, ownStore: true }), undefined, "a host's own store is not touched");
+  assert.equal(defaultSignedInOf({ callerMode: "desktop", callerEmail: A }, { ...kit, kitMemory: false }), undefined);
+});
+
+test("with the default probe (desktop mode) the personal fallback keeps no personal rows and the workspace rules stay; with a confirming probe the person's own rows are kept", async () => {
+  const unconfirmed = rig({ personalRows: () => [mineA], signedIn: defaultSignedInOf({ callerMode: "desktop", callerEmail: A }, { kitMemory: true, ownStore: false, ownProbe: false }) });
+  await unconfirmed.warm();
+  assert.ok(!unconfirmed.facts().some((f) => f.includes("A: own")), unconfirmed.facts().join("|"));
+  assert.ok(unconfirmed.facts().some((f) => f.includes("TEAM:")), "the workspace path is unchanged");
+  const fixed = rig({ personalRows: () => [mineA], signedIn: defaultSignedInOf({ callerMode: "delegated", callerEmail: A }, { kitMemory: true, ownStore: false, ownProbe: false }) });
+  await fixed.warm();
+  assert.ok(fixed.facts().some((f) => f.includes("A: own")), fixed.facts().join("|"));
+  assert.ok(fixed.facts().some((f) => f.includes("TEAM:")));
+});
+
+test("a personal list that carries the person's own project and page scopes under their scope is kept (the Brain lists what is under a scope); another person's scope still discards the whole read", async () => {
+  const project = memory("a2", "A: project preference", `person:email=${A}/project=zygstinct`);
+  const own = rig({ personalRows: () => [mineA, project] });
+  await own.warm();
+  assert.ok(own.facts().some((f) => f.includes("A: own preference")), own.facts().join("|"));
+  assert.ok(!own.facts().some((f) => f.includes("A: project preference")), "only the scope asked for is this block");
+  const mixed = rig({ personalRows: () => [mineA, project, ofB] });
+  await mixed.warm();
+  assert.ok(!mixed.facts().some((f) => f.includes("A: own") || f.includes("B: other")), mixed.facts().join("|"));
+});

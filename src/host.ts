@@ -42,7 +42,7 @@ import { normalizeKit, prepareKit, type KitSelection } from "./kit/index.js";
 import { SessionPublisher } from "./kit/publisher.js";
 import { OrgStore, type OrgStoreOptions, type OrgTranscriptOptions } from "./org-store/index.js";
 import { OrgSessionSearch, type OrgSessionSearchOptions } from "./org-store/search.js";
-import { companyBrainStores, createMemoryToolsProvider, decideQueries, decideRelevance, HostMemory, type MemoryOptions } from "./memory.js";
+import { companyBrainStores, createMemoryToolsProvider, decideQueries, decideRelevance, defaultSignedInOf, HostMemory, type MemoryOptions } from "./memory.js";
 import { RunRecordsPublisher, type RunRecordsOptions } from "./run-records.js";
 import { ORG_EXTENSION, dependencyOrder, readPackageManifest, unmetRequirements } from "./onboarding.js";
 import { createSharedRuntime, sharedCallContext } from "./shared-runtime.js";
@@ -400,9 +400,11 @@ export async function createMarshalHost(options: MarshalHostOptions): Promise<Ma
     workspace: workspaceName,
     personEmail: options.memory?.personEmail ?? kitSelection?.brain?.callerEmail,
   });
+  const defaultSignedIn = defaultSignedInOf(kitSelection?.brain, { kitMemory, ownStore: Boolean(options.memory?.store), ownProbe: Boolean(options.memory?.signedIn) });
   const memory = new HostMemory(
     {
       ...options.memory,
+      ...(defaultSignedIn ? { signedIn: defaultSignedIn } : {}),
       ...(kitMemory ? { fallback: () => kitStores } : {}),
     },
     sessions,

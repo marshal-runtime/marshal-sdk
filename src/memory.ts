@@ -133,6 +133,9 @@ export interface MemoryOptions {
    * and when it is not (signed out, another person, unreadable) the read keeps nothing, the held personal memories and
    * start answers are dropped, and the workspace home is read as before. Unset: the personal home is bound by what it
    * answers alone (an answer carrying another person's memories is discarded whole). Never taken from model input.
+   * With the kit's default company-Brain stores and no `signedIn` of the host's, the host supplies one itself: the principal's `callerEmail`
+   * in delegated / service-key mode (it cannot change under the host), and none in desktop mode, where the signed-in person can change and a
+   * configured address is no proof of who is signed in: the default personal home is then omitted.
    */
   signedIn?: () => Promise<string | undefined>;
   /**
@@ -587,8 +590,13 @@ export class HostMemory {
     };
     if (this.options.signedIn && !(await this.confirmed(store))) throw uncertain("the signed-in person is not this host's person");
     const value = await run();
-    const own = new Set(store.scopes.map(scopeString));
-    if (recordsOf(value).some((record) => record.scope.startsWith("person:") && !own.has(record.scope))) throw uncertain("the answer carries another person's memories");
+    // Another person's memory is one whose `person:` scope is neither this person's scope nor one under it (`person:email=<own>/project=…`: the Brain lists a scope with what is under it).
+    const own = store.scopes.map((scope) => scopeString(scope).toLowerCase());
+    const foreign = (scope: string) => {
+      const lower = scope.toLowerCase();
+      return lower.startsWith("person:") && !own.some((mine) => lower === mine || lower.startsWith(`${mine}/`));
+    };
+    if (recordsOf(value).some((record) => foreign(record.scope))) throw uncertain("the answer carries another person's memories");
     if (this.options.signedIn && !(await this.confirmed(store))) throw uncertain("the sign-in changed during the read");
     return value;
   }
@@ -1222,4 +1230,20 @@ export function createMemoryToolsProvider(memory: HostMemory): CapabilityProvide
       }
     },
   } as unknown as CapabilityProvider;
+}
+
+/**
+ * The live identity probe the host gives the kit's default personal home when the host gave none. The default home needs an identity of its
+ * own, never the configured address alone: only a host principal that cannot change under the host (delegated / service-key: the Brain answers
+ * as that `callerEmail`) confirms its person; a desktop sign-in can change, so without the host's own `memory.signedIn` the person cannot be
+ * confirmed and the default personal home's memories are omitted (the workspace home is unaffected). Undefined when the host's own store or
+ * probe is in use, or the kit has no memory part.
+ */
+export function defaultSignedInOf(
+  brain: { callerMode?: string; callerEmail?: string } | undefined,
+  input: { kitMemory: boolean; ownStore: boolean; ownProbe: boolean },
+): (() => Promise<string | undefined>) | undefined {
+  if (!input.kitMemory || input.ownStore || input.ownProbe) return undefined;
+  const fixed = brain?.callerMode === "delegated" || brain?.callerMode === "service-key" ? brain.callerEmail?.trim().toLowerCase() || undefined : undefined;
+  return async () => fixed;
 }
