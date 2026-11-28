@@ -128,6 +128,14 @@ export interface MemoryOptions {
    */
   personEmail?: string;
   /**
+   * The address the Brain answers as right now (the live sign-in), for a host whose person can change under it. When set,
+   * every read of the `personal` home is bound to it: the address must be this host's person before the read and after it,
+   * and when it is not (signed out, another person, unreadable) the read keeps nothing, the held personal memories and
+   * start answers are dropped, and the workspace home is read as before. Unset: the personal home is bound by what it
+   * answers alone (an answer carrying another person's memories is discarded whole). Never taken from model input.
+   */
+  signedIn?: () => Promise<string | undefined>;
+  /**
    * How a session's memory block is filled (R153). `relevant`: on the session's first turn each home's Brain search runs
    * with the task, a judgement keeps the memories that shape it, and only those are rendered, with their ids. `newest`:
    * every always-on memory, then the newest others. Default: `relevant` for the kit's company Brain, `newest` for a
@@ -547,13 +555,59 @@ export class HostMemory {
     return store.home ? records.map((record) => ({ ...record, home: scopeHome(record.scope) ?? record.home ?? store.home })) : records;
   }
 
+  /** The address a personal store's scopes name (scope id `person`, key `email`), lower case. */
+  private personOf(store: MemoryStore): string | undefined {
+    return store.scopes.find((scope) => scope.id === "person")?.key.email?.trim().toLowerCase() || undefined;
+  }
+
+  /** True while the live sign-in is the store's person (always true for a non-personal store or a host with no `signedIn`). */
+  private async confirmed(store: MemoryStore): Promise<boolean> {
+    if (store.home !== "personal" || !this.options.signedIn) return true;
+    const live = (await this.options.signedIn().catch(() => undefined))?.trim().toLowerCase();
+    return live !== undefined && live !== "" && live === this.personOf(store);
+  }
+
+  /** Forgets what a personal store (and the start answers, which are the person's own) holds: the identity behind it is no longer confirmed. */
+  private dropPersonal(store: MemoryStore): void {
+    for (const key of [...this.cache.keys()]) if (key.startsWith(`${store.route.id}|personal|`)) { this.cache.delete(key); this.readAt.delete(key); }
+    for (const [id, chosen] of this.relevant) this.relevant.set(id, chosen.filter((record) => record.home !== "personal"));
+    this.starts.clear();
+    this.startFailedAt.clear();
+  }
+
+  /**
+   * One read of the personal home, bound to the person throughout: the sign-in is confirmed before it and after it, and an answer
+   * that carries a memory of another person's scope is discarded whole. Anything uncertain keeps no personal content and throws.
+   */
+  private async bound<T>(store: MemoryStore, run: () => Promise<T>, recordsOf: (value: T) => BrainMemory[]): Promise<T> {
+    if (store.home !== "personal") return run();
+    const uncertain = (why: string) => {
+      this.dropPersonal(store);
+      return Object.assign(new Error(`personal memories not read: ${why}`), { code: "identity-uncertain" });
+    };
+    if (this.options.signedIn && !(await this.confirmed(store))) throw uncertain("the signed-in person is not this host's person");
+    const value = await run();
+    const own = new Set(store.scopes.map(scopeString));
+    if (recordsOf(value).some((record) => record.scope.startsWith("person:") && !own.has(record.scope))) throw uncertain("the answer carries another person's memories");
+    if (this.options.signedIn && !(await this.confirmed(store))) throw uncertain("the sign-in changed during the read");
+    return value;
+  }
+
   private async read(store: MemoryStore, scope: string): Promise<Held> {
     const key = this.cacheKey(store, scope);
     const startedAt = Date.now();
-    const [alwaysOn, recent] = await Promise.all([
-      store.route.list({ scope, alwaysOn: true, limit: this.options.alwaysOnLimit ?? 50 }),
-      store.route.list({ scope, alwaysOn: false, limit: this.options.promptLimit ?? 20 }),
-    ]);
+    const [listedOn, listedRecent] = await this.bound(
+      store,
+      () => Promise.all([
+        store.route.list({ scope, alwaysOn: true, limit: this.options.alwaysOnLimit ?? 50 }),
+        store.route.list({ scope, alwaysOn: false, limit: this.options.promptLimit ?? 20 }),
+      ]),
+      ([on, recentList]) => [...on, ...recentList],
+    );
+    // The personal home keeps only the scope it was asked for: another scope through that route is not this person's block.
+    const ofScope = (records: BrainMemory[]) => (store.home === "personal" ? records.filter((record) => record.scope === scope) : records);
+    const alwaysOn = ofScope(listedOn);
+    const recent = ofScope(listedRecent);
     // A write by this host while the lists ran is newer than them: keep it.
     const held = this.cache.get(key);
     const newer = (records: BrainMemory[] | undefined, listed: BrainMemory[]) =>
@@ -590,7 +644,14 @@ export class HostMemory {
       log?.(`memory: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
-    await this.fetchStart(session, log);
+    // A personal home whose sign-in is no longer this host's person holds nothing and is not asked (neither for its start answer nor its rows).
+    const personal = session ? this.storesOf(session).find((store) => store.home === "personal") : undefined;
+    if (personal && this.options.signedIn && !(await this.confirmed(personal))) {
+      this.dropPersonal(personal);
+      log?.("memory: the signed-in person is not this host's person; no personal memories are read or shown");
+    } else {
+      await this.fetchStart(session, log);
+    }
     if (session && this.starts.has(session.id)) return;
     if (this.mode() === "relevant") {
       if (session && scopes.length > 0) await this.chooseRelevant(session, task, log);
@@ -629,6 +690,12 @@ export class HostMemory {
       ]).finally(() => clearTimeout(timer));
       const entries = startPromptEntries(answer);
       if (!entries) throw new Error("memory_start answered something that is not a start answer");
+      // The start answer is the person's own: it is kept only if the sign-in is still this host's person after the wait.
+      const own = this.storesOf(session).find((store) => store.home === "personal");
+      if (own && this.options.signedIn && !(await this.confirmed(own))) {
+        this.dropPersonal(own);
+        throw new Error("the signed-in person changed while the start answer was read; it was dropped");
+      }
       this.starts.set(session.id, entries);
     } catch (error) {
       this.startFailedAt.set(session.id, Date.now());
@@ -667,7 +734,7 @@ export class HostMemory {
     const results = await Promise.allSettled(
       stores.map(async (store) => {
         const scopes = store.scopes.map(scopeString);
-        const lists = await Promise.all(queries.map((query) => store.route.search({ query, scopes, limit: perQuery })));
+        const lists = await this.bound(store, () => Promise.all(queries.map((query) => store.route.search({ query, scopes, limit: perQuery }))), (found) => found.flat());
         const merged: BrainMemory[] = [];
         for (let rank = 0; rank < Math.max(0, ...lists.map((list) => list.length)); rank++) {
           for (const list of lists) if (list[rank]) merged.push(list[rank]!);
