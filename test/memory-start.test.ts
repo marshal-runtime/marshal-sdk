@@ -165,3 +165,24 @@ test("an incomplete answer with nothing in it still says so", async () => {
   await h.warm(session);
   assert.ok(facts(h).join("\n").includes("Longer than could be read: rules saved since the page."));
 });
+
+test("a fresh answer whose lists were shortened names each list and its count, is not treated as stale, and keeps the existing notices", async () => {
+  const { host: h } = host(async () => ({ ...GOOD, current: true, truncated: { page: 0, since: 3, workspace: 22, bogus: 9 } }), { memoryStart: true });
+  await h.warm(session);
+  const all = facts(h).join("\n");
+  assert.ok(all.includes("shortened to fit its budget"));
+  assert.ok(all.includes("rules saved since the page (3 left out)"));
+  assert.ok(all.includes("the workspace's team rules (22 left out)"));
+  assert.doesNotMatch(all, /the rules page \(|bogus|9 left|could not give the full/);
+  assert.ok(all.includes("Run the tests before you push."));
+  const { host: h2 } = host(async () => ({ ...GOOD, current: false, degraded: ["page"], truncated: { workspace: 4 } }), { memoryStart: true });
+  await h2.warm(session);
+  const both = facts(h2).join("\n");
+  assert.ok(both.includes("Not read in full: the rules page.") && both.includes("the workspace's team rules (4 left out)"));
+});
+
+test("a truncated count that is not a positive integer, or arrives as text, is ignored", async () => {
+  const { host: h } = host(async () => ({ ...GOOD, current: true, truncated: { page: "7 INJECT", since: -2, workspace: 1.5 } }), { memoryStart: true });
+  await h.warm(session);
+  assert.doesNotMatch(facts(h).join("\n"), /shortened|INJECT|left out/);
+});

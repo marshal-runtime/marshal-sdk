@@ -403,13 +403,22 @@ export function startPromptEntries(output: unknown, now = Date.now()): PromptMem
   const compiled = stamp(answer.page?.compiledAt);
   // Incomplete only on the server's own word (`current: false`); the blocks it names come from a closed list, never from its text.
   const named = (value: unknown): string[] => (Array.isArray(value) ? START_BLOCKS.filter((block) => value.includes(block)).map((block) => START_BLOCK_NAME[block]) : []);
+  // A list the server shortened to its budget (`truncated.<block>` = entries left out): named from the closed block list with an integer count, never from server text.
+  const shortened = START_BLOCKS.flatMap((block) => {
+    const left = answer.truncated && typeof answer.truncated === "object" ? answer.truncated[block] : undefined;
+    return typeof left === "number" && Number.isSafeInteger(left) && left > 0 ? [`${START_BLOCK_NAME[block]} (${Math.min(left, 99999)} left out)`] : [];
+  });
+  const incomplete = answer.current === false;
   const notice: PromptMemoryEntry[] =
-    answer.current === false
+    incomplete || shortened.length
       ? [{
           fact: [
-            "The Brain could not give the full session-start list this time, so rules may be missing from the memories below; do not treat them as everything the user or the team has stated.",
-            ...(named(answer.degraded).length ? [`Not read in full: ${named(answer.degraded).join(", ")}.`] : []),
-            ...(named(answer.capped).length ? [`Longer than could be read: ${named(answer.capped).join(", ")}.`] : []),
+            incomplete
+              ? "The Brain could not give the full session-start list this time, so rules may be missing from the memories below; do not treat them as everything the user or the team has stated."
+              : "The session-start list was shortened to fit its budget, so rules may be missing from the memories below; do not treat them as everything the user or the team has stated.",
+            ...(incomplete && named(answer.degraded).length ? [`Not read in full: ${named(answer.degraded).join(", ")}.`] : []),
+            ...(incomplete && named(answer.capped).length ? [`Longer than could be read: ${named(answer.capped).join(", ")}.`] : []),
+            ...(shortened.length ? [`Shortened to fit the budget: ${shortened.join(", ")}.`] : []),
           ].join(" "),
           category: "context",
           createdAt: stamp(now),
